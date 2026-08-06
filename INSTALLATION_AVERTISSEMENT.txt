@@ -1,0 +1,6 @@
+AVANT D'INSTALLER
+
+Pokémon Fangame Translator est une bêta publique indépendante et non officielle.
+La traduction est automatique et peut contenir des erreurs.
+Le logiciel ne fournit aucun fangame et ne remplace pas une équipe de traduction humaine.
+Conservez toujours le dossier original du jeu et jouez dans la VERSION_FR créée séparément.

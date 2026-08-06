@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.build_packages/
+.downloads/
+build/
+dist/
+release/
+BUILD_WINDOWS.log
+Rapports/
+Sortie_Extraction/
+Sauvegardes*/
+*.fpk
+*.rxdata
+*.dat

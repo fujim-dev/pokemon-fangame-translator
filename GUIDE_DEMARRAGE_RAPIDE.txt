@@ -1,0 +1,15 @@
+POKÉMON FANGAME TRANSLATOR v1.0.2 — GUIDE RAPIDE
+================================================
+
+1. Installez l'application avec le Setup.exe.
+2. Choisissez le dossier principal du fangame.
+3. Cliquez sur ANALYSER puis EXTRAIRE.
+4. Ouvrez TRADUIRE et commencez par 20 textes.
+5. Vérifiez les alertes, acceptez les textes prêts et enregistrez.
+6. Ouvrez RECONSTRUCTION, lancez la simulation et créez VERSION_FR.
+7. Jouez uniquement dans VERSION_FR et conservez l'original.
+
+COMMANDES : \n, \c[1], \PN et \v[1] doivent rester identiques.
+Le bouton Restaurer les commandes répare les cas simples.
+
+Le ZIP d'échantillon n'est jamais requis pour un usage normal.
