@@ -6,6 +6,11 @@ Projet open source distribué sous licence **GPL-3.0-or-later**.
 Pokémon Fangame Translator aide un utilisateur non technique à extraire, traduire et reconstruire une **copie française séparée** de certains fangames RPG Maker XP / Pokémon Essentials compatibles.
 
 > **Avertissement :** la traduction est automatique. Elle peut contenir des erreurs et ne remplace pas le travail d'une équipe de traduction humaine. Relisez les passages importants.
+ ## Discord officiel
+
+Rejoignez la communauté pour obtenir de l’aide, signaler un bug, proposer une amélioration ou partager vos tests de compatibilité.
+
+➡️ [Rejoindre Pokémon Fangame Translator — Communauté FR](https://discord.gg/jna3acM7Wy)
 
 ## Installation Windows
 
