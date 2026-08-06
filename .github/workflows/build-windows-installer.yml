@@ -1,0 +1,47 @@
+name: Build Windows installer (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip wheel
+          pip install -r build_support/requirements-build.txt
+      - name: Verify sources
+        run: |
+          python build_support/verify_sources.py
+          python build_support/generate_third_party_notices.py
+      - name: Build Windows application
+        run: pyinstaller --noconfirm --clean build_support/PokemonFangameTranslator.spec
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Build installer
+        shell: cmd
+        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build_support\installer\PokemonFangameTranslator.iss'
+      - name: Generate release files
+        shell: powershell
+        run: |
+          $setup = "release/Pokemon_Fangame_Translator_Setup_v1.0.2.exe"
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Pokemon_Fangame_Translator_Setup_v1.0.2.exe" | Set-Content release/SHA256.txt -Encoding ascii
+          Copy-Item RELEASE_NOTES_V1.0.2.md release/
+          Copy-Item LICENSE release/
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pokemon-Fangame-Translator-Windows-Setup
+          path: |
+            release/Pokemon_Fangame_Translator_Setup_v1.0.2.exe
+            release/SHA256.txt
+            release/RELEASE_NOTES_V1.0.2.md
+            release/LICENSE
+          if-no-files-found: error
