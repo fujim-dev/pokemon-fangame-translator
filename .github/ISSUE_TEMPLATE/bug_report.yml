@@ -1,0 +1,32 @@
+name: Rapport de bug
+description: Signaler un problème sans joindre de contenu de fangame
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "N'ajoutez pas le fangame complet ni un CSV de dialogues. Utilisez le diagnostic public."
+  - type: input
+    id: version
+    attributes:
+      label: Version du logiciel
+      placeholder: 1.0.2
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problème rencontré
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Étapes pour reproduire
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Diagnostic public
+      description: Collez le contenu du diagnostic ou joignez le fichier.
