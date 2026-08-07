@@ -640,7 +640,10 @@ def analyze_flux_game(
     catalog = _external_resource_catalog(root, reader, report)
     seen_references: set[tuple[str, str]] = set()
     with tempfile.TemporaryDirectory(prefix="pft_flux_readonly_") as temporary:
-        extracted_root = Path(temporary)
+        # Une seule forme canonique doit servir à l'extraction, au chargement
+        # Marshal et à la collecte. Les runners Windows peuvent sinon exposer
+        # le même dossier temporaire sous deux graphies différentes.
+        extracted_root = Path(temporary).resolve()
         reader.extract_to(fpk, extracted_root, inventory)
         report.verified.append(
             "L'extraction temporaire correspond exactement à l'inventaire annoncé par le FPK."

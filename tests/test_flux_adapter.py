@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from analysis import write_analysis_reports
 from adapters import (
@@ -321,6 +323,48 @@ class FluxAdapterTests(unittest.TestCase):
             self.assertTrue(all("\\pn" in row["codes_proteges"] for row in canonical_rows))
             self.assertEqual(1, len(first_errors))
             self.assertIn("unsupported.dat", first_errors[0])
+
+    def test_extraction_canonicalizes_a_windows_temporary_path_alias_before_loading(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_flux_temp_alias_") as temp_dir:
+            base = Path(temp_dir)
+            root = make_flux_root(base)
+            alias_parent = base / "temporary_alias"
+            extracted = base / "temporary_extracted"
+            alias_parent.mkdir()
+            extracted.mkdir()
+            aliased_path = alias_parent / ".." / extracted.name
+
+            def extract_fixture(target: Path) -> None:
+                self.assertEqual(extracted.resolve(), target)
+                data = target / "Data"
+                data.mkdir()
+                canonical = "Canonical message through a temporary alias."
+                (data / "messages_game.dat").write_bytes(
+                    dumps([[{ruby_text(canonical): ruby_text(canonical)}]])
+                )
+                (data / "messages.dat").write_bytes(dumps([ruby_text(canonical)]))
+                (data / "CommonEvents.rxdata").write_bytes(dumps([None]))
+
+            @contextmanager
+            def aliased_temporary_directory(*_args, **_kwargs):
+                yield str(aliased_path)
+
+            adapter = PokemonFluxAdapter(
+                FakeArchiveReader(extractor=extract_fixture),
+                file_hasher=known_hasher,
+            )
+            with patch(
+                "flux_extractor.tempfile.TemporaryDirectory",
+                side_effect=aliased_temporary_directory,
+            ):
+                rows, errors = adapter.extract(root)
+
+            self.assertEqual([], errors)
+            self.assertEqual(2, len(rows))
+            self.assertEqual(
+                {"messages", "messages_game"},
+                {row["source_flux"] for row in rows},
+            )
 
     def test_analysis_correlates_known_audio_and_graphics_references(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_flux_resources_") as temp_dir:

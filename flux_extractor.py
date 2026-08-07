@@ -422,7 +422,12 @@ def collect_flux_occurrences(
     correspondent exactement à une clé canonique. Les cartes et événements
     communs sont, eux, lus par leurs codes de commandes RPG Maker connus.
     """
-    extracted_root = extracted_root.resolve()
+    # Le dossier doit conserver exactement la même représentation lexicale que
+    # les chemins utilisés comme clés dans ``loaded``. Sur certains runners
+    # Windows, ``Path.resolve()`` développe ici un alias 8.3 ou un segment
+    # ``..`` après le chargement et rend alors deux chemins identiques
+    # incompatibles lors des recherches dans le dictionnaire.
+    extracted_root = Path(extracted_root)
     marshal_files = tuple(marshal_files)
     data = extracted_root / "Data"
     messages_game_path = data / "messages_game.dat"
@@ -538,7 +543,10 @@ def extract_flux_texts(
 
     errors: list[str] = []
     with tempfile.TemporaryDirectory(prefix="pft_flux_extract_") as temporary:
-        extracted_root = Path(temporary)
+        # Canonicaliser une seule fois, avant extraction et avant construction
+        # de toutes les clés Path, évite les divergences propres aux dossiers
+        # temporaires Windows des runners GitHub Actions.
+        extracted_root = Path(temporary).resolve()
         reader.extract_to(fpk, extracted_root, inventory)
         data = extracted_root / "Data"
         marshal_files = sorted(
