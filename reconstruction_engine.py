@@ -24,6 +24,12 @@ from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import Callable, Iterable
 
+from analysis.integrity import (
+    IntegrityError,
+    SnapshotComparison,
+    compare_snapshots,
+    snapshot_tree,
+)
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from structured_extractor import (
@@ -102,6 +108,7 @@ class ReconstructionResult:
     modified_files: list[str]
     validation_errors: list[str]
     original_unchanged: bool
+    integrity_valid: bool
     report_path: str
     manifest_path: str
 
@@ -284,6 +291,29 @@ def _assert_plan_sources_unchanged(plan: ReconstructionPlan, source_root: Path) 
                 f"Le fichier source a changé depuis la simulation : {relative}. "
                 "Relancez la simulation."
             )
+
+
+def _integrity_snapshot(root: Path, label: str):
+    try:
+        return snapshot_tree(root)
+    except IntegrityError as exc:
+        raise ReconstructionError(
+            f"Contrôle d'intégrité impossible pour {label} : {exc}"
+        ) from exc
+
+
+def _integrity_failure(label: str, comparison: SnapshotComparison) -> str:
+    details = []
+    if comparison.missing_files:
+        details.append(f"{len(comparison.missing_files)} fichier(s) manquant(s)")
+    if comparison.unexpected_files:
+        details.append(f"{len(comparison.unexpected_files)} fichier(s) inattendu(s)")
+    if comparison.changed_files:
+        details.append(f"{len(comparison.changed_files)} fichier(s) modifié(s) hors plan")
+    if comparison.emptied_files:
+        details.append(f"{len(comparison.emptied_files)} fichier(s) devenu(s) vide(s)")
+    summary = ", ".join(details) or "écart non identifié"
+    return f"Contrôle d'intégrité échoué pour {label} : {summary}."
 
 
 def _integer(value: str, field_name: str) -> int:
@@ -807,6 +837,9 @@ def reconstruct_copy(
     # Le fangame peut avoir été mis à jour ou déplacé après la simulation. Le
     # plan doit encore correspondre exactement aux fichiers qu'il va utiliser.
     _assert_plan_sources_unchanged(plan, source_root)
+    if progress:
+        progress(0, 1, "Calcul de l'empreinte du fangame original…")
+    source_before = _integrity_snapshot(source_root, "le fangame original")
     _copy_game(source_root, target_root, progress=(lambda message: progress(0, 1, message) if progress else None))
 
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
@@ -816,6 +849,8 @@ def reconstruct_copy(
     modified_files: list[str] = []
     validation_errors: list[str] = []
     applied = 0
+    original_integrity: SnapshotComparison | None = None
+    copy_integrity: SnapshotComparison | None = None
     try:
         total_files = len(by_file)
         for file_index, (relative, items) in enumerate(sorted(by_file.items()), start=1):
@@ -831,6 +866,24 @@ def reconstruct_copy(
         # Une seconde vérification détecte toute modification des fichiers
         # originaux pendant la reconstruction avant d'annoncer un succès.
         _assert_plan_sources_unchanged(plan, source_root)
+        if progress:
+            progress(total_files, total_files, "Contrôle d'intégrité complet…")
+        source_after = _integrity_snapshot(source_root, "le fangame original")
+        copy_after = _integrity_snapshot(target_root, "la copie française")
+        original_integrity = compare_snapshots(source_before, source_after)
+        copy_integrity = compare_snapshots(
+            source_before,
+            copy_after,
+            allowed_changed=by_file,
+        )
+        if not original_integrity.passed:
+            raise ReconstructionError(
+                _integrity_failure("le fangame original", original_integrity)
+            )
+        if not copy_integrity.passed:
+            raise ReconstructionError(
+                _integrity_failure("la copie française", copy_integrity)
+            )
     except Exception:
         # Une copie incomplète ne doit jamais sembler utilisable.
         marker = target_root / "RECONSTRUCTION_INCOMPLETE.txt"
@@ -841,7 +894,8 @@ def reconstruct_copy(
         )
         raise
 
-    original_unchanged = True
+    original_unchanged = bool(original_integrity and original_integrity.passed)
+    integrity_valid = bool(copy_integrity and copy_integrity.passed and original_unchanged)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     manifest_path = report_dir / f"MANIFESTE_RECONSTRUCTION_{timestamp}.json"
@@ -861,6 +915,18 @@ def reconstruct_copy(
         },
         "traductions_appliquees": applied,
         "validation_erreurs": validation_errors,
+        "controle_integrite": {
+            "statut": "valide" if integrity_valid else "invalide",
+            "fichiers_source": source_before.file_count,
+            "octets_source": source_before.total_size,
+            "original": original_integrity.to_manifest() if original_integrity else {},
+            "copie": copy_integrity.to_manifest() if copy_integrity else {},
+            "fichiers_generes_apres_controle": [
+                "PFT_RECONSTRUCTION_V1.0.txt",
+                "LIRE_AVANT_DE_JOUER.txt",
+                "LANCER_VERSION_FR.bat",
+            ],
+        },
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -880,6 +946,11 @@ def reconstruct_copy(
         f"Traductions bloquées : {counts.get('blocked', 0)}",
         f"Fichiers modifiés : {len(modified_files)}",
         f"Original inchangé : {'OUI' if original_unchanged else 'NON'}",
+        f"Contrôle d'intégrité complet : {'VALIDE' if integrity_valid else 'INVALIDE'}",
+        f"Fichiers source contrôlés : {source_before.file_count}",
+        f"Fichiers non ciblés modifiés : {len(copy_integrity.changed_files) if copy_integrity else 0}",
+        f"Fichiers manquants : {len(copy_integrity.missing_files) if copy_integrity else 0}",
+        f"Fichiers devenus vides : {len(copy_integrity.emptied_files) if copy_integrity else 0}",
         f"Erreurs de validation : {len(validation_errors)}",
         "",
         "FICHIERS MODIFIÉS DANS LA COPIE",
@@ -938,6 +1009,7 @@ def reconstruct_copy(
         modified_files=modified_files,
         validation_errors=validation_errors,
         original_unchanged=original_unchanged,
+        integrity_valid=integrity_valid,
         report_path=str(report_path),
         manifest_path=str(manifest_path),
     )

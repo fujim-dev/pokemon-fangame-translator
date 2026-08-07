@@ -187,11 +187,14 @@ Déjà en place :
 - analyse approfondie statique des cartes, pages, événements communs, banques et PBS ;
 - estimation reproductible de la couverture française sans conserver les dialogues dans le rapport ;
 - rapports TXT, JSON et résumé Discord avec limites explicites.
+- empreinte complète avant/après reconstruction pour l'original et la copie ;
+- refus d'une copie contenant un fichier manquant, inattendu, vidé ou modifié hors plan ;
+- empreintes avant/après des seuls fichiers ciblés dans le manifeste, sans dialogues.
 
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;
-- réparations automatiques avec restauration ;
+- planification des réparations automatiques, points de restauration et rollback ;
 - adaptateur Pokémon Flux expérimental ;
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 

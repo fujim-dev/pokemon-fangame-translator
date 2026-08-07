@@ -17,6 +17,7 @@ python_files = [
     "adapters/unknown.py",
     "analysis/__init__.py",
     "analysis/deep_analyzer.py",
+    "analysis/integrity.py",
     "analysis/language_coverage.py",
     "analysis/models.py",
     "analysis/report_writer.py",

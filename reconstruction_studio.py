@@ -464,6 +464,7 @@ class ReconstructionStudio(tk.Toplevel):
             f"Traductions appliquées : {result.applied}",
             f"Fichiers modifiés : {len(result.modified_files)}",
             f"Original inchangé : {'OUI' if result.original_unchanged else 'NON'}",
+            f"Contrôle d'intégrité : {'VALIDE' if result.integrity_valid else 'INVALIDE'}",
             f"Erreurs de validation : {len(result.validation_errors)}",
             f"Rapport : {result.report_path}",
         ]))
@@ -473,6 +474,7 @@ class ReconstructionStudio(tk.Toplevel):
             f"{result.applied} texte(s) intégré(s).\n"
             f"{blocked} texte(s) laissé(s) en anglais par sécurité.\n"
             f"{critical} erreur(s) critique(s).\n\n"
+            "Tous les fichiers ciblés et non ciblés ont passé le contrôle d'intégrité.\n\n"
             "Tu peux jouer avec le bouton ci-dessous ou lancer Game.exe dans VERSION_FR.\n"
             "Conserve toujours le jeu original comme sauvegarde propre.",
             parent=self,
