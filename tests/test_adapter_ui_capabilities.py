@@ -98,6 +98,29 @@ class AdapterUiCapabilityTests(unittest.TestCase):
             app.file_menu.states["Ouvrir le studio de traduction"],
         )
 
+    def test_read_only_flux_profile_hides_translation_and_reconstruction(self) -> None:
+        app = self._app_without_tk()
+        app.detection_result = DetectionResult(
+            adapter_id="pokemon_flux",
+            display_name="Pokémon Flux (expérimental)",
+            confidence=100,
+            capabilities=frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
+            recognized_version="2.1.0",
+            adapter_recognized=True,
+            write_actions_allowed=False,
+        )
+
+        app._refresh_action_buttons()
+
+        self.assertEqual("", app.extract_btn.manager)
+        self.assertEqual("", app.translate_btn.manager)
+        self.assertEqual("", app.reconstruction_btn.manager)
+        self.assertTrue(app.deep_analyze_btn.enabled)
+        self.assertEqual(
+            "disabled",
+            app.file_menu.states["Ouvrir le studio de traduction"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

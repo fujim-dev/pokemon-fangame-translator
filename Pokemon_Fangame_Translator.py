@@ -1183,7 +1183,9 @@ class FangameTranslatorApp(tk.Tk):
             notes.append(f"Bibliothèque déclarée : {ini_values['Game.Library']}")
 
         score = detection.confidence
-        if not detection.write_actions_allowed:
+        if detection.adapter_recognized and not detection.write_actions_allowed:
+            level = "Profil reconnu — analyse en lecture seule"
+        elif not detection.write_actions_allowed:
             level = "Structure inconnue ou détection incertaine"
         else:
             level = "Élevée" if score >= 80 else "Moyenne"
@@ -1358,12 +1360,12 @@ class FangameTranslatorApp(tk.Tk):
             "",
             f"Adaptateur : {d.adapter_display_name} ({d.adapter_id})",
             f"Confiance de détection : {d.detection_confidence}/100",
-            f"Actions de traduction/reconstruction : {'AUTORISÉES' if d.write_actions_allowed else 'BLOQUÉES'}",
+            f"Reconstruction et écriture dans le jeu : {'AUTORISÉES' if d.write_actions_allowed else 'BLOQUÉES'}",
             f"Détection ambiguë : {'OUI' if d.adapter_ambiguous else 'NON'}",
             "",
             f"RPG Maker XP détecté : {'OUI' if d.rpg_maker_xp_detected else 'NON'}",
             f"Pokémon Essentials détecté : {'OUI' if d.pokemon_essentials_detected else 'NON'}",
-            f"Version Essentials probable : {d.probable_essentials_version}",
+            f"Version détectée : {d.probable_essentials_version}",
             "",
             f"Cartes détectées : {d.map_count}",
             f"Fichiers RXDATA : {d.rxdata_count}",

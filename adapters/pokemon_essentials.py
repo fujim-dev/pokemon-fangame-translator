@@ -152,5 +152,6 @@ class PokemonEssentialsAdapter:
             evidence=tuple(evidence),
             warnings=tuple(warnings),
             recognized_version=self._detect_version(root),
+            adapter_recognized=recognized,
             write_actions_allowed=recognized,
         )

@@ -17,22 +17,25 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from repair import (
+    PROTECTED_RE,
+    RepairError,
+    apply_repair_plan,
+    extract_protected,
+    plan_csv_repairs,
+    protected_command_diff,
+    restore_csv_backup,
+    restore_simple_commands,
+    save_repair_plan,
+    split_protected,
+)
+
 EXPECTED_FIELDS = [
     "id_stable", "type", "fichier", "carte_id", "carte_nom",
     "evenement_id", "evenement_nom", "page", "commande", "sous_index",
     "texte_source", "traduction_fr", "codes_proteges", "statut",
 ]
 EXTRA_FIELDS = ["niveau_relecture", "alertes_relecture", "groupe_doublon", "origine_traduction"]
-
-PROTECTED_RE = re.compile(
-    r"(\\(?:[Pp][Nn]|[Ss][Hh]|[Ww][Uu]|[NnLlGgBbRr])"
-    r"|\\[A-Za-z]+\[[^\]]*\]"
-    r"|\\[.!|^><]"
-    r"|\\[0-9]+"
-    r"|<[^>]+>"
-    r"|\{\d+\}"
-    r"|%\d*\$?[sSdDiIfF])"
-)
 
 DEFAULT_GLOSSARY = [
     ("Pokémon Fangame", "fangame Pokémon"),
@@ -122,25 +125,8 @@ LITERAL_FRENCH_PATTERNS = [
 ]
 
 
-def extract_protected(text: str) -> list[str]:
-    return PROTECTED_RE.findall(text or "")
-
-
 def strip_protected(text: str) -> str:
     return PROTECTED_RE.sub(" ", text or "")
-
-
-def split_protected(text: str) -> list[tuple[str, str]]:
-    parts: list[tuple[str, str]] = []
-    position = 0
-    for match in PROTECTED_RE.finditer(text or ""):
-        if match.start() > position:
-            parts.append(("text", text[position:match.start()]))
-        parts.append(("code", match.group(0)))
-        position = match.end()
-    if position < len(text or ""):
-        parts.append(("text", text[position:]))
-    return parts
 
 
 def normalize_for_compare(text: str) -> str:
@@ -297,84 +283,6 @@ def translate_preserving_codes(translator, source: str, glossary: list[tuple[str
     return translated
 
 
-
-def protected_command_diff(source: str, translation: str) -> tuple[list[str], list[str], list[str], list[str]]:
-    expected = extract_protected(source)
-    found = extract_protected(translation)
-    expected_counts = Counter(expected)
-    found_counts = Counter(found)
-    missing: list[str] = []
-    extra: list[str] = []
-    for command, count in expected_counts.items():
-        missing.extend([command] * max(0, count - found_counts.get(command, 0)))
-    for command, count in found_counts.items():
-        extra.extend([command] * max(0, count - expected_counts.get(command, 0)))
-    return expected, found, missing, extra
-
-
-def restore_simple_commands(source: str, translation: str) -> tuple[str, list[str], bool]:
-    """Répare uniquement les cas déterministes sans deviner la langue.
-
-    - transforme de vrais retours à la ligne en commandes littérales ``\\n`` ;
-    - restaure les commandes situées strictement au début ou à la fin du texte ;
-    - refuse les commandes internes complexes, qui exigent une vérification humaine.
-    """
-    result = (translation or "").replace("\r\n", "\n").replace("\r", "\n")
-    actions: list[str] = []
-    expected, found, missing, extra = protected_command_diff(source, result)
-    if expected == found:
-        return result, ["Aucune commande manquante."], True
-
-    expected_newlines = expected.count("\\n")
-    found_newlines = found.count("\\n")
-    needed_newlines = max(0, expected_newlines - found_newlines)
-    if needed_newlines and "\n" in result:
-        chunks = result.split("\n")
-        replacements = min(needed_newlines, len(chunks) - 1)
-        rebuilt = chunks[0]
-        for index, chunk in enumerate(chunks[1:], start=1):
-            rebuilt += ("\\n" if index <= replacements else "\n") + chunk
-        result = rebuilt
-        actions.append(f"{replacements} retour(s) à la ligne converti(s) en \\n.")
-
-    expected, found, missing, extra = protected_command_diff(source, result)
-    source_parts = split_protected(source)
-    leading: list[str] = []
-    trailing: list[str] = []
-    seen_text = False
-    for kind, value in source_parts:
-        if kind == "text" and value:
-            seen_text = True
-        elif kind == "code" and not seen_text:
-            leading.append(value)
-    seen_text = False
-    for kind, value in reversed(source_parts):
-        if kind == "text" and value:
-            seen_text = True
-        elif kind == "code" and not seen_text:
-            trailing.insert(0, value)
-
-    missing_counts = Counter(missing)
-    for command in leading:
-        if missing_counts.get(command, 0) > 0:
-            result = command + result
-            missing_counts[command] -= 1
-            actions.append(f"Commande de début restaurée : {command}")
-    for command in reversed(trailing):
-        if missing_counts.get(command, 0) > 0:
-            result = result + command
-            missing_counts[command] -= 1
-            actions.append(f"Commande de fin restaurée : {command}")
-
-    expected, found, missing, extra = protected_command_diff(source, result)
-    success = expected == found
-    if not success:
-        if missing:
-            actions.append("Commandes internes encore manquantes : " + ", ".join(missing))
-        if extra:
-            actions.append("Commandes en trop : " + ", ".join(extra))
-        actions.append("Le logiciel refuse de deviner leur position. Compare les deux textes manuellement.")
-    return result, actions, success
 
 def review_translation(source: str, translation: str) -> tuple[str, list[str]]:
     """Retourne (niveau, alertes). Niveau : bloque, verifier ou pret."""
@@ -878,7 +786,19 @@ class TranslationStudio(tk.Toplevel):
             bg=self.colors["panel"],
             fg=self.colors["muted"],
             font=("Segoe UI", 8),
-        ).pack(anchor="w")
+        ).pack(side="left", fill="x", expand=True)
+        self._button(
+            batch_summary,
+            "RÉPARER LES CAS SÛRS",
+            self.repair_safe_problems,
+            self.colors["purple"],
+        ).pack(side="right")
+        self._button(
+            batch_summary,
+            "RESTAURER",
+            self.restore_previous_repair,
+            self.colors["orange"],
+        ).pack(side="right", padx=(0, 7))
 
         # Panneau développeur masqué par défaut.
         self.developer_panel = self._card(self, self.colors["accent"], padx=12, pady=9)
@@ -1224,6 +1144,12 @@ class TranslationStudio(tk.Toplevel):
                     translation = row.get("traduction_fr", "").strip()
                     if translation:
                         level, alerts = review_translation(row.get("texte_source", ""), translation)
+                        if (
+                            row.get("origine_traduction") == "reparation_commandes_sure"
+                            and level == "pret"
+                        ):
+                            level = "verifier"
+                            alerts.append("Commandes techniques restaurées ; relecture humaine requise")
                         row["niveau_relecture"] = level
                         row["alertes_relecture"] = " | ".join(alerts)
                         row["statut"] = reconciled_status(row.get("statut", ""), level)
@@ -1426,6 +1352,152 @@ class TranslationStudio(tk.Toplevel):
                 message + "\n\nLa traduction reste bloquée tant que les commandes ne sont pas identiques.",
                 parent=self,
             )
+
+    def _store_current_translation_for_repair(self) -> None:
+        """Conserve l'édition courante, même bloquée, avant de calculer le plan."""
+        if self.current_index is None:
+            return
+        row = self.rows[self.current_index]
+        translation = self.translation_text.get("1.0", "end-1c").strip()
+        level, alerts = review_translation(row.get("texte_source", ""), translation)
+        row["traduction_fr"] = translation
+        row["niveau_relecture"] = level
+        row["alertes_relecture"] = " | ".join(alerts)
+        row["statut"] = reconciled_status(row.get("statut", ""), level)
+
+    def repair_safe_problems(self):
+        if not self.csv_path or not self.csv_path.is_file():
+            messagebox.showinfo(
+                "Aucun projet",
+                "Ouvre d'abord un fichier CSV de traduction.",
+                parent=self,
+            )
+            return
+        try:
+            self._store_current_translation_for_repair()
+            self._write_csv(self.csv_path)
+            plan = plan_csv_repairs(self.csv_path)
+            plan_path = self.reports_dir / (
+                "PLAN_REPARATIONS_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".json"
+            )
+            saved_plan = save_repair_plan(plan, plan_path)
+        except Exception as exc:
+            messagebox.showerror(
+                "Analyse des réparations impossible",
+                str(exc),
+                parent=self,
+            )
+            return
+
+        safe_count = len(saved_plan.safe_actions)
+        human_count = len(saved_plan.human_actions)
+        if not saved_plan.actions:
+            messagebox.showinfo(
+                "Aucun problème technique",
+                f"Aucune commande protégée incorrecte n'a été trouvée.\n\nPlan :\n{plan_path}",
+                parent=self,
+            )
+            return
+        if not safe_count:
+            self.view_var.set("À vérifier")
+            self.apply_filters()
+            messagebox.showwarning(
+                "Vérification humaine requise",
+                f"{human_count} cas ambigu(s) ont été conservés sans modification.\n\n"
+                f"Plan enregistré :\n{plan_path}",
+                parent=self,
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Appliquer le plan de réparation",
+            f"Réparations sûres : {safe_count}\n"
+            f"Vérifications humaines requises : {human_count}\n\n"
+            "Une sauvegarde exacte sera créée avant toute modification. "
+            "Si la relecture échoue, le CSV sera restauré automatiquement.\n\n"
+            f"Plan :\n{plan_path}\n\nAppliquer maintenant ?",
+            parent=self,
+        ):
+            self.log(f"Plan de réparation enregistré sans application : {plan_path}")
+            return
+
+        try:
+            result = apply_repair_plan(
+                saved_plan,
+                backup_dir=self.backup_dir,
+                report_dir=self.reports_dir,
+            )
+        except RepairError as exc:
+            messagebox.showerror("Réparation annulée", str(exc), parent=self)
+            self.load_csv(self.csv_path)
+            return
+
+        self.current_index = None
+        self.load_csv(self.csv_path)
+        self.view_var.set("À vérifier")
+        self.apply_filters()
+        self.offline_status_var.set(
+            f"{result.applied} réparation(s) sûre(s) appliquée(s) ; relecture humaine requise."
+        )
+        self.log(
+            f"Réparations sûres : {result.applied} ; sauvegarde : {result.backup_path}"
+        )
+        messagebox.showinfo(
+            "Réparation terminée",
+            f"{result.applied} commande(s) restaurée(s) de manière déterministe.\n"
+            f"{result.human_required} cas ambigu(s) laissé(s) inchangé(s).\n\n"
+            "Les lignes réparées restent « À vérifier ».\n\n"
+            f"Sauvegarde :\n{result.backup_path}\n\n"
+            f"Journal :\n{result.journal_path}",
+            parent=self,
+        )
+
+    def restore_previous_repair(self):
+        if not self.csv_path or not self.csv_path.is_file():
+            messagebox.showinfo("Aucun projet", "Ouvre d'abord un fichier CSV.", parent=self)
+            return
+        backups = sorted(
+            self.backup_dir.glob("avant_reparation_*.csv"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+        if not backups:
+            messagebox.showinfo(
+                "Aucune sauvegarde",
+                "Aucun point de restauration créé avant une réparation n'a été trouvé.",
+                parent=self,
+            )
+            return
+        backup = backups[0]
+        if not messagebox.askyesno(
+            "Restaurer le projet précédent",
+            "Restaurer le dernier point enregistré avant une réparation ?\n\n"
+            f"Sauvegarde :\n{backup}\n\n"
+            "Une nouvelle sauvegarde de sécurité sera créée avant la restauration.",
+            parent=self,
+        ):
+            return
+        try:
+            self._store_current_translation_for_repair()
+            self._write_csv(self.csv_path)
+            result = restore_csv_backup(
+                self.csv_path,
+                backup,
+                backup_dir=self.backup_dir,
+                report_dir=self.reports_dir,
+            )
+        except RepairError as exc:
+            messagebox.showerror("Restauration impossible", str(exc), parent=self)
+            return
+        self.current_index = None
+        self.load_csv(self.csv_path)
+        self.offline_status_var.set("Le projet précédent a été restauré et validé.")
+        self.log(f"Projet restauré depuis : {result.restored_backup_path}")
+        messagebox.showinfo(
+            "Projet restauré",
+            f"La sauvegarde précédente a été restaurée.\n\nRapport :\n{result.report_path}",
+            parent=self,
+        )
 
     def update_review_preview(self):
         if self.current_index is None:
@@ -1654,6 +1726,9 @@ class TranslationStudio(tk.Toplevel):
             if not translation:
                 continue
             level, alerts = review_translation(row.get("texte_source", ""), translation)
+            if row.get("origine_traduction") == "reparation_commandes_sure" and level == "pret":
+                level = "verifier"
+                alerts.append("Commandes techniques restaurées ; relecture humaine requise")
             row["niveau_relecture"] = level
             row["alertes_relecture"] = " | ".join(alerts)
             row["statut"] = reconciled_status(row.get("statut", ""), level)

@@ -133,6 +133,9 @@ class DeepAnalysisReport:
     dynamic_script_commands: int = 0
     static_references_checked: int = 0
     missing_static_references: int = 0
+    extractable_text_occurrences: int = 0
+    extractable_unique_texts: int = 0
+    extractable_by_source: dict[str, int] = field(default_factory=dict)
     issues: list[AnalysisIssue] = field(default_factory=list)
     verified: list[str] = field(default_factory=list)
     unverified: list[str] = field(default_factory=list)

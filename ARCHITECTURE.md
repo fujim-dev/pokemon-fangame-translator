@@ -12,12 +12,15 @@ Pokemon_Fangame_Translator.py
 │   ├── base.py
 │   ├── registry.py
 │   ├── pokemon_essentials.py
+│   ├── pokemon_flux.py
 │   └── unknown.py
 ├── analysis/
 │   ├── models.py
 │   ├── deep_analyzer.py
+│   ├── flux_analyzer.py
 │   ├── language_coverage.py
 │   └── report_writer.py
+├── flux_archive.py
 ├── structured_extractor.py
 │   └── ruby_marshal_reader.py
 ├── translation_studio.py
@@ -190,12 +193,19 @@ Déjà en place :
 - empreinte complète avant/après reconstruction pour l'original et la copie ;
 - refus d'une copie contenant un fichier manquant, inattendu, vidé ou modifié hors plan ;
 - empreintes avant/après des seuls fichiers ciblés dans le manifeste, sans dialogues.
+- plan de réparation CSV enregistré avant application, sans dialogues dans le rapport ;
+- restauration déterministe des commandes protégées simples avec point de restauration ;
+- validation après écriture et rollback exact en cas d'échec ;
+- restauration manuelle réversible du dernier projet précédant une réparation.
+- détection Flux multi-indices avec empreintes de la version 2.1.0 connue ;
+- inventaire et analyse statique du FPK Flux dans un dossier temporaire isolé ;
+- profil Flux volontairement limité à l'analyse en lecture seule.
 
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;
-- planification des réparations automatiques, points de restauration et rollback ;
-- adaptateur Pokémon Flux expérimental ;
+- autres réparations déterministes au-delà des commandes protégées simples ;
+- extraction et reconstruction de l'adaptateur Pokémon Flux expérimental ;
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 
 ## 4. Problèmes à éviter dans la v1.1
@@ -263,12 +273,15 @@ La première étape est une enveloppe sans réécriture fonctionnelle.
 Adaptateur expérimental séparé :
 
 - reconnaissance des signatures Flux connues ;
-- extraction des textes compatibles ;
-- reconstruction FPK sécurisée ;
-- validation de la structure ;
+- validation des chemins et de l'inventaire interne du FPK ;
+- analyse statique dans un dossier temporaire, sans exécuter Ruby ;
+- extraction des textes compatibles à venir ;
+- reconstruction FPK sécurisée à venir ;
 - blocage des versions inconnues.
 
-Il ne doit pas dépendre d'un nom de dossier.
+Il ne dépend pas d'un nom de dossier. Tant que la reconstruction n'a pas passé
+les tests privés sur une copie locale propre, ses capacités restent limitées à
+`ANALYZE` et `DEEP_ANALYZE`.
 
 #### `unknown.py`
 
@@ -309,6 +322,7 @@ Structure suggérée :
 repair/
 ├── models.py
 ├── planner.py
+├── engine.py
 ├── safe_fixes.py
 └── rollback.py
 ```

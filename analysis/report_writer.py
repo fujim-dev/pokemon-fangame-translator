@@ -75,6 +75,17 @@ def report_text(report: DeepAnalysisReport) -> str:
             f"Banques de messages relues : {report.message_banks_analyzed}/{report.message_banks_found}",
             f"Fichiers PBS relus : {report.pbs_files_analyzed}/{report.pbs_files_found}",
             f"Fichiers PBS avec encodage historique détecté : {report.pbs_legacy_encoding_files}",
+            f"Occurrences de texte extractibles : {report.extractable_text_occurrences}",
+            f"Textes sources distincts extractibles : {report.extractable_unique_texts}",
+            "Occurrences par source : "
+            + (
+                ", ".join(
+                    f"{source}={count}"
+                    for source, count in sorted(report.extractable_by_source.items())
+                )
+                or "aucune"
+            ),
+            f"Références statiques contrôlées : {report.static_references_checked}",
             f"Références statiques manquantes : {report.missing_static_references}",
             "",
             "COUVERTURE FRANÇAISE ESTIMÉE",

@@ -36,5 +36,6 @@ class UnknownAdapter:
             warnings=(
                 "Structure non reconnue : traduction et reconstruction désactivées.",
             ),
+            adapter_recognized=False,
             write_actions_allowed=False,
         )

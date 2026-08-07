@@ -36,6 +36,7 @@ class DetectionResult:
     evidence: tuple[DetectionEvidence, ...] = ()
     warnings: tuple[str, ...] = ()
     recognized_version: str = ""
+    adapter_recognized: bool = True
     write_actions_allowed: bool = False
     ambiguous: bool = False
 

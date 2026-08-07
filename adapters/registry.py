@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .base import DetectionResult, GameAdapter, GameCapability
 from .pokemon_essentials import PokemonEssentialsAdapter
+from .pokemon_flux import PokemonFluxAdapter
 from .unknown import UnknownAdapter
 
 
@@ -36,6 +37,7 @@ class AdapterRegistry:
             evidence=candidate.evidence,
             warnings=(warning, *candidate.warnings),
             recognized_version=candidate.recognized_version,
+            adapter_recognized=False,
             write_actions_allowed=False,
             ambiguous=ambiguous,
         )
@@ -50,14 +52,14 @@ class AdapterRegistry:
             return self._unknown_from(None)
 
         top = results[0]
-        eligible = top.write_actions_allowed and top.confidence >= self.confidence_threshold
+        eligible = top.adapter_recognized and top.confidence >= self.confidence_threshold
         if not eligible:
             return self._unknown_from(top)
 
         if len(results) >= 2:
             second = results[1]
             if (
-                second.write_actions_allowed
+                second.adapter_recognized
                 and second.confidence >= self.confidence_threshold
                 and top.confidence - second.confidence < self.ambiguity_margin
             ):
@@ -65,7 +67,7 @@ class AdapterRegistry:
         return top
 
     def adapter_for(self, result: DetectionResult) -> GameAdapter:
-        if result.adapter_id == UnknownAdapter.adapter_id or not result.write_actions_allowed:
+        if result.adapter_id == UnknownAdapter.adapter_id or not result.adapter_recognized:
             return UnknownAdapter()
         for adapter in self.adapters:
             if adapter.adapter_id == result.adapter_id:
@@ -74,5 +76,4 @@ class AdapterRegistry:
 
 
 def create_default_registry() -> AdapterRegistry:
-    # Pokémon Flux sera ajouté ici seulement après stabilisation des garde-fous.
-    return AdapterRegistry((PokemonEssentialsAdapter(),))
+    return AdapterRegistry((PokemonEssentialsAdapter(), PokemonFluxAdapter()))
