@@ -21,7 +21,7 @@ import shutil
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Callable, Iterable
 
 from ruby_marshal_reader import RubyObject, RubyString, load
@@ -122,6 +122,121 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _safe_relative_parts(relative: str) -> tuple[str, ...]:
+    """Valide un chemin de projet avant toute lecture ou écriture.
+
+    Les CSV sont modifiables par l'utilisateur. Un chemin qu'ils contiennent ne
+    doit donc jamais pouvoir devenir absolu ni remonter avec ``..``. Le contrôle
+    Windows est explicite afin de rester sûr même lorsque les tests sont lancés
+    sur un autre système.
+    """
+    raw = str(relative or "")
+    normalized = raw.replace("\\", "/")
+    windows_path = PureWindowsPath(raw)
+    if (
+        not normalized
+        or "\x00" in normalized
+        or normalized.startswith("/")
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or bool(windows_path.root)
+    ):
+        raise ReconstructionError("Chemin de fichier non sécurisé : chemin absolu ou vide")
+
+    parts = tuple(normalized.split("/"))
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ReconstructionError("Chemin de fichier non sécurisé : segment interdit")
+
+    invalid_windows = set('<>:"|?*')
+    reserved_windows = {
+        "con", "prn", "aux", "nul",
+        *(f"com{index}" for index in range(1, 10)),
+        *(f"lpt{index}" for index in range(1, 10)),
+    }
+    for part in parts:
+        if (
+            any(ord(character) < 32 or character in invalid_windows for character in part)
+            or part.endswith((" ", "."))
+            or part.split(".", 1)[0].casefold() in reserved_windows
+        ):
+            raise ReconstructionError("Chemin de fichier non sécurisé : nom Windows interdit")
+    return parts
+
+
+def _resolve_contained_path(root: Path, relative: str) -> Path:
+    """Retourne un chemin résolu uniquement s'il reste dans ``root``."""
+    resolved_root = root.expanduser().resolve()
+    candidate = resolved_root.joinpath(*_safe_relative_parts(relative)).resolve()
+    try:
+        candidate.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ReconstructionError("Chemin de fichier non sécurisé : sortie du dossier autorisé") from exc
+    return candidate
+
+
+def _path_matches_item_type(relative: str, row_type: str) -> bool:
+    """Limite chaque type de ligne aux emplacements produits par l'extracteur."""
+    parts = _safe_relative_parts(relative)
+    lowered = tuple(part.casefold() for part in parts)
+    if row_type in {"Dialogue", "Choix"}:
+        return (
+            len(lowered) == 2
+            and lowered[0] == "data"
+            and re.fullmatch(r"map\d{3,4}\.rxdata", lowered[1]) is not None
+        )
+    if row_type == "Banque de messages":
+        return lowered in {
+            ("data", "messages_game.dat"),
+            ("data", "messages_core.dat"),
+        }
+    if row_type.startswith("PBS —"):
+        return len(lowered) >= 2 and lowered[0] == "pbs" and lowered[-1].endswith(".txt")
+    return False
+
+
+def _resolve_group_path(root: Path, relative: str, items: list[PlanItem]) -> Path:
+    """Revérifie un groupe, y compris lorsqu'un plan a été modifié en mémoire."""
+    path = _resolve_contained_path(root, relative)
+    path_key = os.path.normcase(str(path))
+    for item in items:
+        item_path = _resolve_contained_path(root, item.fichier)
+        if os.path.normcase(str(item_path)) != path_key:
+            raise ReconstructionError("Le plan mélange plusieurs chemins de fichiers")
+        if not _path_matches_item_type(item.fichier, item.type):
+            raise ReconstructionError("Chemin incompatible avec le type de texte")
+    return path
+
+
+def _is_same_or_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _assert_plan_sources_unchanged(plan: ReconstructionPlan, source_root: Path) -> None:
+    """Refuse un plan incomplet ou devenu obsolète avant son application."""
+    expected_files = {
+        item.fichier
+        for item in plan.items
+        if item.decision == "applicable"
+    }
+    if not expected_files.issubset(plan.source_hashes):
+        raise ReconstructionError(
+            "Le plan de reconstruction est incomplet. Relancez la simulation."
+        )
+
+    for relative in sorted(expected_files):
+        expected_hash = plan.source_hashes[relative]
+        source_path = _resolve_contained_path(source_root, relative)
+        if not source_path.is_file() or sha256_file(source_path) != expected_hash:
+            raise ReconstructionError(
+                f"Le fichier source a changé depuis la simulation : {relative}. "
+                "Relancez la simulation."
+            )
+
+
 def _integer(value: str, field_name: str) -> int:
     try:
         return int(str(value).strip())
@@ -208,20 +323,23 @@ def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> Re
                 item.decision, item.reason = "skipped", reason
             elif extract_protected(item.source) != extract_protected(item.translation):
                 item.decision, item.reason = "blocked", "Commandes du jeu différentes"
-            elif not item.fichier or item.fichier.startswith(("../", "/")):
-                item.decision, item.reason = "blocked", "Chemin de fichier non sécurisé"
             else:
-                source_file = game_root / Path(item.fichier)
-                if not source_file.is_file():
-                    item.decision, item.reason = "blocked", "Fichier source absent"
-                elif source_file.name in {"Scripts.rxdata", "PluginScripts.rxdata"}:
-                    item.decision, item.reason = "blocked", "Scripts exclus"
+                try:
+                    source_file = _resolve_contained_path(game_root, item.fichier)
+                    if not _path_matches_item_type(item.fichier, item.type):
+                        raise ReconstructionError("Chemin incompatible avec le type de texte")
+                    if not source_file.is_file():
+                        raise ReconstructionError("Fichier source absent")
+                    if source_file.name.casefold() in {"scripts.rxdata", "pluginscripts.rxdata"}:
+                        raise ReconstructionError("Scripts exclus")
+                except ReconstructionError as exc:
+                    item.decision, item.reason = "blocked", str(exc)
                 else:
                     item.decision = "applicable"
         plan.items.append(item)
 
     for relative in sorted({item.fichier for item in plan.items if item.decision == "applicable"}):
-        plan.source_hashes[relative] = sha256_file(game_root / relative)
+        plan.source_hashes[relative] = sha256_file(_resolve_contained_path(game_root, relative))
     return plan
 
 
@@ -458,7 +576,7 @@ def _atomic_write_marshal(path: Path, root) -> None:
 
 
 def _apply_file(target_root: Path, relative: str, items: list[PlanItem]) -> None:
-    path = target_root / relative
+    path = _resolve_group_path(target_root, relative, items)
     if relative.lower().endswith(".rxdata"):
         root = load(path)
         if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
@@ -479,7 +597,7 @@ def _apply_file(target_root: Path, relative: str, items: list[PlanItem]) -> None
 
 
 def _validate_file(target_root: Path, relative: str, items: list[PlanItem]) -> list[str]:
-    path = target_root / relative
+    path = _resolve_group_path(target_root, relative, items)
     expected = {item.id_stable: item.translation for item in items}
     if relative.lower().endswith(".rxdata"):
         map_name = items[0].map_name if items else ""
@@ -509,7 +627,7 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
 
     for relative, items in by_file.items():
         try:
-            path = game_root / relative
+            path = _resolve_group_path(game_root, relative, items)
             if relative.lower().endswith(".rxdata"):
                 root = load(path)
                 if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
@@ -592,12 +710,19 @@ def reconstruct_copy(
     source_root = Path(plan.game_root).resolve()
     target_root = target_root.expanduser().resolve()
     report_dir = report_dir.expanduser().resolve()
+    if _is_same_or_within(report_dir, source_root):
+        raise ReconstructionError("Le dossier des rapports ne peut pas être placé dans le fangame original.")
+    if _is_same_or_within(report_dir, target_root):
+        raise ReconstructionError("Le dossier des rapports ne peut pas être placé dans la copie française.")
     report_dir.mkdir(parents=True, exist_ok=True)
 
     applicable = [item for item in plan.items if item.decision == "applicable"]
     if not applicable:
         raise ReconstructionError("Aucune traduction sûre à reconstruire.")
 
+    # Le fangame peut avoir été mis à jour ou déplacé après la simulation. Le
+    # plan doit encore correspondre exactement aux fichiers qu'il va utiliser.
+    _assert_plan_sources_unchanged(plan, source_root)
     _copy_game(source_root, target_root, progress=(lambda message: progress(0, 1, message) if progress else None))
 
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
@@ -619,6 +744,9 @@ def reconstruct_copy(
                 raise ReconstructionError(errors[0])
             modified_files.append(relative)
             applied += len(items)
+        # Une seconde vérification détecte toute modification des fichiers
+        # originaux pendant la reconstruction avant d'annoncer un succès.
+        _assert_plan_sources_unchanged(plan, source_root)
     except Exception:
         # Une copie incomplète ne doit jamais sembler utilisable.
         marker = target_root / "RECONSTRUCTION_INCOMPLETE.txt"
@@ -629,11 +757,7 @@ def reconstruct_copy(
         )
         raise
 
-    original_unchanged = all(
-        (source_root / relative).is_file()
-        and sha256_file(source_root / relative) == expected_hash
-        for relative, expected_hash in plan.source_hashes.items()
-    )
+    original_unchanged = True
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     manifest_path = report_dir / f"MANIFESTE_RECONSTRUCTION_{timestamp}.json"
@@ -647,7 +771,10 @@ def reconstruct_copy(
         "original_inchange": original_unchanged,
         "fichiers_modifies": modified_files,
         "hachages_originaux": plan.source_hashes,
-        "hachages_copie": {relative: sha256_file(target_root / relative) for relative in modified_files},
+        "hachages_copie": {
+            relative: sha256_file(_resolve_contained_path(target_root, relative))
+            for relative in modified_files
+        },
         "traductions_appliquees": applied,
         "validation_erreurs": validation_errors,
     }
