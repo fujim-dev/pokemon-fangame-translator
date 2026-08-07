@@ -22,6 +22,7 @@ from tkinter import filedialog, messagebox, ttk
 from translation_studio import TranslationStudio
 from reconstruction_studio import ReconstructionStudio
 from adapters import DetectionResult, GameCapability, create_default_registry
+from analysis import report_text as deep_report_text, write_analysis_reports
 
 
 APP_TITLE = "Pokémon Fangame Translator v1.0.2 — Bêta publique"
@@ -75,7 +76,9 @@ def project_directory_for_game(game_root: Path, projects_root: Path | None = Non
     resolved = game_root.expanduser().resolve()
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", resolved.name).strip("_") or "Fangame"
     digest = hashlib.sha1(str(resolved).casefold().encode("utf-8", errors="replace")).hexdigest()[:8]
-    project = (projects_root or default_projects_root()).expanduser().resolve() / f"{safe_name}_{digest}"
+    requested_root = (projects_root or default_projects_root()).expanduser()
+    display_root = Path(os.path.abspath(requested_root))
+    project = display_root / f"{safe_name}_{digest}"
     if _is_same_or_within(project, resolved):
         raise ValueError(
             "Le dossier de projets serait créé à l'intérieur du fangame original. "
@@ -348,6 +351,7 @@ class FangameTranslatorApp(tk.Tk):
         self.base_dir = Path(__file__).resolve().parent
         self.game_dir: Path | None = None
         self.last_diagnostic: Diagnostic | None = None
+        self.last_deep_analysis = None
         self.adapter_registry = create_default_registry()
         self.detection_result: DetectionResult | None = None
         self.extracted_count = 0
@@ -436,6 +440,11 @@ class FangameTranslatorApp(tk.Tk):
         file_menu.add_command(
             label="Ouvrir le studio de traduction",
             command=self.open_translation_studio,
+            state="disabled",
+        )
+        file_menu.add_command(
+            label="Analyser en profondeur",
+            command=self.run_deep_analysis,
             state="disabled",
         )
         file_menu.add_command(label="Exporter le rapport", command=self.export_report)
@@ -582,9 +591,20 @@ class FangameTranslatorApp(tk.Tk):
         analysis_row = tk.Frame(ac, bg=self.colors["panel"])
         analysis_row.pack(fill="x")
         self.analyze_btn = NeonButton(analysis_row, "ANALYSER LE JEU", self.run_diagnostic,
-                                      self.colors["accent"], width=260, height=54, icon="⌕", enabled=False)
+                                      self.colors["accent"], width=210, height=54, icon="⌕", enabled=False)
         self.analyze_btn.pack(side="left")
         self.quick_analyze_btn = self.analyze_btn
+        self.deep_analyze_btn = NeonButton(
+            analysis_row,
+            "ANALYSE APPROFONDIE",
+            self.run_deep_analysis,
+            self.colors["purple"],
+            width=230,
+            height=54,
+            icon="◎",
+            enabled=False,
+        )
+        self.deep_analyze_btn.pack(side="left", padx=(10, 0))
         checklist = tk.Frame(analysis_row, bg=self.colors["panel2"], padx=12, pady=7)
         checklist.pack(side="left", fill="both", expand=True, padx=(12, 0))
         tk.Label(checklist, text="RPG Maker XP / Essentials / fichiers de texte / sécurité",
@@ -812,6 +832,7 @@ class FangameTranslatorApp(tk.Tk):
         extract_allowed = self._adapter_can(GameCapability.EXTRACT)
         translate_allowed = self._adapter_can(GameCapability.TRANSLATE)
         reconstruct_allowed = self._adapter_can(GameCapability.RECONSTRUCT)
+        deep_analysis_allowed = self._adapter_can(GameCapability.DEEP_ANALYZE)
 
         layouts = (
             (self.extract_btn, pending_detection or extract_allowed, {"side": "left", "fill": "both", "expand": True, "padx": (0, 6)}),
@@ -827,9 +848,15 @@ class FangameTranslatorApp(tk.Tk):
         self.extract_btn.set_enabled(extract_allowed)
         self.translate_btn.set_enabled(has_project_csv and translate_allowed)
         self.reconstruction_btn.set_enabled(has_project_csv and reconstruct_allowed)
+        if hasattr(self, "deep_analyze_btn"):
+            self.deep_analyze_btn.set_enabled(deep_analysis_allowed)
         self.file_menu.entryconfigure(
             "Ouvrir le studio de traduction",
             state="normal" if has_project_csv and translate_allowed else "disabled",
+        )
+        self.file_menu.entryconfigure(
+            "Analyser en profondeur",
+            state="normal" if deep_analysis_allowed else "disabled",
         )
 
     def open_translation_studio(self):
@@ -978,6 +1005,7 @@ class FangameTranslatorApp(tk.Tk):
             messagebox.showerror("Dossier refusé", str(exc))
             return
         self.last_diagnostic = None
+        self.last_deep_analysis = None
         self.detection_result = None
         self.extracted_count = 0
         self.path_var.set(str(self.game_dir))
@@ -1211,6 +1239,107 @@ class FangameTranslatorApp(tk.Tk):
         self._write_automatic_report(diagnostic)
         self._refresh_action_buttons()
         self._log(self.status_var.get())
+
+    def run_deep_analysis(self):
+        """Lance une validation analytique statique, sans exécuter le jeu."""
+        if not self.game_dir or not self.detection_result:
+            messagebox.showerror(
+                "Analyse initiale requise",
+                "Choisis le fangame et lance d'abord l'analyse de compatibilité.",
+            )
+            return
+        if not self._adapter_can(GameCapability.DEEP_ANALYZE):
+            messagebox.showerror(
+                "Analyse indisponible",
+                "Ce profil ne permet pas l'analyse approfondie en lecture seule.",
+            )
+            return
+
+        root = self.game_dir
+        self.deep_analyze_btn.set_enabled(False)
+        self.progress["value"] = 0
+        self.progress_percent.set("0%")
+        self.status_var.set("Validation analytique approfondie en cours…")
+        self.project_status.set("Analyse approfondie en cours")
+        self._log("Début de l'analyse approfondie statique. Aucun script Ruby ne sera exécuté.")
+
+        def progress(current: int, total: int, relative: str) -> None:
+            percent = int(current * 100 / max(1, total))
+            self.progress["value"] = percent
+            self.progress_percent.set(f"{percent}%")
+            self.status_var.set(f"Analyse approfondie : {relative}")
+            self.update_idletasks()
+
+        try:
+            adapter = self.adapter_registry.adapter_for(self.detection_result)
+            report = adapter.analyze(
+                root,
+                self.detection_result,
+                mode="complete",
+                progress=progress,
+            )
+            paths = write_analysis_reports(
+                report,
+                self._reports_dir(),
+                original_root=root,
+            )
+        except Exception as exc:
+            self.status_var.set("Analyse approfondie impossible.")
+            self.project_status.set("Erreur d'analyse")
+            self._log(f"Échec de l'analyse approfondie : {type(exc).__name__}: {exc}")
+            messagebox.showerror(
+                "Analyse approfondie impossible",
+                f"L'analyse n'a pas pu être terminée.\n\n{type(exc).__name__}: {exc}",
+            )
+            self._refresh_action_buttons()
+            return
+
+        self.last_deep_analysis = report
+        self.progress["value"] = 100
+        self.progress_percent.set("100%")
+        self.status_var.set(
+            f"Validation analytique terminée — statut {report.status.upper()}."
+        )
+        self.project_status.set(f"Analyse approfondie : {report.status.upper()}")
+        self._set_text(self.summary_text, deep_report_text(report))
+        self._set_text(
+            self.stats_text,
+            "\n".join(
+                [
+                    "COUVERTURE FRANÇAISE ESTIMÉE",
+                    "=" * 72,
+                    f"Lignes analysées : {report.coverage.total_lines}",
+                    f"Français probable : {report.coverage.line_counts['francais_probable']}",
+                    f"Anglais probable : {report.coverage.line_counts['anglais_probable']}",
+                    f"Textes mixtes : {report.coverage.line_counts['mixte']}",
+                    f"Ambigus : {report.coverage.line_counts['ambigu']}",
+                    f"Estimation par lignes : {report.coverage.french_line_percent:.2f}%",
+                    f"Estimation par mots : {report.coverage.french_word_percent:.2f}%",
+                    f"Estimation par caractères : {report.coverage.french_character_percent:.2f}%",
+                    "",
+                    "Cette estimation ne prouve pas que l'aventure complète a été jouée.",
+                ]
+            ),
+        )
+        self._toggle_technical_details(force=True)
+        self.notebook.select(0)
+        self._refresh_action_buttons()
+        self._log(f"Rapport approfondi : {paths['text']}")
+        self._log(f"Résumé Discord : {paths['discord']}")
+
+        message = (
+            f"Statut analytique : {report.status.upper()}\n\n"
+            f"Cartes relues : {report.maps_analyzed}/{report.map_files_found}\n"
+            f"Pages d'événements : {report.map_pages}\n"
+            f"Alertes : {len(report.issues)}\n"
+            f"Couverture française estimée : {report.coverage.french_line_percent:.2f}%\n\n"
+            "L'aventure complète n'a pas été jouée physiquement de bout en bout.\n\n"
+            f"Rapport :\n{paths['text']}"
+        )
+        if report.status == "vert":
+            messagebox.showinfo("Validation analytique terminée", message)
+        else:
+            messagebox.showwarning("Validation analytique terminée avec réserves", message)
 
     def _clear_views(self):
         self._set_text(self.summary_text, "")
@@ -1661,6 +1790,21 @@ class FangameTranslatorApp(tk.Tk):
                 "AVERTISSEMENTS",
                 "-" * 78,
                 *(diagnostic.warnings or ["Aucun avertissement majeur."]),
+            ])
+        if self.last_deep_analysis:
+            deep = self.last_deep_analysis
+            lines.extend([
+                "",
+                "VALIDATION ANALYTIQUE APPROFONDIE",
+                "-" * 78,
+                f"Statut : {deep.status.upper()}",
+                f"Cartes relues : {deep.maps_analyzed}/{deep.map_files_found}",
+                f"Pages d'événements : {deep.map_pages}",
+                f"Événements communs : {deep.common_events_analyzed}/{deep.common_events_found}",
+                f"Références statiques manquantes : {deep.missing_static_references}",
+                f"Couverture française estimée : {deep.coverage.french_line_percent:.2f}% des lignes classables",
+                f"Sources non vérifiables ou incomplètes : {'OUI' if deep.coverage.incomplete_sources else 'NON'}",
+                "L'aventure complète n'a pas été jouée physiquement de bout en bout.",
             ])
         lines.extend([
             "",

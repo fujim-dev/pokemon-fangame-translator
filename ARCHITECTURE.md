@@ -13,6 +13,11 @@ Pokemon_Fangame_Translator.py
 │   ├── registry.py
 │   ├── pokemon_essentials.py
 │   └── unknown.py
+├── analysis/
+│   ├── models.py
+│   ├── deep_analyzer.py
+│   ├── language_coverage.py
+│   └── report_writer.py
 ├── structured_extractor.py
 │   └── ruby_marshal_reader.py
 ├── translation_studio.py
@@ -179,10 +184,13 @@ Déjà en place :
 - extraction Essentials déléguée à l'adaptateur ;
 - boutons et commandes sensibles bloqués pour les structures inconnues ;
 - refus des liens symboliques et jonctions pendant la reconstruction.
+- analyse approfondie statique des cartes, pages, événements communs, banques et PBS ;
+- estimation reproductible de la couverture française sans conserver les dialogues dans le rapport ;
+- rapports TXT, JSON et résumé Discord avec limites explicites.
 
-Pas encore en place :
+Encore partiel ou pas encore en place :
 
-- analyse profonde commune ;
+- branches dynamiques et références statiques avancées de l'analyse profonde ;
 - réparations automatiques avec restauration ;
 - adaptateur Pokémon Flux expérimental ;
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.

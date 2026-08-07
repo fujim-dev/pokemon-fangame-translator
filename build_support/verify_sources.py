@@ -15,6 +15,11 @@ python_files = [
     "adapters/pokemon_essentials.py",
     "adapters/registry.py",
     "adapters/unknown.py",
+    "analysis/__init__.py",
+    "analysis/deep_analyzer.py",
+    "analysis/language_coverage.py",
+    "analysis/models.py",
+    "analysis/report_writer.py",
 ]
 required_files = [
     "README.md",

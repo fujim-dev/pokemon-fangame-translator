@@ -8,6 +8,7 @@ from typing import Protocol
 
 class GameCapability(str, Enum):
     ANALYZE = "analyze"
+    DEEP_ANALYZE = "deep_analyze"
     EXTRACT = "extract"
     TRANSLATE = "translate"
     RECONSTRUCT = "reconstruct"
@@ -52,4 +53,8 @@ class GameAdapter(Protocol):
 
     def extract(self, root: Path, progress=None, logger=None) -> tuple[list[dict], list[str]]:
         """Extrait les textes via le chemin propre à l'adaptateur."""
+        ...
+
+    def analyze(self, root: Path, detection: DetectionResult, mode="complete", progress=None):
+        """Produit une validation analytique statique sans exécuter le jeu."""
         ...

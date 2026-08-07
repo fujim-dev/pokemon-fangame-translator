@@ -79,7 +79,10 @@ class AdapterDetectionTests(unittest.TestCase):
 
             self.assertEqual(result.adapter_id, "unknown")
             self.assertFalse(result.write_actions_allowed)
-            self.assertEqual(result.capabilities, frozenset({GameCapability.ANALYZE}))
+            self.assertEqual(
+                result.capabilities,
+                frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
+            )
 
     def test_incomplete_rpg_maker_structure_keeps_write_actions_locked(self):
         with tempfile.TemporaryDirectory() as temp_dir:

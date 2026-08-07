@@ -32,7 +32,7 @@ class AdapterRegistry:
             adapter_id=base.adapter_id,
             display_name=base.display_name,
             confidence=candidate.confidence,
-            capabilities=frozenset({GameCapability.ANALYZE}),
+            capabilities=frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
             evidence=candidate.evidence,
             warnings=(warning, *candidate.warnings),
             recognized_version=candidate.recognized_version,

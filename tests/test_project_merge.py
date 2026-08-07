@@ -4,6 +4,7 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from Pokemon_Fangame_Translator import merge_project_rows, project_directory_for_game
 
@@ -27,6 +28,27 @@ class ProjectMergeTests(unittest.TestCase):
 
             self.assertEqual(base / "Projets", project.parent)
             self.assertFalse(project.is_relative_to(game_root))
+
+    def test_project_directory_preserves_the_requested_windows_path_spelling(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_project_spelling_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "Jeu"
+            projects_root = base / "Projets"
+            short_projects_root = base / "PROJET~1"
+            game_root.mkdir()
+            original_resolve = Path.resolve
+
+            def fake_resolve(path: Path, *args, **kwargs) -> Path:
+                if path == projects_root:
+                    return short_projects_root
+                if path.parent == projects_root:
+                    return short_projects_root / path.name
+                return original_resolve(path, *args, **kwargs)
+
+            with patch.object(Path, "resolve", autospec=True, side_effect=fake_resolve):
+                project = project_directory_for_game(game_root, projects_root)
+
+            self.assertEqual(projects_root, project.parent)
 
     def test_preserves_translation_when_stable_id_and_source_match(self) -> None:
         new_row = {

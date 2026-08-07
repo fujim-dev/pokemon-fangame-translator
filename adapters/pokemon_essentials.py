@@ -5,11 +5,22 @@ from pathlib import Path
 
 from .base import AdapterOperationBlocked, DetectionEvidence, DetectionResult, GameCapability
 from structured_extractor import extract_structured
+from analysis.deep_analyzer import analyze_game
 
 
 class PokemonEssentialsAdapter:
     adapter_id = "pokemon_essentials"
     display_name = "Pokémon Essentials classique"
+
+    def analyze(self, root: Path, detection: DetectionResult, mode="complete", progress=None):
+        return analyze_game(
+            root,
+            adapter_id=detection.adapter_id,
+            adapter_display_name=detection.display_name,
+            adapter_confidence=detection.confidence,
+            mode=mode,
+            progress=progress,
+        )
 
     def extract(self, root: Path, progress=None, logger=None) -> tuple[list[dict], list[str]]:
         detection = self.probe(root)
@@ -124,13 +135,14 @@ class PokemonEssentialsAdapter:
             frozenset(
                 {
                     GameCapability.ANALYZE,
+                    GameCapability.DEEP_ANALYZE,
                     GameCapability.EXTRACT,
                     GameCapability.TRANSLATE,
                     GameCapability.RECONSTRUCT,
                 }
             )
             if recognized
-            else frozenset({GameCapability.ANALYZE})
+            else frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE})
         )
         return DetectionResult(
             adapter_id=self.adapter_id,

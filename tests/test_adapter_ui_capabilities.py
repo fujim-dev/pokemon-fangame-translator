@@ -28,10 +28,10 @@ class FakeButton:
 
 class FakeMenu:
     def __init__(self) -> None:
-        self.state = "disabled"
+        self.states: dict[str, str] = {}
 
-    def entryconfigure(self, _label: str, *, state: str) -> None:
-        self.state = state
+    def entryconfigure(self, label: str, *, state: str) -> None:
+        self.states[label] = state
 
 
 class AdapterUiCapabilityTests(unittest.TestCase):
@@ -41,6 +41,7 @@ class AdapterUiCapabilityTests(unittest.TestCase):
         app.extract_btn = FakeButton()
         app.translate_btn = FakeButton()
         app.reconstruction_btn = FakeButton()
+        app.deep_analyze_btn = FakeButton()
         app.file_menu = FakeMenu()
         app.translation_csv_path = None
         return app
@@ -55,7 +56,15 @@ class AdapterUiCapabilityTests(unittest.TestCase):
         self.assertEqual("", app.translate_btn.manager)
         self.assertEqual("", app.reconstruction_btn.manager)
         self.assertFalse(app.extract_btn.enabled)
-        self.assertEqual("disabled", app.file_menu.state)
+        self.assertTrue(app.deep_analyze_btn.enabled)
+        self.assertEqual(
+            "disabled",
+            app.file_menu.states["Ouvrir le studio de traduction"],
+        )
+        self.assertEqual(
+            "normal",
+            app.file_menu.states["Analyser en profondeur"],
+        )
 
     def test_supported_profile_shows_only_ready_actions(self) -> None:
         app = self._app_without_tk()
@@ -83,7 +92,11 @@ class AdapterUiCapabilityTests(unittest.TestCase):
         self.assertTrue(app.extract_btn.enabled)
         self.assertTrue(app.translate_btn.enabled)
         self.assertTrue(app.reconstruction_btn.enabled)
-        self.assertEqual("normal", app.file_menu.state)
+        self.assertTrue(app.deep_analyze_btn.enabled)
+        self.assertEqual(
+            "normal",
+            app.file_menu.states["Ouvrir le studio de traduction"],
+        )
 
 
 if __name__ == "__main__":
