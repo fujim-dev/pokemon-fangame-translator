@@ -2,10 +2,17 @@
 
 ## 1. Vue d'ensemble de la v1.0.2
 
-L'application est une application de bureau Python/Tkinter organisée autour de sept modules principaux.
+L'application est une application de bureau Python/Tkinter. La base stable v1.0.2
+reste organisée autour de sept modules principaux, auxquels s'ajoute désormais la
+première brique de migration v1.1 : le paquet `adapters`.
 
 ```text
 Pokemon_Fangame_Translator.py
+├── adapters/
+│   ├── base.py
+│   ├── registry.py
+│   ├── pokemon_essentials.py
+│   └── unknown.py
 ├── structured_extractor.py
 │   └── ruby_marshal_reader.py
 ├── translation_studio.py
@@ -25,7 +32,7 @@ Responsabilités actuelles :
 - fenêtre principale et navigation ;
 - sélection du dossier ;
 - activation d'un projet persistant ;
-- diagnostic heuristique ;
+- diagnostic piloté par un registre d'adaptateurs ;
 - affichage des résultats ;
 - déclenchement de l'extraction ;
 - ouverture des studios de traduction et de reconstruction ;
@@ -35,13 +42,13 @@ Responsabilités actuelles :
 Points importants :
 
 - `Diagnostic` est une dataclass contenant les résultats de détection.
-- `run_diagnostic()` identifie actuellement surtout les structures RPG Maker XP / Essentials.
-- `merge_project_rows()` conserve les traductions précédentes grâce à `id_stable` et à une clé de secours.
+- `run_diagnostic()` utilise plusieurs indices structurels et bloque les capacités lorsque la détection est incertaine.
+- `merge_project_rows()` conserve une traduction précédente seulement si l'identifiant stable et le texte source correspondent encore.
 - les projets sont stockés dans `Documents/Pokemon Fangame Translator/Projets`.
 
-Risque architectural :
+Risque architectural restant :
 
-- ce fichier concentre l'interface, la détection, les rapports et une partie de la logique de projet ;
+- ce fichier concentre encore l'interface, les rapports et une partie de la logique de projet ;
 - l'ajout direct de cas Flux dans `run_diagnostic()` rendrait le module difficile à maintenir.
 
 ### `structured_extractor.py`
@@ -62,7 +69,7 @@ Dépendance principale :
 Limite actuelle :
 
 - l'extracteur est conçu pour les structures classiques prises en charge ;
-- il ne constitue pas encore une interface d'adaptateur générique.
+- il reste l'implémentation Essentials, appelée derrière `PokemonEssentialsAdapter`.
 
 ### `translation_studio.py`
 
@@ -123,7 +130,7 @@ Forces :
 Limite actuelle :
 
 - moteur conçu pour les formats classiques ;
-- aucune interface d'adaptateur ou de stratégie de reconstruction.
+- l'accès est verrouillé par les capacités de l'adaptateur, mais la stratégie de reconstruction n'est pas encore entièrement encapsulée dans celui-ci.
 
 ### `ruby_marshal_reader.py`
 
@@ -146,7 +153,10 @@ La compatibilité lecteur/écrivain est critique. Toute évolution doit être te
 
 ```text
 Dossier du jeu
-→ run_diagnostic()
+→ AdapterRegistry.detect()
+→ PokemonEssentialsAdapter ou UnknownAdapter
+→ capacités autorisées dans l'interface
+→ PokemonEssentialsAdapter.extract()
 → extract_structured()
 → CSV de projet
 → TranslationStudio
@@ -157,6 +167,25 @@ Dossier du jeu
 → VERSION_FR séparée
 → validation des fichiers modifiés
 ```
+
+### État de la migration v1.1
+
+Déjà en place :
+
+- contrat commun de détection et de capacités ;
+- registre avec seuil de confiance et refus des scores ambigus ;
+- détection Essentials fondée sur plusieurs indices réels ;
+- `UnknownAdapter` limité à l'analyse en lecture seule ;
+- extraction Essentials déléguée à l'adaptateur ;
+- boutons et commandes sensibles bloqués pour les structures inconnues ;
+- refus des liens symboliques et jonctions pendant la reconstruction.
+
+Pas encore en place :
+
+- analyse profonde commune ;
+- réparations automatiques avec restauration ;
+- adaptateur Pokémon Flux expérimental ;
+- encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 
 ## 4. Problèmes à éviter dans la v1.1
 

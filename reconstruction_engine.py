@@ -163,10 +163,59 @@ def _safe_relative_parts(relative: str) -> tuple[str, ...]:
     return parts
 
 
+def _is_link_or_junction(path: Path) -> bool:
+    """Détecte les redirections de système de fichiers sans les suivre."""
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        return bool(is_junction and is_junction())
+    except OSError:
+        return False
+
+
+def _assert_no_link_components(root: Path, parts: tuple[str, ...]) -> None:
+    current = root
+    for part in parts:
+        current = current / part
+        if _is_link_or_junction(current):
+            raise ReconstructionError(
+                "Chemin de fichier non sécurisé : lien symbolique ou jonction refusé"
+            )
+
+
+def _assert_tree_has_no_links(root: Path) -> None:
+    """Parcourt une arborescence sans suivre de lien et refuse toute jonction."""
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as exc:
+            raise ReconstructionError(f"Impossible d'inspecter la copie source : {exc}") from exc
+        for entry in entries:
+            path = Path(entry.path)
+            if _is_link_or_junction(path):
+                try:
+                    relative = path.relative_to(root)
+                except ValueError:
+                    relative = Path(path.name)
+                raise ReconstructionError(
+                    f"Lien symbolique ou jonction refusé dans le fangame : {relative}"
+                )
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(path)
+            except OSError as exc:
+                raise ReconstructionError(f"Impossible d'inspecter {path.name} : {exc}") from exc
+
+
 def _resolve_contained_path(root: Path, relative: str) -> Path:
     """Retourne un chemin résolu uniquement s'il reste dans ``root``."""
     resolved_root = root.expanduser().resolve()
-    candidate = resolved_root.joinpath(*_safe_relative_parts(relative)).resolve()
+    parts = _safe_relative_parts(relative)
+    _assert_no_link_components(resolved_root, parts)
+    candidate = resolved_root.joinpath(*parts).resolve()
     try:
         candidate.relative_to(resolved_root)
     except ValueError as exc:
@@ -696,9 +745,44 @@ def _copy_game(source: Path, target: Path, progress: Callable[[str], None] | Non
         pass
     if target.exists():
         raise ReconstructionError("Le dossier de sortie existe déjà. Choisissez un dossier vide ou supprimez l'ancienne copie.")
+    _assert_tree_has_no_links(source)
     if progress:
         progress("Copie complète du fangame…")
-    shutil.copytree(source, target, copy_function=shutil.copy2)
+
+    def reject_new_links(directory: str, names: list[str]) -> set[str]:
+        for name in names:
+            path = Path(directory) / name
+            if _is_link_or_junction(path):
+                raise ReconstructionError(
+                    f"Lien symbolique ou jonction apparu pendant la copie : {path.name}"
+                )
+        return set()
+
+    def copy_regular_file(source_file: str, target_file: str):
+        source_path = Path(source_file)
+        if _is_link_or_junction(source_path):
+            raise ReconstructionError(
+                f"Lien symbolique ou jonction apparu pendant la copie : {source_path.name}"
+            )
+        return shutil.copy2(source_file, target_file)
+
+    try:
+        shutil.copytree(
+            source,
+            target,
+            symlinks=True,
+            ignore=reject_new_links,
+            copy_function=copy_regular_file,
+        )
+        _assert_tree_has_no_links(target)
+    except Exception:
+        if target.is_dir():
+            (target / "RECONSTRUCTION_INCOMPLETE.txt").write_text(
+                "Cette copie est incomplète et ne doit pas être utilisée.\n"
+                "Un lien symbolique, une jonction ou une erreur de copie a été détecté.\n",
+                encoding="utf-8",
+            )
+        raise
 
 
 def reconstruct_copy(

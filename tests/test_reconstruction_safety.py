@@ -4,6 +4,7 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from reconstruction_engine import (
     ReconstructionError,
@@ -195,6 +196,57 @@ class ReconstructionSafetyTests(unittest.TestCase):
             self.assertEqual(1, result.applied)
             self.assertIn("Bonjour", (target / safe_relative).read_text(encoding="utf-8"))
             self.assertIn("Actual", (target / blocked_relative).read_text(encoding="utf-8"))
+
+    def test_refuses_to_copy_a_game_containing_a_directory_link(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_linked_game_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            pbs_path = game_root / "PBS" / "fixture.txt"
+            pbs_path.parent.mkdir(parents=True)
+            pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            outside = base / "outside"
+            outside.mkdir()
+            (outside / "private.txt").write_text("outside", encoding="utf-8")
+            linked = game_root / "LinkedOutside"
+            try:
+                linked.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"Création de lien indisponible sur ce système : {exc}")
+
+            relative = "PBS/fixture.txt"
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row(relative))
+            plan = simulate_plan(build_plan(game_root, csv_path))
+            target = base / "game_VERSION_FR"
+
+            with self.assertRaisesRegex(ReconstructionError, "Lien symbolique|jonction"):
+                reconstruct_copy(plan, target, base / "reports")
+
+            self.assertFalse(target.exists())
+
+    def test_copy_policy_blocks_a_detected_link_before_creating_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_link_policy_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            pbs_path = game_root / "PBS" / "fixture.txt"
+            pbs_path.parent.mkdir(parents=True)
+            pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            (game_root / "LinkedOutside").mkdir()
+
+            relative = "PBS/fixture.txt"
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row(relative))
+            plan = simulate_plan(build_plan(game_root, csv_path))
+            target = base / "game_VERSION_FR"
+
+            with patch(
+                "reconstruction_engine._is_link_or_junction",
+                side_effect=lambda path: Path(path).name == "LinkedOutside",
+            ):
+                with self.assertRaisesRegex(ReconstructionError, "Lien symbolique|jonction"):
+                    reconstruct_copy(plan, target, base / "reports")
+
+            self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":

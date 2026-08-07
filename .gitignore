@@ -9,6 +9,8 @@ BUILD_WINDOWS.log
 Rapports/
 Sortie_Extraction/
 Sauvegardes*/
+Travail_Echantillon/
+Echantillon*_v*.zip
 *.fpk
 *.rxdata
 *.dat

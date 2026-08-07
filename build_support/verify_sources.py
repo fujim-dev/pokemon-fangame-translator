@@ -10,6 +10,11 @@ python_files = [
     "structured_extractor.py",
     "ruby_marshal_reader.py",
     "ruby_marshal_writer.py",
+    "adapters/__init__.py",
+    "adapters/base.py",
+    "adapters/pokemon_essentials.py",
+    "adapters/registry.py",
+    "adapters/unknown.py",
 ]
 required_files = [
     "README.md",

@@ -459,6 +459,42 @@ def status_from_review(level: str) -> str:
     return {"bloque": "Bloqué", "verifier": "À vérifier", "pret": "Prêt"}.get(level, "À vérifier")
 
 
+def reconciled_status(previous_status: str, level: str) -> str:
+    """Conserve une décision humaine seulement si la sécurité reste valide."""
+    if previous_status == "Ignoré":
+        return "Ignoré"
+    if level == "bloque":
+        return "Bloqué"
+    if previous_status == "Accepté":
+        return "Accepté"
+    return status_from_review(level)
+
+
+def _version_key(value: object) -> tuple[int, ...]:
+    numbers = tuple(int(part) for part in re.findall(r"\d+", str(value or "")))
+    return numbers or (0,)
+
+
+def install_argos_english_french_model(package_module):
+    """Télécharge et installe le modèle officiel disponible le plus récent."""
+    package_module.update_package_index()
+    candidates = [
+        package
+        for package in package_module.get_available_packages()
+        if getattr(package, "from_code", "") == "en"
+        and getattr(package, "to_code", "") == "fr"
+    ]
+    if not candidates:
+        raise RuntimeError("Aucun modèle Argos anglais → français n'est disponible.")
+    model = max(
+        candidates,
+        key=lambda package: _version_key(getattr(package, "package_version", "0")),
+    )
+    downloaded_path = model.download()
+    package_module.install_from_path(downloaded_path)
+    return model
+
+
 class TranslationStudio(tk.Toplevel):
     PAGE_SIZE = 180
 
@@ -505,6 +541,7 @@ class TranslationStudio(tk.Toplevel):
         self.previous_import_checked = False
         self.resume_state: dict[str, object] = {}
         self.autosave_every = 10
+        self.close_requested = False
 
         self._configure_styles()
         self._build_ui()
@@ -1142,7 +1179,11 @@ class TranslationStudio(tk.Toplevel):
         for row in self.rows:
             if row.get("traduction_fr", "").strip():
                 continue
-            source_row = by_id.get(row.get("id_stable", "")) or by_key.get(duplicate_key(row))
+            source_by_id = by_id.get(row.get("id_stable", ""))
+            if source_by_id and source_by_id.get("texte_source", "") == row.get("texte_source", ""):
+                source_row = source_by_id
+            else:
+                source_row = by_key.get(duplicate_key(row))
             if not source_row:
                 continue
             translation = (source_row.get("traduction_fr") or "").strip()
@@ -1185,8 +1226,7 @@ class TranslationStudio(tk.Toplevel):
                         level, alerts = review_translation(row.get("texte_source", ""), translation)
                         row["niveau_relecture"] = level
                         row["alertes_relecture"] = " | ".join(alerts)
-                        if row.get("statut") not in {"Accepté", "Ignoré"}:
-                            row["statut"] = status_from_review(level)
+                        row["statut"] = reconciled_status(row.get("statut", ""), level)
                     else:
                         row["niveau_relecture"] = "non_traduit"
                         row["alertes_relecture"] = ""
@@ -1616,8 +1656,7 @@ class TranslationStudio(tk.Toplevel):
             level, alerts = review_translation(row.get("texte_source", ""), translation)
             row["niveau_relecture"] = level
             row["alertes_relecture"] = " | ".join(alerts)
-            if row.get("statut") != "Accepté":
-                row["statut"] = status_from_review(level)
+            row["statut"] = reconciled_status(row.get("statut", ""), level)
             changed += 1
         self.save_csv(silent=True, save_editor=False)
         self.apply_filters()
@@ -1738,15 +1777,22 @@ class TranslationStudio(tk.Toplevel):
 
         def worker():
             try:
-                subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "argostranslate"], check=True, capture_output=True, text=True)
-                self.after(0, lambda: self.offline_progress.configure(value=55))
-                package_module, _translate = self._import_argos()
-                package_module.update_package_index()
-                model = next(package for package in package_module.get_available_packages() if package.from_code == "en" and package.to_code == "fr")
-                package_module.install_from_path(model.download())
+                try:
+                    package_module, _translate = self._import_argos()
+                except ImportError as exc:
+                    if getattr(sys, "frozen", False):
+                        raise RuntimeError(
+                            "Le composant Argos manque dans l'installation. Réinstalle le Setup officiel."
+                        ) from exc
+                    raise RuntimeError(
+                        "Argos Translate n'est pas installé dans cet environnement Python. "
+                        "Installe les dépendances de développement avant de relancer l'application."
+                    ) from exc
+                self.after(0, lambda: self.offline_progress.configure(value=45))
+                install_argos_english_french_model(package_module)
                 self.after(0, self._prepare_finished)
             except Exception as exc:
-                self.after(0, lambda: self._prepare_failed(exc))
+                self.after(0, lambda error=exc: self._prepare_failed(error))
         threading.Thread(target=worker, daemon=True).start()
 
     def _prepare_finished(self):
@@ -1756,6 +1802,8 @@ class TranslationStudio(tk.Toplevel):
         self.translate_btn.configure(state="normal")
         self.check_argos()
         self.offline_status_var.set("Préparation terminée.")
+        if self.close_requested:
+            return
         messagebox.showinfo("Prêt", "La traduction hors ligne est prête.", parent=self)
 
     def _prepare_failed(self, exc):
@@ -1764,6 +1812,8 @@ class TranslationStudio(tk.Toplevel):
         self.prepare_btn.configure(state="normal")
         self.translate_btn.configure(state="normal")
         self.argos_status_var.set("Préparation impossible")
+        if self.close_requested:
+            return
         messagebox.showerror("Préparation impossible", f"{exc}\n\nVérifie ta connexion Internet puis réessaie.", parent=self)
 
     def _translation_scope_indices(self) -> list[int]:
@@ -1862,14 +1912,19 @@ class TranslationStudio(tk.Toplevel):
         self.log(f"Sauvegarde créée : {backup}")
         self._write_resume_state(total=len(groups), completed=0, remaining=len(groups), active=True)
         self._refresh_resume_button()
-        threading.Thread(target=self._translation_worker, args=(groups,), daemon=True).start()
+        propagate_duplicates = bool(self.propagate_duplicates_var.get())
+        threading.Thread(
+            target=self._translation_worker,
+            args=(groups, propagate_duplicates),
+            daemon=True,
+        ).start()
 
     def stop_translation(self):
         if self.offline_running:
             self.offline_stop = True
             self.offline_status_var.set("Arrêt demandé…")
 
-    def _translation_worker(self, groups: list[list[int]]):
+    def _translation_worker(self, groups: list[list[int]], propagate_duplicates: bool):
         successes = 0
         filled_rows = 0
         flagged_rows = 0
@@ -1895,7 +1950,7 @@ class TranslationStudio(tk.Toplevel):
                     level, alerts = review_translation(source, translated)
                     if level == "bloque":
                         raise RuntimeError(" | ".join(alerts))
-                    targets = group if self.propagate_duplicates_var.get() else [representative]
+                    targets = group if propagate_duplicates else [representative]
                     for index in targets:
                         row = self.rows[index]
                         if row.get("traduction_fr", "").strip():
@@ -1929,7 +1984,7 @@ class TranslationStudio(tk.Toplevel):
                 time.sleep(0.01)
             self.after(0, lambda: self._translation_finished(successes, filled_rows, flagged_rows, blocked_groups, failures, len(groups)))
         except Exception as exc:
-            self.after(0, lambda: self._translation_failed(exc))
+            self.after(0, lambda error=exc: self._translation_failed(error))
 
     def _update_translation_progress(self, position, total, percent, successes, rows, failures):
         self.offline_progress["value"] = percent
@@ -1981,6 +2036,8 @@ class TranslationStudio(tk.Toplevel):
         )
         self._update_batch_info()
 
+        if self.close_requested:
+            return
         if flagged_rows:
             self.show_flagged()
         else:
@@ -2004,11 +2061,29 @@ class TranslationStudio(tk.Toplevel):
         self._refresh_resume_button()
         self.offline_progress["value"] = 0
         self.offline_status_var.set("La traduction s'est arrêtée.")
+        if self.close_requested:
+            return
         messagebox.showerror("Traduction interrompue", str(exc), parent=self)
 
     def on_close(self):
         if self.offline_running:
-            if not messagebox.askyesno("Opération en cours", "Une opération est en cours. Fermer quand même ?", parent=self):
+            if not messagebox.askyesno(
+                "Opération en cours",
+                "Une opération est en cours. Demander son arrêt puis fermer la fenêtre dès que les fichiers sont en sécurité ?",
+                parent=self,
+            ):
                 return
             self.offline_stop = True
+            self.close_requested = True
+            self.offline_status_var.set("Arrêt demandé. Fermeture dès que les fichiers sont en sécurité…")
+            self.after(100, self._close_when_idle)
+            return
+        self.destroy()
+
+    def _close_when_idle(self):
+        if not self.winfo_exists():
+            return
+        if self.offline_running:
+            self.after(100, self._close_when_idle)
+            return
         self.destroy()

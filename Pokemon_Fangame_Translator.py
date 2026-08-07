@@ -19,9 +19,9 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from structured_extractor import extract_structured, write_csv
 from translation_studio import TranslationStudio
 from reconstruction_studio import ReconstructionStudio
+from adapters import DetectionResult, GameCapability, create_default_registry
 
 
 APP_TITLE = "Pokémon Fangame Translator v1.0.2 — Bêta publique"
@@ -31,6 +31,12 @@ APP_SUBTITLE = "Bêta publique • Traduction automatique guidée • Original p
 @dataclass
 class Diagnostic:
     root: str
+    adapter_id: str
+    adapter_display_name: str
+    detection_confidence: int
+    write_actions_allowed: bool
+    adapter_ambiguous: bool
+    detection_evidence: list[str]
     rpg_maker_xp_detected: bool
     pokemon_essentials_detected: bool
     probable_essentials_version: str
@@ -69,7 +75,13 @@ def project_directory_for_game(game_root: Path, projects_root: Path | None = Non
     resolved = game_root.expanduser().resolve()
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", resolved.name).strip("_") or "Fangame"
     digest = hashlib.sha1(str(resolved).casefold().encode("utf-8", errors="replace")).hexdigest()[:8]
-    return (projects_root or default_projects_root()) / f"{safe_name}_{digest}"
+    project = (projects_root or default_projects_root()).expanduser().resolve() / f"{safe_name}_{digest}"
+    if _is_same_or_within(project, resolved):
+        raise ValueError(
+            "Le dossier de projets serait créé à l'intérieur du fangame original. "
+            "Choisis le véritable dossier du jeu, pas un dossier parent comme Documents."
+        )
+    return project
 
 
 def merge_project_rows(new_rows: list[dict[str, str]], existing_csv: Path | None) -> tuple[list[dict[str, str]], int, list[str]]:
@@ -108,12 +120,23 @@ def merge_project_rows(new_rows: list[dict[str, str]], existing_csv: Path | None
             source.get("evenement_id", ""), source.get("page", ""), source.get("commande", ""),
             source.get("sous_index", ""), source.get("texte_source", ""),
         )
-        previous = by_id.get(source.get("id_stable", "")) or by_exact.get(exact_key)
+        previous_by_id = by_id.get(source.get("id_stable", ""))
+        source_unchanged = bool(
+            previous_by_id
+            and previous_by_id.get("texte_source", "") == source.get("texte_source", "")
+        )
+        previous = previous_by_id if source_unchanged else by_exact.get(exact_key)
         if previous and (previous.get("traduction_fr") or "").strip():
             for field in copy_fields:
                 if field in fields:
                     row[field] = previous.get(field, "")
             preserved += 1
+        elif previous_by_id and not source_unchanged:
+            row["niveau_relecture"] = "source_modifiee"
+            row["alertes_relecture"] = (
+                "Texte source modifié depuis la précédente extraction ; ancienne traduction non réutilisée"
+            )
+            row["origine_traduction"] = "source_modifiee"
         merged.append(row)
     return merged, preserved, fields
 
@@ -126,6 +149,126 @@ def write_project_csv(path: Path, rows: list[dict[str, str]], fields: list[str])
         writer.writeheader()
         writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
     temp.replace(path)
+
+
+def _is_same_or_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _copy_private_sample_file(source: Path, destination: Path, game_root: Path) -> bool:
+    """Copie un fichier uniquement s'il appartient réellement au fangame."""
+    if not source.is_file():
+        return False
+    resolved_source = source.resolve()
+    if source.is_symlink() or not _is_same_or_within(resolved_source, game_root):
+        raise ValueError(f"Fichier lié hors du fangame refusé : {source.name}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(resolved_source, destination)
+    return True
+
+
+def create_private_diagnostic_sample(
+    game_root: Path,
+    zip_path: Path,
+    *,
+    application_dir: Path | None = None,
+) -> list[str]:
+    """Crée un échantillon privé sans laisser de données près des sources.
+
+    L'archive peut contenir des dialogues et d'autres données appartenant au
+    créateur du fangame. Elle n'est donc jamais créée dans le jeu original ni
+    dans le dossier de l'application, et son dossier de travail est temporaire.
+    """
+    root = game_root.expanduser().resolve()
+    data = root / "Data"
+    if not data.is_dir():
+        raise ValueError("Le dossier Data est introuvable.")
+
+    destination = zip_path.expanduser().resolve()
+    if _is_same_or_within(destination, root):
+        raise ValueError("L'échantillon privé ne peut pas être enregistré dans le fangame original.")
+    if application_dir and _is_same_or_within(destination, application_dir):
+        raise ValueError("L'échantillon privé ne peut pas être enregistré dans le dossier de l'application.")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", root.name).strip("_") or "Fangame"
+    copied: list[str] = []
+
+    with tempfile.TemporaryDirectory(prefix="pft_diagnostic_prive_") as temp_dir:
+        work_root = Path(temp_dir)
+        sample_root = work_root / f"Echantillon_prive_{safe_name}_v1.0.2"
+        sample_data = sample_root / "Data"
+        sample_pbs = sample_root / "PBS"
+        sample_data.mkdir(parents=True)
+
+        for name in (
+            "messages_game.dat",
+            "messages_core.dat",
+            "MapInfos.rxdata",
+            "CommonEvents.rxdata",
+        ):
+            source = data / name
+            if _copy_private_sample_file(source, sample_data / name, root):
+                copied.append(f"Data/{name}")
+
+        maps = [path for path in data.glob("Map*.rxdata") if path.is_file()]
+        maps.sort(key=lambda path: path.stat().st_size)
+        if maps:
+            selected: list[Path] = []
+            useful = [path for path in maps if path.stat().st_size >= 12_000] or maps
+            for index in (0, len(useful) // 2, len(useful) - 1):
+                path = useful[index]
+                if path not in selected:
+                    selected.append(path)
+            for source in selected:
+                if _copy_private_sample_file(source, sample_data / source.name, root):
+                    copied.append(f"Data/{source.name}")
+
+        pbs = root / "PBS"
+        pbs_count = 0
+        if pbs.is_dir():
+            for source in pbs.rglob("*.txt"):
+                relative = source.relative_to(pbs)
+                if any("backup" in part.casefold() for part in relative.parts):
+                    continue
+                if _copy_private_sample_file(source, sample_pbs / relative, root):
+                    pbs_count += 1
+            if pbs_count:
+                copied.append(f"PBS/ ({pbs_count} fichier(s), hors sauvegardes)")
+
+        manifest = sample_root / "CONTENU_ECHANTILLON_PRIVE.txt"
+        manifest.write_text(
+            "POKÉMON FANGAME TRANSLATOR v1.0.2 — ÉCHANTILLON PRIVÉ\n\n"
+            "ATTENTION : cette archive peut contenir des cartes, des dialogues et des données PBS "
+            "appartenant au créateur du fangame. Ne la publiez pas et transmettez-la seulement "
+            "à une personne de confiance pour un diagnostic privé.\n\n"
+            "Fichiers copiés :\n- " + ("\n- ".join(copied) if copied else "Aucun") +
+            "\n\nFichiers volontairement exclus : Scripts.rxdata, PluginScripts.rxdata, "
+            "Game.exe, DLL, graphismes, musiques et sauvegardes.\n",
+            encoding="utf-8",
+        )
+
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{destination.stem}_",
+            suffix=".tmp",
+            dir=destination.parent,
+            delete=False,
+        ) as temp_handle:
+            temporary_zip = Path(temp_handle.name)
+        try:
+            with zipfile.ZipFile(temporary_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+                for path in sample_root.rglob("*"):
+                    if path.is_file():
+                        archive.write(path, path.relative_to(work_root))
+            temporary_zip.replace(destination)
+        finally:
+            temporary_zip.unlink(missing_ok=True)
+
+    return copied
 
 
 class NeonButton(tk.Canvas):
@@ -205,6 +348,8 @@ class FangameTranslatorApp(tk.Tk):
         self.base_dir = Path(__file__).resolve().parent
         self.game_dir: Path | None = None
         self.last_diagnostic: Diagnostic | None = None
+        self.adapter_registry = create_default_registry()
+        self.detection_result: DetectionResult | None = None
         self.extracted_count = 0
         self.project_status = tk.StringVar(value="En attente")
         self.compatibility_display = tk.StringVar(value="-- / 100")
@@ -287,8 +432,12 @@ class FangameTranslatorApp(tk.Tk):
             activeforeground="white",
         )
         file_menu.add_command(label="Choisir un fangame", command=self.choose_game)
-        file_menu.add_command(label="Créer un échantillon de diagnostic", command=self.create_diagnostic_sample)
-        file_menu.add_command(label="Ouvrir le studio de traduction", command=self.open_translation_studio)
+        file_menu.add_command(label="Créer un échantillon privé de diagnostic", command=self.create_diagnostic_sample)
+        file_menu.add_command(
+            label="Ouvrir le studio de traduction",
+            command=self.open_translation_studio,
+            state="disabled",
+        )
         file_menu.add_command(label="Exporter le rapport", command=self.export_report)
         file_menu.add_command(label="Exporter un diagnostic public", command=self.export_public_diagnostic)
         file_menu.add_separator()
@@ -306,6 +455,7 @@ class FangameTranslatorApp(tk.Tk):
 
         menu.add_cascade(label="Fichier", menu=file_menu)
         menu.add_cascade(label="Aide", menu=help_menu)
+        self.file_menu = file_menu
         self.config(menu=menu)
 
     def _build_ui(self):
@@ -464,10 +614,16 @@ class FangameTranslatorApp(tk.Tk):
         self.extract_btn = NeonButton(action_row, "2. EXTRAIRE LES TEXTES", self.extract_texts,
                                       self.colors["accent"], width=220, height=66, icon="▤", enabled=False)
         self.extract_btn.pack(side="left", fill="both", expand=True, padx=(0, 6))
-        NeonButton(action_row, "3. TRADUIRE", self.open_translation_studio,
-                   self.colors["accent"], width=185, height=66, icon="◎").pack(side="left", fill="both", expand=True, padx=6)
-        NeonButton(action_row, "4. CRÉER LA VERSION FR", self.open_reconstruction_studio,
-                   self.colors["orange"], width=225, height=66, icon="◇").pack(side="left", fill="both", expand=True, padx=(6, 0))
+        self.translate_btn = NeonButton(
+            action_row, "3. TRADUIRE", self.open_translation_studio,
+            self.colors["accent"], width=185, height=66, icon="◎", enabled=False,
+        )
+        self.translate_btn.pack(side="left", fill="both", expand=True, padx=6)
+        self.reconstruction_btn = NeonButton(
+            action_row, "4. CRÉER LA VERSION FR", self.open_reconstruction_studio,
+            self.colors["orange"], width=225, height=66, icon="◇", enabled=False,
+        )
+        self.reconstruction_btn.pack(side="left", fill="both", expand=True, padx=(6, 0))
 
         # Compact project summary; no duplicate statistics card.
         summary = NeonCard(right, accent=self.colors["border"], bg=self.colors["panel"], height=405)
@@ -645,7 +801,46 @@ class FangameTranslatorApp(tk.Tk):
         if hasattr(self,"analyze_btn"):
             self.analyze_btn.focus_set()
 
+    def _adapter_can(self, capability: GameCapability) -> bool:
+        return bool(self.detection_result and self.detection_result.can(capability))
+
+    def _refresh_action_buttons(self) -> None:
+        has_project_csv = bool(
+            self.translation_csv_path and Path(self.translation_csv_path).is_file()
+        )
+        pending_detection = self.detection_result is None
+        extract_allowed = self._adapter_can(GameCapability.EXTRACT)
+        translate_allowed = self._adapter_can(GameCapability.TRANSLATE)
+        reconstruct_allowed = self._adapter_can(GameCapability.RECONSTRUCT)
+
+        layouts = (
+            (self.extract_btn, pending_detection or extract_allowed, {"side": "left", "fill": "both", "expand": True, "padx": (0, 6)}),
+            (self.translate_btn, pending_detection or translate_allowed, {"side": "left", "fill": "both", "expand": True, "padx": 6}),
+            (self.reconstruction_btn, pending_detection or reconstruct_allowed, {"side": "left", "fill": "both", "expand": True, "padx": (6, 0)}),
+        )
+        for button, visible, pack_options in layouts:
+            if visible and not button.winfo_manager():
+                button.pack(**pack_options)
+            elif not visible and button.winfo_manager():
+                button.pack_forget()
+
+        self.extract_btn.set_enabled(extract_allowed)
+        self.translate_btn.set_enabled(has_project_csv and translate_allowed)
+        self.reconstruction_btn.set_enabled(has_project_csv and reconstruct_allowed)
+        self.file_menu.entryconfigure(
+            "Ouvrir le studio de traduction",
+            state="normal" if has_project_csv and translate_allowed else "disabled",
+        )
+
     def open_translation_studio(self):
+        if not self._adapter_can(GameCapability.TRANSLATE):
+            messagebox.showerror(
+                "Analyse compatible requise",
+                "La traduction reste désactivée tant que l'analyse n'a pas reconnu "
+                "une structure prise en charge avec une confiance suffisante.",
+            )
+            return
+
         csv_path = self.translation_csv_path
         if not csv_path:
             candidate = self._outputs_dir() / "textes_structures.csv"
@@ -677,6 +872,14 @@ class FangameTranslatorApp(tk.Tk):
         self.open_translation_studio()
 
     def open_reconstruction_studio(self):
+        if not self._adapter_can(GameCapability.RECONSTRUCT):
+            messagebox.showerror(
+                "Reconstruction bloquée",
+                "La reconstruction est interdite pour une structure inconnue, "
+                "incomplète ou détectée avec ambiguïté.",
+            )
+            return
+
         if not self.game_dir:
             messagebox.showinfo(
                 "Fangame nécessaire",
@@ -742,9 +945,12 @@ class FangameTranslatorApp(tk.Tk):
             "version_logiciel": "1.0.2",
             "mis_a_jour": datetime.now().isoformat(timespec="seconds"),
         }
-        (project / "projet.json").write_text(
+        metadata_path = project / "projet.json"
+        metadata_temp = metadata_path.with_suffix(".json.tmp")
+        metadata_temp.write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        metadata_temp.replace(metadata_path)
         self.project_dir = project
         existing = project / "textes_structures.csv"
         self.translation_csv_path = existing if existing.exists() else None
@@ -765,13 +971,28 @@ class FangameTranslatorApp(tk.Tk):
             return
 
         self.game_dir = Path(chosen)
-        project = self._activate_project(self.game_dir)
+        try:
+            project = self._activate_project(self.game_dir)
+        except ValueError as exc:
+            self.game_dir = None
+            messagebox.showerror("Dossier refusé", str(exc))
+            return
+        self.last_diagnostic = None
+        self.detection_result = None
+        self.extracted_count = 0
         self.path_var.set(str(self.game_dir))
         self.game_name_display.set(self.game_dir.name)
         self.analyze_btn.set_enabled(True)
         if hasattr(self, "quick_analyze_btn"):
             self.quick_analyze_btn.set_enabled(True)
-        self.extract_btn.set_enabled(False)
+        self._refresh_action_buttons()
+        self.compatibility_display.set("-- / 100")
+        self.maps_display.set("--")
+        self.texts_display.set("--")
+        self.engine_display.set("--")
+        self.essentials_display.set("--")
+        self.files_display.set("--")
+        self._clear_views()
         self.status_var.set("Jeu sélectionné. Vous pouvez lancer l’analyse.")
         self.project_status.set("Prêt à analyser")
         self._log(f"Dossier sélectionné : {self.game_dir}")
@@ -843,6 +1064,8 @@ class FangameTranslatorApp(tk.Tk):
             return
 
         root = self.game_dir
+        detection = self.adapter_registry.detect(root)
+        self.detection_result = detection
         self.progress["value"] = 0
         self.progress_percent.set("0%")
         self.status_var.set("Analyse en cours…")
@@ -909,19 +1132,12 @@ class FangameTranslatorApp(tk.Tk):
             and (system_rxdata.exists() or map_infos.exists())
         )
 
-        markers = [
-            root / "PBS",
-            data / "messages.dat",
-            data / "messages_game.dat",
-            data / "PluginScripts.rxdata",
-            root / "Graphics" / "Pokemon",
-            root / "Graphics" / "Battlers",
-        ]
-        essentials = rpg_maker_xp and sum(1 for p in markers if p.exists()) >= 2
-        version = self._detect_essentials_version(root)
+        essentials = detection.adapter_id == "pokemon_essentials"
+        version = detection.recognized_version or self._detect_essentials_version(root)
 
-        warnings = []
-        notes = []
+        warnings = list(detection.warnings)
+        notes = [f"Adaptateur sélectionné : {detection.display_name} ({detection.adapter_id})."]
+        notes.extend(item.explanation for item in detection.evidence)
 
         if encrypted:
             warnings.append(
@@ -938,25 +1154,23 @@ class FangameTranslatorApp(tk.Tk):
         if ini_values.get("Game.Library"):
             notes.append(f"Bibliothèque déclarée : {ini_values['Game.Library']}")
 
-        score = 0
-        score += 25 if rpg_maker_xp else 0
-        score += 25 if essentials else 0
-        score += 10 if map_files else 0
-        score += 10 if common_events.exists() else 0
-        score += 10 if map_infos.exists() else 0
-        score += 10 if message_banks else 0
-        score += 10 if not encrypted else 0
-        score = max(0, min(100, score))
-
-        level = (
-            "Élevée" if score >= 80
-            else "Moyenne" if score >= 55
-            else "Faible" if score >= 30
-            else "Non compatible ou structure inconnue"
-        )
+        score = detection.confidence
+        if not detection.write_actions_allowed:
+            level = "Structure inconnue ou détection incertaine"
+        else:
+            level = "Élevée" if score >= 80 else "Moyenne"
 
         diagnostic = Diagnostic(
             root=str(root),
+            adapter_id=detection.adapter_id,
+            adapter_display_name=detection.display_name,
+            detection_confidence=detection.confidence,
+            write_actions_allowed=detection.write_actions_allowed,
+            adapter_ambiguous=detection.ambiguous,
+            detection_evidence=[
+                f"{item.relative_path} — {item.explanation} (+{item.weight})"
+                for item in detection.evidence
+            ],
             rpg_maker_xp_detected=rpg_maker_xp,
             pokemon_essentials_detected=essentials,
             probable_essentials_version=version,
@@ -990,12 +1204,12 @@ class FangameTranslatorApp(tk.Tk):
         self.maps_display.set(str(len(map_files)))
         self.files_display.set(str(len(rxdata_files)))
         self.progress_percent.set("100%")
-        self.engine_display.set("Détecté" if rpg_maker_xp else "Non détecté")
+        self.engine_display.set(detection.display_name)
         self.essentials_display.set("Détecté" if essentials else "Non détecté")
 
         self._render_diagnostic(diagnostic)
         self._write_automatic_report(diagnostic)
-        self.extract_btn.set_enabled(score >= 55)
+        self._refresh_action_buttons()
         self._log(self.status_var.get())
 
     def _clear_views(self):
@@ -1012,6 +1226,11 @@ class FangameTranslatorApp(tk.Tk):
             "",
             f"Compatibilité estimée : {d.compatibility_level}",
             f"Score : {d.compatibility_score}/100",
+            "",
+            f"Adaptateur : {d.adapter_display_name} ({d.adapter_id})",
+            f"Confiance de détection : {d.detection_confidence}/100",
+            f"Actions de traduction/reconstruction : {'AUTORISÉES' if d.write_actions_allowed else 'BLOQUÉES'}",
+            f"Détection ambiguë : {'OUI' if d.adapter_ambiguous else 'NON'}",
             "",
             f"RPG Maker XP détecté : {'OUI' if d.rpg_maker_xp_detected else 'NON'}",
             f"Pokémon Essentials détecté : {'OUI' if d.pokemon_essentials_detected else 'NON'}",
@@ -1031,12 +1250,16 @@ class FangameTranslatorApp(tk.Tk):
             "-" * 72,
             *(d.notes or ["Aucune note supplémentaire."]),
             "",
+            "INDICES DE DÉTECTION",
+            "-" * 72,
+            *(d.detection_evidence or ["Aucun indice structurel suffisant."]),
+            "",
             "PROCHAINE ÉTAPE",
             "-" * 72,
             (
                 "Le jeu semble compatible avec l'extracteur structuré de la v1.0.2."
-                if d.compatibility_score >= 55
-                else "La structure doit être étudiée manuellement."
+                if d.write_actions_allowed
+                else "La structure doit être étudiée manuellement ; les actions d'écriture restent bloquées."
             ),
         ]
         self._set_text(self.summary_text, "\n".join(summary))
@@ -1054,6 +1277,13 @@ class FangameTranslatorApp(tk.Tk):
         """Extraction structurée en lecture seule des cartes, banques et PBS."""
         if not self.last_diagnostic or not self.game_dir:
             messagebox.showerror("Diagnostic requis", "Lance d'abord l'analyse du fangame.")
+            return
+        if not self._adapter_can(GameCapability.EXTRACT):
+            messagebox.showerror(
+                "Extraction bloquée",
+                "La structure du jeu n'est pas reconnue avec assez de certitude. "
+                "Aucun texte ne sera extrait afin d'éviter un traitement inadapté.",
+            )
             return
 
         root = self.game_dir
@@ -1081,7 +1311,8 @@ class FangameTranslatorApp(tk.Tk):
             self.update_idletasks()
 
         try:
-            rows, errors = extract_structured(root, progress=progress, logger=self._log)
+            adapter = self.adapter_registry.adapter_for(self.detection_result)
+            rows, errors = adapter.extract(root, progress=progress, logger=self._log)
         except Exception as exc:
             messagebox.showerror(
                 "Extraction impossible",
@@ -1197,6 +1428,7 @@ class FangameTranslatorApp(tk.Tk):
         self.files_display.set(str(len(by_file)))
         self._log(self.status_var.get())
         self.translation_csv_path = csv_path
+        self._refresh_action_buttons()
         self._log(f"CSV structuré créé : {csv_path}")
         self._log("La traduction et la relecture intelligente sont prêtes.")
 
@@ -1209,86 +1441,53 @@ class FangameTranslatorApp(tk.Tk):
         )
 
     def create_diagnostic_sample(self):
-        """Crée automatiquement un ZIP minimal sans scripts ni médias."""
+        """Crée, après avertissement, un ZIP privé sans résidu local."""
         if not self.game_dir:
             messagebox.showerror("Aucun fangame", "Choisis d'abord le dossier du fangame.")
             return
 
         root = self.game_dir
-        data = root / "Data"
-        if not data.is_dir():
+        if not (root / "Data").is_dir():
             messagebox.showerror("Dossier Data absent", "Le dossier Data est introuvable.")
+            return
+
+        if not messagebox.askyesno(
+            "Échantillon privé",
+            "Cette archive peut contenir des cartes, des dialogues et des données PBS "
+            "appartenant au créateur du fangame.\n\n"
+            "Ne la publie pas sur GitHub, Discord ou un forum public. Elle doit être "
+            "transmise uniquement à une personne de confiance pour un diagnostic privé.\n\n"
+            "Continuer ?",
+        ):
             return
 
         safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", root.name).strip("_") or "Fangame"
         chosen = filedialog.asksaveasfilename(
-            title="Enregistrer l'échantillon de diagnostic",
+            title="Enregistrer l'échantillon privé de diagnostic",
             defaultextension=".zip",
-            initialfile=f"Echantillon_{safe_name}_v1.0.2.zip",
+            initialfile=f"Echantillon_prive_{safe_name}_v1.0.2.zip",
             filetypes=[("Archive ZIP", "*.zip")],
         )
         if not chosen:
             return
 
-        work_root = self.base_dir / "Travail_Echantillon"
-        if work_root.exists():
-            shutil.rmtree(work_root)
-        sample_root = work_root / f"Echantillon_{safe_name}_v1.0.2"
-        sample_data = sample_root / "Data"
-        sample_pbs = sample_root / "PBS"
-        sample_data.mkdir(parents=True)
-
-        copied = []
-        for name in [
-            "messages_game.dat", "messages_core.dat", "MapInfos.rxdata", "CommonEvents.rxdata"
-        ]:
-            source = data / name
-            if source.exists():
-                shutil.copy2(source, sample_data / name)
-                copied.append(f"Data/{name}")
-
-        maps = sorted(data.glob("Map*.rxdata"), key=lambda path: path.stat().st_size)
-        if maps:
-            selected = []
-            useful = [path for path in maps if path.stat().st_size >= 12_000] or maps
-            for index in [0, len(useful) // 2, len(useful) - 1]:
-                path = useful[index]
-                if path not in selected:
-                    selected.append(path)
-            for source in selected:
-                shutil.copy2(source, sample_data / source.name)
-                copied.append(f"Data/{source.name}")
-
-        pbs = root / "PBS"
-        if pbs.is_dir():
-            for source in pbs.rglob("*.txt"):
-                relative = source.relative_to(pbs)
-                if any("backup" in part.lower() for part in relative.parts):
-                    continue
-                destination = sample_pbs / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
-            copied.append("PBS/ (sans dossiers backup)")
-
-        manifest = sample_root / "CONTENU_ECHANTILLON.txt"
-        manifest.write_text(
-            "POKÉMON FANGAME TRANSLATOR v1.0.2 — ÉCHANTILLON AUTOMATIQUE\n\n"
-            "Fichiers copiés :\n- " + "\n- ".join(copied) +
-            "\n\nFichiers volontairement exclus : Scripts.rxdata, PluginScripts.rxdata, "
-            "Game.exe, DLL, graphismes, musiques et sauvegardes.\n",
-            encoding="utf-8",
-        )
-
         zip_path = Path(chosen)
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-            for path in sample_root.rglob("*"):
-                if path.is_file():
-                    archive.write(path, path.relative_to(work_root))
+        try:
+            copied = create_private_diagnostic_sample(
+                root,
+                zip_path,
+                application_dir=self.base_dir,
+            )
+        except Exception as exc:
+            self._log(f"Échec de l'échantillon privé : {type(exc).__name__}: {exc}")
+            messagebox.showerror("Échantillon impossible", str(exc))
+            return
 
-        self._log(f"Échantillon créé : {zip_path}")
+        self._log(f"Échantillon privé créé : {zip_path} ({len(copied)} groupe(s) de fichiers).")
         messagebox.showinfo(
-            "Échantillon créé",
-            f"L'échantillon sécurisé est prêt :\n\n{zip_path}\n\n"
+            "Échantillon privé créé",
+            f"L'échantillon privé est prêt :\n\n{zip_path}\n\n"
+            "Il peut contenir des données du jeu : ne le publie pas.\n"
             "Aucun script Ruby ni fichier exécutable n'a été inclus."
         )
 
@@ -1311,6 +1510,10 @@ class FangameTranslatorApp(tk.Tk):
             "",
             f"Compatibilité : {d.compatibility_level}",
             f"Score : {d.compatibility_score}/100",
+            f"Adaptateur : {d.adapter_display_name} ({d.adapter_id})",
+            f"Confiance de détection : {d.detection_confidence}/100",
+            f"Actions d'écriture : {'AUTORISÉES' if d.write_actions_allowed else 'BLOQUÉES'}",
+            f"Détection ambiguë : {'OUI' if d.adapter_ambiguous else 'NON'}",
             f"RPG Maker XP : {'OUI' if d.rpg_maker_xp_detected else 'NON'}",
             f"Pokémon Essentials : {'OUI' if d.pokemon_essentials_detected else 'NON'}",
             f"Version probable : {d.probable_essentials_version}",
@@ -1318,6 +1521,10 @@ class FangameTranslatorApp(tk.Tk):
             f"Cartes : {d.map_count}",
             f"RXDATA : {d.rxdata_count}",
             f"DAT : {d.dat_count}",
+            "",
+            "INDICES DE DÉTECTION",
+            "-" * 74,
+            *(d.detection_evidence or ["Aucun indice structurel suffisant."]),
             "",
             "BANQUES DE MESSAGES",
             "-" * 74,
@@ -1434,6 +1641,10 @@ class FangameTranslatorApp(tk.Tk):
                 "-" * 78,
                 f"Niveau : {diagnostic.compatibility_level}",
                 f"Score : {diagnostic.compatibility_score}/100",
+                f"Adaptateur : {diagnostic.adapter_display_name} ({diagnostic.adapter_id})",
+                f"Confiance de détection : {diagnostic.detection_confidence}/100",
+                f"Actions d'écriture : {'AUTORISÉES' if diagnostic.write_actions_allowed else 'BLOQUÉES'}",
+                f"Détection ambiguë : {'OUI' if diagnostic.adapter_ambiguous else 'NON'}",
                 f"RPG Maker XP : {'OUI' if diagnostic.rpg_maker_xp_detected else 'NON'}",
                 f"Pokémon Essentials : {'OUI' if diagnostic.pokemon_essentials_detected else 'NON'}",
                 f"Version probable : {diagnostic.probable_essentials_version}",
@@ -1442,6 +1653,10 @@ class FangameTranslatorApp(tk.Tk):
                 f"Fichiers DAT : {diagnostic.dat_count}",
                 f"Banques de messages : {len(diagnostic.message_banks)}",
                 f"Archives détectées : {len(diagnostic.encrypted_archives)}",
+                "",
+                "INDICES STRUCTURELS (chemins relatifs uniquement)",
+                "-" * 78,
+                *(diagnostic.detection_evidence or ["Aucun indice structurel suffisant."]),
                 "",
                 "AVERTISSEMENTS",
                 "-" * 78,
