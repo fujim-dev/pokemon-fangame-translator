@@ -199,13 +199,16 @@ Déjà en place :
 - restauration manuelle réversible du dernier projet précédant une réparation.
 - détection Flux multi-indices avec empreintes de la version 2.1.0 connue ;
 - inventaire et analyse statique du FPK Flux dans un dossier temporaire isolé ;
-- profil Flux volontairement limité à l'analyse en lecture seule.
+- extraction Flux déterministe vers le CSV commun pour la signature 2.1.0 exacte ;
+- identifiants Flux fondés sur le conteneur, la source, le chemin structurel et l'empreinte brute ;
+- corrélation statique Audio/Graphics par inventaire, y compris les littéraux Ruby sans exécution ;
+- profil Flux volontairement privé de toute capacité de reconstruction.
 
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;
 - autres réparations déterministes au-delà des commandes protégées simples ;
-- extraction et reconstruction de l'adaptateur Pokémon Flux expérimental ;
+- import du CSV et reconstruction de l'adaptateur Pokémon Flux expérimental ;
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 
 ## 4. Problèmes à éviter dans la v1.1
@@ -275,13 +278,15 @@ Adaptateur expérimental séparé :
 - reconnaissance des signatures Flux connues ;
 - validation des chemins et de l'inventaire interne du FPK ;
 - analyse statique dans un dossier temporaire, sans exécuter Ruby ;
-- extraction des textes compatibles à venir ;
+- extraction des textes vérifiables vers le CSV commun ;
+- conservation des octets, commandes, balises et chemins structurels nécessaires à la fidélité ;
 - reconstruction FPK sécurisée à venir ;
 - blocage des versions inconnues.
 
 Il ne dépend pas d'un nom de dossier. Tant que la reconstruction n'a pas passé
-les tests privés sur une copie locale propre, ses capacités restent limitées à
-`ANALYZE` et `DEEP_ANALYZE`.
+les tests privés sur une copie locale propre, la version 2.1.0 exacte est limitée
+à `ANALYZE`, `DEEP_ANALYZE`, `EXTRACT` et à la traduction hors jeu du CSV. La
+capacité `RECONSTRUCT` reste absente.
 
 #### `unknown.py`
 

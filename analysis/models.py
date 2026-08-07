@@ -131,6 +131,9 @@ class DeepAnalysisReport:
     pbs_legacy_encoding_files: int = 0
     ruby_script_files: int = 0
     dynamic_script_commands: int = 0
+    ruby_literal_references_checked: int = 0
+    ruby_literal_references_missing: int = 0
+    ruby_dynamic_resource_expressions: int = 0
     static_references_checked: int = 0
     missing_static_references: int = 0
     extractable_text_occurrences: int = 0

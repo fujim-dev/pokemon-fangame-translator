@@ -222,7 +222,8 @@ Les phases 1 à 6 doivent être stabilisées avant d'autoriser l'écriture Flux.
 - détecter les signatures structurelles Flux connues ;
 - reconnaître uniquement les versions explicitement supportées ;
 - réutiliser l'expérience du patcher Flux v3.6 ;
-- extraire et reconstruire via un chemin séparé ;
+- extraire les occurrences vérifiables via un chemin séparé et déterministe ;
+- importer puis reconstruire uniquement après validation indépendante de ces deux étapes ;
 - relire l'archive produite ;
 - bloquer toute version inconnue en écriture.
 

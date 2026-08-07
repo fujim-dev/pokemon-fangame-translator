@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from Pokemon_Fangame_Translator import merge_project_rows, project_directory_for_game
+from Pokemon_Fangame_Translator import (
+    merge_project_rows,
+    project_directory_for_game,
+    write_project_csv,
+)
 
 
 class ProjectMergeTests(unittest.TestCase):
@@ -124,6 +128,46 @@ class ProjectMergeTests(unittest.TestCase):
         self.assertEqual("À traduire", rows[0]["statut"])
         self.assertEqual("source_modifiee", rows[0]["niveau_relecture"])
         self.assertIn("ancienne traduction non réutilisée", rows[0]["alertes_relecture"])
+
+    def test_flux_occurrence_fields_and_exact_text_survive_common_csv_roundtrip(self) -> None:
+        source = "\\pnFirst line.\n<color=blue>Second line!</color>"
+        new_row = {
+            "id_stable": "a" * 64,
+            "type": "Dialogue",
+            "fichier": "Data/Map001.rxdata",
+            "carte_id": "1",
+            "carte_nom": "Test",
+            "evenement_id": "2",
+            "evenement_nom": "Event",
+            "page": "1",
+            "commande": "3",
+            "sous_index": "lignes:2",
+            "texte_source": source,
+            "traduction_fr": "",
+            "codes_proteges": "\\pn",
+            "statut": "À traduire",
+            "adaptateur": "pokemon_flux",
+            "conteneur": "Data/Data_0.fpk",
+            "source_flux": "map_events",
+            "chemin_structurel": '["events",2,"pages",0,"commands",3,"dialogue",2]',
+            "empreinte_source": "b" * 64,
+            "empreinte_texte_csv": "c" * 64,
+            "empreinte_valeur_actuelle": "",
+        }
+
+        rows, preserved, fields = merge_project_rows([new_row], None)
+        with tempfile.TemporaryDirectory(prefix="pft_test_flux_csv_") as temp_dir:
+            csv_path = Path(temp_dir) / "textes_structures.csv"
+            write_project_csv(csv_path, rows, fields)
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                restored = list(csv.DictReader(handle, delimiter=";"))
+
+        self.assertEqual(0, preserved)
+        self.assertEqual(1, len(restored))
+        self.assertEqual(source, restored[0]["texte_source"])
+        self.assertEqual(new_row["chemin_structurel"], restored[0]["chemin_structurel"])
+        self.assertEqual("pokemon_flux", restored[0]["adaptateur"])
+        self.assertEqual("b" * 64, restored[0]["empreinte_source"])
 
 
 if __name__ == "__main__":

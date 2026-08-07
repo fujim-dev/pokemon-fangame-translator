@@ -56,6 +56,15 @@ class RubyUserDefined:
     ivars: dict = field(default_factory=dict)
 
 
+@dataclass(eq=False)
+class RubyHashKey:
+    """Clé Ruby valide mais non hachable en Python (par exemple un Array)."""
+
+    value: object
+
+    __hash__ = object.__hash__
+
+
 class MarshalReader:
     def __init__(self, data: bytes):
         self.data = data
@@ -153,6 +162,10 @@ class MarshalReader:
             self._register(result)
             for _ in range(self._long()):
                 key = self.read_object()
+                try:
+                    hash(key)
+                except TypeError:
+                    key = RubyHashKey(key)
                 result[key] = self.read_object()
             if marker == "}":
                 result["__default__"] = self.read_object()
@@ -178,7 +191,10 @@ class MarshalReader:
             return result
         if marker == "f":
             raw = self._raw_string().decode("ascii", errors="replace")
-            return {"nan": float("nan"), "inf": float("inf"), "-inf": float("-inf")}.get(raw, float(raw))
+            value = {"nan": float("nan"), "inf": float("inf"), "-inf": float("-inf")}.get(
+                raw, float(raw)
+            )
+            return self._register(value)
         if marker == "l":
             sign = chr(self._byte())
             word_count = self._long()
@@ -186,13 +202,15 @@ class MarshalReader:
             value = 0
             for index in range(word_count):
                 value |= int.from_bytes(raw[index * 2:index * 2 + 2], "little") << (16 * index)
-            return -value if sign == "-" else value
+            return self._register(-value if sign == "-" else value)
         if marker == "/":
             raw = self._raw_string()
             options = self._byte()
             return self._register(("regexp", raw, options))
         if marker in ("c", "m", "M"):
-            return (marker, self._raw_string().decode("utf-8", errors="replace"))
+            return self._register(
+                (marker, self._raw_string().decode("utf-8", errors="replace"))
+            )
         if marker == "e":
             self._symbol()
             return self.read_object()

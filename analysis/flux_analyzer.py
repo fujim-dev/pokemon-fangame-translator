@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Callable
 
 from flux_archive import FluxArchiveReader
 from flux_extractor import FluxExtractionError, collect_flux_occurrences
-from ruby_marshal_reader import RubyObject, RubyUserDefined, load
+from ruby_marshal_reader import RubyHashKey, RubyObject, RubyUserDefined, load
 from structured_extractor import text_value
 
 from .language_coverage import calculate_coverage
@@ -24,6 +24,14 @@ if TYPE_CHECKING:
 
 ProgressCallback = Callable[[int, int, str], None]
 MAP_NAME_RE = re.compile(r"Map\d{3,4}\.rxdata", re.I)
+RUBY_RESOURCE_PATH_RE = re.compile(
+    r'''(?P<quote>["'])(?P<path>(?:Audio|Graphics)[\\/][^"'\r\n]+)(?P=quote)''',
+    re.I,
+)
+RUBY_AUDIO_CALL_RE = re.compile(
+    r'''\bpb(?P<kind>BGM|BGS|ME|SE)Play\s*\(\s*(?P<quote>["'])(?P<name>[^"'\r\n]+)(?P=quote)''',
+    re.I,
+)
 AUDIO_EXTENSIONS = (".ogg", ".mp3", ".wav", ".mid", ".midi", ".wma")
 GRAPHICS_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
 
@@ -319,6 +327,9 @@ def _walk_objects(value, seen: set[int] | None = None):
     """Parcourt une structure Marshal déjà décodée sans en exécuter le contenu."""
     if seen is None:
         seen = set()
+    if isinstance(value, RubyHashKey):
+        yield from _walk_objects(value.value, seen)
+        return
     if isinstance(value, (list, dict, RubyObject, RubyUserDefined)):
         identity = id(value)
         if identity in seen:
@@ -459,6 +470,107 @@ def _inspect_page_graphic(
     _check_named_graphic(
         graphic, "@character_name", "Characters", report, catalog, seen_references
     )
+
+
+def _ruby_without_comments(source: str) -> str:
+    """Retire les commentaires de ligne sans toucher aux chaînes Ruby simples."""
+    result: list[str] = []
+    for line in source.splitlines():
+        quote = ""
+        escaped = False
+        kept: list[str] = []
+        for character in line:
+            if quote:
+                kept.append(character)
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = ""
+            elif character in {"'", '"'}:
+                quote = character
+                kept.append(character)
+            elif character == "#":
+                break
+            else:
+                kept.append(character)
+        result.append("".join(kept))
+    return "\n".join(result)
+
+
+def _literal_resource_is_dynamic(value: str, suffix: str = "") -> bool:
+    normalized = value.replace("\\", "/")
+    markers = ("#{", "%", "*", "$", "[", "]", "{", "}")
+    return (
+        normalized.endswith("/")
+        or len(normalized.split("/")) < 3
+        or any(marker in normalized for marker in markers)
+        or suffix.lstrip().startswith(("+", "<<"))
+    )
+
+
+def _inspect_ruby_literal_resources(
+    extracted_root: Path,
+    report: DeepAnalysisReport,
+    catalog: _ResourceCatalog,
+) -> None:
+    references: set[tuple[str, str]] = set()
+    dynamic_expressions: set[str] = set()
+    for path in sorted(extracted_root.rglob("*.rb"), key=lambda item: item.as_posix().casefold()):
+        try:
+            source = _ruby_without_comments(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        for match in RUBY_RESOURCE_PATH_RE.finditer(source):
+            value = match.group("path").replace("\\", "/")
+            line_end = source.find("\n", match.end())
+            suffix = source[match.end():line_end if line_end >= 0 else len(source)]
+            if _literal_resource_is_dynamic(value, suffix):
+                dynamic_expressions.add(value)
+                continue
+            kind = "audio" if value.casefold().startswith("audio/") else "graphics"
+            references.add((kind, value))
+        for match in RUBY_AUDIO_CALL_RE.finditer(source):
+            name = match.group("name")
+            value = f"Audio/{match.group('kind').upper()}/{name}"
+            line_end = source.find("\n", match.end())
+            suffix = source[match.end():line_end if line_end >= 0 else len(source)]
+            if _literal_resource_is_dynamic(value, suffix):
+                dynamic_expressions.add(value)
+                continue
+            references.add(("audio", value))
+
+    checked = missing = 0
+    for kind, relative in sorted(references):
+        if kind == "audio":
+            if not catalog.audio_available:
+                continue
+            exists = _resource_exists(catalog.audio_paths, relative, AUDIO_EXTENSIONS)
+        else:
+            if not catalog.graphics_available:
+                continue
+            exists = _resource_exists(catalog.graphics_paths, relative, GRAPHICS_EXTENSIONS)
+        checked += 1
+        missing += not exists
+    report.ruby_literal_references_checked = checked
+    report.ruby_literal_references_missing = missing
+    report.ruby_dynamic_resource_expressions = len(dynamic_expressions)
+    if checked:
+        report.verified.append(
+            f"{checked} référence(s) Audio/Graphics littérale(s) repérée(s) dans les scripts Ruby "
+            "et comparée(s) aux inventaires, sans exécuter Ruby."
+        )
+    if missing:
+        report.unverified.append(
+            f"{missing} référence(s) littérale(s) Ruby pointe(nt) vers une ressource absente ; "
+            "leur chemin d'exécution n'est pas prouvé statiquement."
+        )
+    if dynamic_expressions:
+        report.unverified.append(
+            f"{len(dynamic_expressions)} expression(s) Ruby de ressource construite(s) dynamiquement "
+            "ont été conservée(s) sans résolution improvisée."
+        )
 
 
 def analyze_flux_game(
@@ -643,6 +755,7 @@ def analyze_flux_game(
             report.message_banks_analyzed += 1
 
         _inspect_database_resources(data, loaded, report, catalog, seen_references)
+        _inspect_ruby_literal_resources(extracted_root, report, catalog)
 
         try:
             occurrences = collect_flux_occurrences(extracted_root, marshal_files, loaded)
@@ -667,14 +780,20 @@ def analyze_flux_game(
             report.unsupported.append(
                 f"{len(unsupported)} fichier(s) Marshal secondaire(s) inventorié(s) mais non interprété(s)."
             )
-        other_formats = sum(
-            count
-            for extension, count in report.extension_counts.items()
-            if extension not in {".rxdata", ".dat", ".rb"}
+        other_format_counts = Counter(
+            PurePosixPath(entry.normalized_path).suffix.casefold() or "[sans extension]"
+            for entry in inventory.file_entries
+            if PurePosixPath(entry.normalized_path).suffix.casefold()
+            not in {".rxdata", ".dat", ".rb"}
+            and entry.normalized_path.casefold() != "data/script_index"
         )
-        if other_formats:
+        if other_format_counts:
+            details = ", ".join(
+                f"{extension}={count}" for extension, count in sorted(other_format_counts.items())
+            )
             report.unsupported.append(
-                f"{other_formats} fichier(s) d'autres formats Flux conservé(s) en inventaire seulement."
+                f"{sum(other_format_counts.values())} fichier(s) d'autres formats Flux "
+                f"conservé(s) en inventaire seulement ({details})."
             )
 
         report.verified.extend(

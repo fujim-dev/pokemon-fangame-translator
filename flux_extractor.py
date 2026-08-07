@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from flux_archive import FluxArchiveError, FluxArchiveReader
-from ruby_marshal_reader import RubyObject, RubyString, RubyUserDefined, load
+from ruby_marshal_reader import RubyHashKey, RubyObject, RubyString, RubyUserDefined, load
 from structured_extractor import codes, looks_visible, text_value
 
 
@@ -132,6 +132,9 @@ def _walk_marshaled_strings(value, path=(), seen: set[int] | None = None):
             seen.add(identity)
             yield path, value
         return
+    if isinstance(value, RubyHashKey):
+        yield from _walk_marshaled_strings(value.value, path + ("hash_key",), seen)
+        return
     if isinstance(value, (list, dict, RubyObject, RubyUserDefined)):
         identity = id(value)
         if identity in seen:
@@ -193,6 +196,8 @@ def _message_game_occurrences(root) -> list[FluxTextOccurrence]:
         elif isinstance(value, RubyUserDefined):
             for key, child in value.ivars.items():
                 walk(child, path + ("ivar", str(key)))
+        elif isinstance(value, RubyHashKey):
+            walk(value.value, path + ("hash_key",))
 
     walk(root)
     return occurrences

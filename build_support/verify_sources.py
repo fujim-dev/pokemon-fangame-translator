@@ -11,6 +11,7 @@ python_files = [
     "ruby_marshal_reader.py",
     "ruby_marshal_writer.py",
     "flux_archive.py",
+    "flux_extractor.py",
     "adapters/__init__.py",
     "adapters/base.py",
     "adapters/pokemon_essentials.py",

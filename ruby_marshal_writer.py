@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from ruby_marshal_reader import RubyObject, RubyString, RubyUserDefined
+from ruby_marshal_reader import RubyHashKey, RubyObject, RubyString, RubyUserDefined
 
 
 class MarshalWriter:
@@ -136,6 +136,8 @@ class MarshalWriter:
             self._long(value)
             return
         if isinstance(value, float):
+            if self._object_link(value):
+                return
             self.buffer.extend(b"f")
             if math.isnan(value):
                 raw = b"nan"
@@ -144,6 +146,9 @@ class MarshalWriter:
             else:
                 raw = repr(value).encode("ascii")
             self._raw_string(raw)
+            return
+        if isinstance(value, RubyHashKey):
+            self.write_object(value.value)
             return
         if isinstance(value, RubyString):
             self._write_ruby_string(value)

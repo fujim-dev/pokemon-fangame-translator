@@ -75,6 +75,9 @@ def report_text(report: DeepAnalysisReport) -> str:
             f"Banques de messages relues : {report.message_banks_analyzed}/{report.message_banks_found}",
             f"Fichiers PBS relus : {report.pbs_files_analyzed}/{report.pbs_files_found}",
             f"Fichiers PBS avec encodage historique détecté : {report.pbs_legacy_encoding_files}",
+            f"Références littérales Audio/Graphics dans Ruby contrôlées : {report.ruby_literal_references_checked}",
+            f"Références littérales Ruby absentes (utilisation non prouvée) : {report.ruby_literal_references_missing}",
+            f"Expressions Ruby dynamiques de ressource non résolues : {report.ruby_dynamic_resource_expressions}",
             f"Occurrences de texte extractibles : {report.extractable_text_occurrences}",
             f"Textes sources distincts extractibles : {report.extractable_unique_texts}",
             "Occurrences par source : "

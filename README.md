@@ -44,9 +44,12 @@ Les utilisateurs n'ont besoin ni de Python, ni de PyInstaller, ni d'Inno Setup. 
 Compatibilité actuellement validée principalement avec **Pokémon Myth 2**. Le projet vise certains fangames RPG Maker XP / Pokémon Essentials dont les dossiers `Data` et `PBS` sont accessibles. Les archives chiffrées, moteurs personnalisés et textes stockés dans les scripts peuvent ne pas être pris en charge.
 
 Pokémon Flux Episode 2 v2.1.0 peut désormais être détecté et analysé
-statiquement par un adaptateur expérimental séparé. L'extraction, la traduction
-et la reconstruction Flux restent désactivées tant que le chemin FPK n'a pas
-été validé de bout en bout sur une copie de travail.
+statiquement par un adaptateur expérimental séparé. Pour cette signature exacte,
+l'extraction des occurrences vérifiables vers le CSV commun est autorisée en
+lecture seule ; les versions inconnues restent bloquées. Les chaînes ambiguës ou
+dynamiques sont conservées sans interprétation. L'import dans le FPK et la
+reconstruction Flux restent désactivés tant que le chemin d'écriture n'a pas été
+validé de bout en bout sur une copie de travail.
 
 ## Projet indépendant
 

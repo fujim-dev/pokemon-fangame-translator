@@ -326,7 +326,11 @@ class FluxAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="pft_test_flux_resources_") as temp_dir:
             base = Path(temp_dir)
             root = make_flux_root(base)
-            for relative in ("Audio/BGM/theme.ogg", "Audio/SE/click.wav"):
+            for relative in (
+                "Audio/BGM/theme.ogg",
+                "Audio/BGM/script_theme.ogg",
+                "Audio/SE/click.wav",
+            ):
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"fixture")
@@ -339,6 +343,7 @@ class FluxAdapterTests(unittest.TestCase):
                     for path in (
                         "Graphics/Characters/Hero.png",
                         "Graphics/Pictures/Portrait.png",
+                        "Graphics/Pictures/ScriptPortrait.png",
                     )
                 ),
             )
@@ -378,7 +383,17 @@ class FluxAdapterTests(unittest.TestCase):
                     dumps(RubyObject("RPG::System", {"@cursor_se": audio("click")}))
                 )
                 (data / "Script_index").write_text("Script_001.rb\n", encoding="utf-8")
-                (data / "Script_001.rb").write_text("raise 'never executed'", encoding="utf-8")
+                (data / "Script_001.rb").write_text(
+                    '\n'.join(
+                        (
+                            'pbBGMPlay("script_theme")',
+                            'pbSEPlay("ScriptMissing")',
+                            'pbSEPlay("dynamic_#{id}")',
+                            'pbResolveBitmap("Graphics/Pictures/ScriptPortrait")',
+                        )
+                    ),
+                    encoding="utf-8",
+                )
 
             reader = FakeArchiveReader(
                 extractor=extract_fixture,
@@ -391,6 +406,9 @@ class FluxAdapterTests(unittest.TestCase):
 
             self.assertEqual(5, report.static_references_checked)
             self.assertEqual(1, report.missing_static_references)
+            self.assertEqual(3, report.ruby_literal_references_checked)
+            self.assertEqual(1, report.ruby_literal_references_missing)
+            self.assertEqual(1, report.ruby_dynamic_resource_expressions)
             self.assertEqual(2, report.extractable_text_occurrences)
             self.assertEqual(
                 {"messages": 1, "messages_game": 1},

@@ -196,6 +196,26 @@ L'archive Flux reconstruite doit pouvoir être relue par le validateur Flux.
 
 L'archive originale conserve son empreinte.
 
+### AC-606 — Extraction Flux fidèle et déterministe
+
+Deux extractions de la même fixture produisent les mêmes lignes, les mêmes
+identifiants d'occurrence et les mêmes empreintes de texte.
+
+### AC-607 — Occurrences Flux non ambiguës
+
+Deux textes identiques situés à des chemins structurels différents possèdent
+des identifiants distincts. Les commandes et balises sont conservées à l'identique.
+
+### AC-608 — CSV commun Flux
+
+Les champs Flux supplémentaires, les sauts de ligne et les commandes protégées
+survivent à un aller-retour dans le CSV de projet commun.
+
+### AC-609 — Reconstruction Flux toujours verrouillée
+
+Même pour une version reconnue autorisant l'extraction, la capacité
+`RECONSTRUCT` reste absente tant que l'import et l'écriture FPK ne sont pas validés.
+
 ## 9. Rapport communautaire
 
 ### AC-701 — Résumé Discord
