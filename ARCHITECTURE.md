@@ -21,6 +21,7 @@ Pokemon_Fangame_Translator.py
 │   ├── language_coverage.py
 │   └── report_writer.py
 ├── flux_archive.py
+├── flux_import_validator.py
 ├── project_identity.py
 ├── safe_io.py
 ├── structured_extractor.py
@@ -95,6 +96,10 @@ Responsabilités :
 - acceptation, vérification et blocage des traductions ;
 - réparation simple de commandes ;
 - sauvegarde du CSV.
+
+Les CSV du studio, le glossaire, la mémoire de corrections, l'état de reprise et
+les rapports sont écrits atomiquement. Un glossaire ou une mémoire illisible ou
+contradictoire bloque le studio sans être remplacé silencieusement.
 
 Risques :
 
@@ -210,8 +215,17 @@ Déjà en place :
 - identifiants Flux fondés sur le conteneur, la source, le chemin structurel et l'empreinte brute ;
 - corrélation statique Audio/Graphics par inventaire, y compris les littéraux Ruby sans exécution ;
 - profil Flux volontairement privé de toute capacité de reconstruction.
+- validateur d'import Flux indépendant : nouvelle extraction de contrôle,
+  rattachement du projet, comparaison exacte des occurrences et des champs
+  structurels, préservation ordonnée des commandes/balises et contrôle de
+  l'empreinte du FPK avant/après ;
+- capacité `VALIDATE_IMPORT` distincte de `RECONSTRUCT` et accordée uniquement à
+  la signature Flux 2.1.0 exacte ; un avertissement d'extraction conserve
+  l'import futur bloqué.
 - autorisation commune du registre réappliquée aux appels directs d'extraction ;
 - écritures atomiques communes avec fichiers temporaires voisins et uniques ;
+- sérialisation Ruby Marshal atomique avec relecture du temporaire avant
+  remplacement ;
 - rollback du CSV si la validation ou la journalisation d'une restauration échoue.
 - refus d'une réextraction vide, illisible ou incompatible avant remplacement du CSV ;
 - sauvegarde exacte et unique du projet avant chaque réextraction.
@@ -220,7 +234,8 @@ Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;
 - autres réparations déterministes au-delà des commandes protégées simples ;
-- import du CSV et reconstruction de l'adaptateur Pokémon Flux expérimental ;
+- application/réinjection du CSV et reconstruction de l'adaptateur Pokémon Flux
+  expérimental ; le validateur préalable seul est en place ;
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 
 ## 4. Problèmes à éviter dans la v1.1
@@ -292,13 +307,17 @@ Adaptateur expérimental séparé :
 - analyse statique dans un dossier temporaire, sans exécuter Ruby ;
 - extraction des textes vérifiables vers le CSV commun ;
 - conservation des octets, commandes, balises et chemins structurels nécessaires à la fidélité ;
+- validation indépendante du CSV contre une réextraction fraîche, sans créer de
+  copie de travail ni modifier une archive ;
 - reconstruction FPK sécurisée à venir ;
 - blocage des versions inconnues.
 
 Il ne dépend pas d'un nom de dossier. Tant que la reconstruction n'a pas passé
 les tests privés sur une copie locale propre, la version 2.1.0 exacte est limitée
-à `ANALYZE`, `DEEP_ANALYZE`, `EXTRACT` et à la traduction hors jeu du CSV. La
-capacité `RECONSTRUCT` reste absente.
+à `ANALYZE`, `DEEP_ANALYZE`, `EXTRACT`, `TRANSLATE` et `VALIDATE_IMPORT`. Cette
+dernière capacité confirme seulement qu'un CSV serait admissible à l'étape
+suivante : elle n'importe et ne réinjecte rien. La capacité `RECONSTRUCT` reste
+absente.
 
 #### `unknown.py`
 

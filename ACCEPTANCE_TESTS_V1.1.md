@@ -165,6 +165,12 @@ Si le manifeste, le rapport ou un guide final ne peut pas être écrit, la copie
 
 Une extraction vide ou un ancien CSV illisible/incompatible ne remplace jamais le projet existant.
 
+### AC-412 — Fichiers persistants du studio protégés
+
+Une interruption d'écriture conserve la version précédente du glossaire, de la
+mémoire de corrections et de l'état de reprise. Un fichier illisible ou des
+corrections contradictoires sont signalés sans remplacement silencieux.
+
 ## 7. Réparation assistée
 
 ### AC-501 — Plan avant application
@@ -232,6 +238,15 @@ survivent à un aller-retour dans le CSV de projet commun.
 
 Même pour une version reconnue autorisant l'extraction, la capacité
 `RECONSTRUCT` reste absente tant que l'import et l'écriture FPK ne sont pas validés.
+
+### AC-610 — Validation d'import Flux indépendante
+
+Pour une version reconnue, le validateur relance une extraction de contrôle et
+exige le même ensemble d'occurrences, des identifiants uniques, des champs
+structurels inchangés et le même ordre de commandes/balises. Il refuse les
+projets mal rattachés, les versions inconnues, les chemins redirigés et toute
+extraction de contrôle ambiguë. Le CSV et le FPK conservent exactement leurs
+empreintes ; aucune copie ni archive reconstruite n'est créée.
 
 ## 9. Rapport communautaire
 

@@ -880,11 +880,7 @@ def _copy_game(source: Path, target: Path, progress: Callable[[str], None] | Non
         _assert_tree_has_no_links(target)
     except Exception:
         if target.is_dir():
-            (target / "RECONSTRUCTION_INCOMPLETE.txt").write_text(
-                "Cette copie est incomplète et ne doit pas être utilisée.\n"
-                "Un lien symbolique, une jonction ou une erreur de copie a été détecté.\n",
-                encoding="utf-8",
-            )
+            _mark_incomplete_copy(target, "la copie initiale")
         raise
 
 

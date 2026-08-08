@@ -29,7 +29,7 @@ from repair import (
     save_repair_plan,
     split_protected,
 )
-from safe_io import atomic_text_writer
+from safe_io import atomic_text_writer, atomic_write_bytes, atomic_write_text
 
 EXPECTED_FIELDS = [
     "id_stable", "type", "fichier", "carte_id", "carte_nom",
@@ -62,6 +62,19 @@ DEFAULT_GLOSSARY = [
     ("Gym", "Arène"),
     ("OST", "OST"),
 ]
+
+
+class ProjectDataError(ValueError):
+    """Signale un fichier persistant illisible sans autoriser son écrasement."""
+
+    def __init__(self, path: Path, label: str, detail: str):
+        self.path = Path(path)
+        self.label = label
+        super().__init__(
+            f"Le fichier {label} est invalide ou illisible :\n{self.path}\n\n"
+            f"Détail : {detail}\n\n"
+            "Il n'a pas été modifié. Corrigez-le ou restaurez une sauvegarde avant de continuer."
+        )
 
 POST_EDITS = [
     (r"\bPokemon\b", "Pokémon"),
@@ -161,24 +174,50 @@ def duplicate_group_id(row: dict[str, str]) -> str:
 
 def load_glossary(path: Path) -> list[tuple[str, str]]:
     entries: list[tuple[str, str]] = []
-    if path.exists():
-        try:
-            with path.open("r", encoding="utf-8-sig", newline="") as handle:
-                reader = csv.DictReader(handle, delimiter=";")
-                for row in reader:
-                    source = (row.get("anglais") or "").strip()
-                    target = (row.get("francais") or "").strip()
-                    enabled = (row.get("actif") or "oui").strip().lower()
-                    if source and target and enabled not in {"non", "0", "false"}:
+    if not path.exists():
+        return list(DEFAULT_GLOSSARY)
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter=";", strict=True)
+            required = {"anglais", "francais"}
+            missing = required.difference(reader.fieldnames or [])
+            if missing:
+                raise ProjectDataError(
+                    path,
+                    "glossaire",
+                    "colonnes manquantes : " + ", ".join(sorted(missing)),
+                )
+            seen: dict[str, str] = {}
+            for line_number, row in enumerate(reader, start=2):
+                if None in row:
+                    raise ProjectDataError(path, "glossaire", f"ligne {line_number} mal formée")
+                source = (row.get("anglais") or "").strip()
+                target = (row.get("francais") or "").strip()
+                enabled = (row.get("actif") or "oui").strip().lower()
+                if "\x00" in source or "\x00" in target:
+                    raise ProjectDataError(path, "glossaire", f"ligne {line_number} contient un octet nul")
+                if source and target and enabled not in {"non", "0", "false"}:
+                    key = source.casefold()
+                    previous = seen.get(key)
+                    if previous is not None and previous != target:
+                        raise ProjectDataError(
+                            path,
+                            "glossaire",
+                            f"traductions contradictoires pour « {source} »",
+                        )
+                    if previous is None:
                         entries.append((source, target))
-        except Exception:
-            entries = []
+                        seen[key] = target
+    except ProjectDataError:
+        raise
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise ProjectDataError(path, "glossaire", str(exc)) from exc
     return entries or list(DEFAULT_GLOSSARY)
 
 
 def save_glossary(path: Path, entries: list[tuple[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+    with atomic_text_writer(path, encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=["anglais", "francais", "actif"],
@@ -195,20 +234,49 @@ def load_correction_memory(path: Path) -> dict[str, str]:
         return memory
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle, delimiter=";")
-            for row in reader:
+            reader = csv.DictReader(handle, delimiter=";", strict=True)
+            required = {"texte_source", "traduction_fr"}
+            missing = required.difference(reader.fieldnames or [])
+            if missing:
+                raise ProjectDataError(
+                    path,
+                    "mémoire de corrections",
+                    "colonnes manquantes : " + ", ".join(sorted(missing)),
+                )
+            for line_number, row in enumerate(reader, start=2):
+                if None in row:
+                    raise ProjectDataError(
+                        path,
+                        "mémoire de corrections",
+                        f"ligne {line_number} mal formée",
+                    )
                 source = (row.get("texte_source") or "").strip()
                 translation = (row.get("traduction_fr") or "").strip()
+                if "\x00" in source or "\x00" in translation:
+                    raise ProjectDataError(
+                        path,
+                        "mémoire de corrections",
+                        f"ligne {line_number} contient un octet nul",
+                    )
                 if source and translation:
+                    previous = memory.get(source)
+                    if previous is not None and previous != translation:
+                        raise ProjectDataError(
+                            path,
+                            "mémoire de corrections",
+                            f"corrections contradictoires pour « {source} »",
+                        )
                     memory[source] = translation
-    except Exception:
-        return {}
+    except ProjectDataError:
+        raise
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise ProjectDataError(path, "mémoire de corrections", str(exc)) from exc
     return memory
 
 
 def save_correction_memory(path: Path, memory: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+    with atomic_text_writer(path, encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=["texte_source", "traduction_fr"],
@@ -426,10 +494,14 @@ class TranslationStudio(tk.Toplevel):
         self.backup_dir = self.project_dir / "Sauvegardes"
         self.reports_dir = self.project_dir / "Rapports"
         self.resume_state_path = self.project_dir / "etat_traduction.json"
-        self._seed_project_files()
-        self.glossary = load_glossary(self.glossary_path)
-        self.corrections = load_correction_memory(self.corrections_path)
-        self._recover_previous_preferences()
+        try:
+            self._seed_project_files()
+            self.glossary = load_glossary(self.glossary_path)
+            self.corrections = load_correction_memory(self.corrections_path)
+            self._recover_previous_preferences()
+        except ProjectDataError:
+            self.destroy()
+            raise
 
         self.csv_path: Path | None = None
         self.fieldnames = list(EXPECTED_FIELDS) + list(EXTRA_FIELDS)
@@ -469,14 +541,12 @@ class TranslationStudio(tk.Toplevel):
         bundled_corrections = self.base_dir / "corrections_apprises_v1.0.2.csv"
         if not self.glossary_path.exists():
             if bundled_glossary.exists():
-                import shutil
-                shutil.copy2(bundled_glossary, self.glossary_path)
+                atomic_write_bytes(self.glossary_path, bundled_glossary.read_bytes())
             else:
                 save_glossary(self.glossary_path, DEFAULT_GLOSSARY)
         if not self.corrections_path.exists():
             if bundled_corrections.exists():
-                import shutil
-                shutil.copy2(bundled_corrections, self.corrections_path)
+                atomic_write_bytes(self.corrections_path, bundled_corrections.read_bytes())
             else:
                 save_correction_memory(self.corrections_path, {})
 
@@ -493,7 +563,12 @@ class TranslationStudio(tk.Toplevel):
                     continue
             except OSError:
                 continue
-            for source, translation in load_correction_memory(candidate).items():
+            try:
+                previous_corrections = load_correction_memory(candidate)
+            except ProjectDataError as exc:
+                self.log(f"Ancienne mémoire ignorée sans modification : {exc.path}")
+                continue
+            for source, translation in previous_corrections.items():
                 merged_corrections.setdefault(source, translation)
         if merged_corrections != self.corrections:
             self.corrections = merged_corrections
@@ -507,7 +582,12 @@ class TranslationStudio(tk.Toplevel):
                     continue
             except OSError:
                 continue
-            for source, target in load_glossary(candidate):
+            try:
+                previous_glossary = load_glossary(candidate)
+            except ProjectDataError as exc:
+                self.log(f"Ancien glossaire ignoré sans modification : {exc.path}")
+                continue
+            for source, target in previous_glossary:
                 if source.casefold() in existing_sources:
                     continue
                 merged_glossary.append((source, target))
@@ -981,9 +1061,11 @@ class TranslationStudio(tk.Toplevel):
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "csv": str(self.csv_path or ""),
         }
-        temp = self.resume_state_path.with_suffix(".tmp")
-        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(self.resume_state_path)
+        atomic_write_text(
+            self.resume_state_path,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         self.resume_state = payload
 
     def _refresh_resume_button(self):
@@ -1765,7 +1847,7 @@ class TranslationStudio(tk.Toplevel):
         if not chosen:
             return
         flagged = [row for row in self.rows if row.get("statut") in {"À vérifier", "Bloqué"}]
-        with Path(chosen).open("w", encoding="utf-8-sig", newline="") as handle:
+        with atomic_text_writer(Path(chosen), encoding="utf-8-sig", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=self.fieldnames, delimiter=";")
             writer.writeheader()
             writer.writerows({field: row.get(field, "") for field in self.fieldnames} for row in flagged)
@@ -1781,7 +1863,12 @@ class TranslationStudio(tk.Toplevel):
             messagebox.showerror("Ouverture impossible", str(exc), parent=self)
 
     def reload_glossary(self):
-        self.glossary = load_glossary(self.glossary_path)
+        try:
+            glossary = load_glossary(self.glossary_path)
+        except ProjectDataError as exc:
+            messagebox.showerror("Glossaire invalide", str(exc), parent=self)
+            return
+        self.glossary = glossary
         messagebox.showinfo("Glossaire rechargé", f"{len(self.glossary)} terme(s) actif(s).", parent=self)
 
     def open_corrections(self):
@@ -1796,7 +1883,12 @@ class TranslationStudio(tk.Toplevel):
             messagebox.showerror("Ouverture impossible", str(exc), parent=self)
 
     def reload_corrections(self):
-        self.corrections = load_correction_memory(self.corrections_path)
+        try:
+            corrections = load_correction_memory(self.corrections_path)
+        except ProjectDataError as exc:
+            messagebox.showerror("Mémoire invalide", str(exc), parent=self)
+            return
+        self.corrections = corrections
         messagebox.showinfo("Corrections rechargées", f"{len(self.corrections)} correction(s) mémorisée(s).", parent=self)
 
     def open_folder(self, path: Path):
@@ -2074,7 +2166,7 @@ class TranslationStudio(tk.Toplevel):
         report = self.reports_dir / "RAPPORT_TRADUCTION_V0.9.txt"
         ready_rows = max(0, filled_rows - flagged_rows)
         sample_size = min(20, len({self.rows[index].get("groupe_doublon") for index in self.last_batch_indices if 0 <= index < len(self.rows)}))
-        report.write_text("\n".join([
+        atomic_write_text(report, "\n".join([
             "POKÉMON FANGAME TRANSLATOR v1.0 — RAPPORT DE TRADUCTION",
             "=" * 78,
             f"Textes uniques demandés : {total}",

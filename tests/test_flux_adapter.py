@@ -129,6 +129,7 @@ class FluxAdapterTests(unittest.TestCase):
                         GameCapability.DEEP_ANALYZE,
                         GameCapability.EXTRACT,
                         GameCapability.TRANSLATE,
+                        GameCapability.VALIDATE_IMPORT,
                     }
                 ),
                 result.capabilities,

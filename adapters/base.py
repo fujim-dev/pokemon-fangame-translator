@@ -11,6 +11,7 @@ class GameCapability(str, Enum):
     DEEP_ANALYZE = "deep_analyze"
     EXTRACT = "extract"
     TRANSLATE = "translate"
+    VALIDATE_IMPORT = "validate_import"
     RECONSTRUCT = "reconstruct"
 
 

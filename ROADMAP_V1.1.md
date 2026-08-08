@@ -241,6 +241,21 @@ Les fonctions PBS/RXDATA classiques doivent être masquées dans ce mode.
 
 Une fixture artificielle de format Flux passe les tests. Un vrai jeu n'est utilisé que pour une validation locale privée, jamais ajouté au dépôt.
 
+### État progressif actuel
+
+- détection, analyse et extraction synthétique : en place pour la signature
+  2.1.0 explicitement reconnue ;
+- validation indépendante du CSV : en place, strictement en lecture seule, avec
+  réextraction de contrôle et vérification de l'empreinte du FPK original ;
+- import/réinjection : non implémenté ;
+- reconstruction FPK : volontairement verrouillée.
+
+La prochaine étape autorisée est un plan d'import testable qui ne produit encore
+aucune archive. Les essais de réinjection viendront ensuite uniquement sur une
+copie de travail, avec relecture complète, contrôle d'intégrité et rollback. La
+capacité `RECONSTRUCT` ne sera ajoutée qu'après réussite de ces portes et d'une
+validation locale privée sur une copie, jamais sur l'original.
+
 ## Hors périmètre initial
 
 - bot universel jouant automatiquement à tous les fangames ;

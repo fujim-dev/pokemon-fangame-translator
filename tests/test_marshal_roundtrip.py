@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from ruby_marshal_reader import MarshalReader, RubyHashKey, RubyObject, RubyString
-from ruby_marshal_writer import dumps
+from ruby_marshal_writer import dump, dumps
 
 
 def loads_bytes(payload: bytes):
@@ -53,6 +56,21 @@ class MarshalRoundtripTests(unittest.TestCase):
         roundtrip_key = next(iter(roundtripped))
         self.assertEqual([1], roundtrip_key.value)
         self.assertEqual("x", roundtripped[roundtrip_key].text())
+
+    def test_dump_validation_failure_preserves_previous_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "Map001.rxdata"
+            previous = b"previous marshal file"
+            destination.write_bytes(previous)
+
+            with patch(
+                "ruby_marshal_writer.load",
+                side_effect=ValueError("validation simulee"),
+            ):
+                with self.assertRaises(ValueError):
+                    dump([RubyString(b"Hello")], destination)
+
+            self.assertEqual(previous, destination.read_bytes())
 
 
 if __name__ == "__main__":

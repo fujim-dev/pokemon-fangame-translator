@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from translation_studio import TranslationStudio
+from translation_studio import ProjectDataError, TranslationStudio
 from reconstruction_studio import ReconstructionStudio
 from adapters import DetectionResult, GameCapability, create_default_registry
 from analysis import report_text as deep_report_text, write_analysis_reports
@@ -289,7 +289,8 @@ def create_private_diagnostic_sample(
                 copied.append(f"PBS/ ({pbs_count} fichier(s), hors sauvegardes)")
 
         manifest = sample_root / "CONTENU_ECHANTILLON_PRIVE.txt"
-        manifest.write_text(
+        atomic_write_text(
+            manifest,
             "POKÉMON FANGAME TRANSLATOR v1.0.2 — ÉCHANTILLON PRIVÉ\n\n"
             "ATTENTION : cette archive peut contenir des cartes, des dialogues et des données PBS "
             "appartenant au créateur du fangame. Ne la publiez pas et transmettez-la seulement "
@@ -932,12 +933,17 @@ class FangameTranslatorApp(tk.Tk):
                 return
             csv_path = Path(chosen)
 
-        window = TranslationStudio(
-            self,
-            Path(csv_path),
-            self.colors,
-            logger=self._log,
-        )
+        try:
+            window = TranslationStudio(
+                self,
+                Path(csv_path),
+                self.colors,
+                logger=self._log,
+            )
+        except ProjectDataError as exc:
+            messagebox.showerror("Fichier de traduction protégé", str(exc))
+            self._log(f"Studio bloqué pour protéger un fichier invalide : {exc.path}")
+            return
         self.translation_windows.append(window)
 
     def _future_translation(self):
@@ -1746,7 +1752,7 @@ class FangameTranslatorApp(tk.Tk):
 
     def _write_automatic_report(self, diagnostic: Diagnostic):
         report = self._reports_dir() / "DERNIER_DIAGNOSTIC.txt"
-        report.write_text(self._report_text(diagnostic), encoding="utf-8")
+        atomic_write_text(report, self._report_text(diagnostic), encoding="utf-8")
         self._log(f"Rapport automatique créé : {report}")
 
     def export_report(self):
@@ -1762,7 +1768,7 @@ class FangameTranslatorApp(tk.Tk):
         if not chosen:
             return
 
-        Path(chosen).write_text(self._report_text(self.last_diagnostic), encoding="utf-8")
+        atomic_write_text(Path(chosen), self._report_text(self.last_diagnostic), encoding="utf-8")
         messagebox.showinfo("Rapport exporté", f"Rapport enregistré :\n{chosen}")
 
     @staticmethod
@@ -1892,7 +1898,7 @@ class FangameTranslatorApp(tk.Tk):
         )
         if not chosen:
             return
-        Path(chosen).write_text(self._public_diagnostic_text(), encoding="utf-8")
+        atomic_write_text(Path(chosen), self._public_diagnostic_text(), encoding="utf-8")
         messagebox.showinfo(
             "Diagnostic exporté",
             "Le diagnostic public a été créé. Il ne contient ni dialogues ni traductions.\n\n"

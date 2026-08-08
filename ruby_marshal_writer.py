@@ -11,7 +11,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from ruby_marshal_reader import RubyHashKey, RubyObject, RubyString, RubyUserDefined
+from ruby_marshal_reader import RubyHashKey, RubyObject, RubyString, RubyUserDefined, load
+from safe_io import atomic_write_bytes
 
 
 class MarshalWriter:
@@ -208,4 +209,4 @@ def dumps(value) -> bytes:
 
 
 def dump(value, path: str | Path) -> None:
-    Path(path).write_bytes(dumps(value))
+    atomic_write_bytes(Path(path), dumps(value), validator=load)

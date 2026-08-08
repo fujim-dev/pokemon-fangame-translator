@@ -267,7 +267,13 @@ class PokemonFluxAdapter:
         confidence = 100 if release is not None else min(85, raw_confidence)
         capabilities = {GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}
         if release is not None:
-            capabilities.update({GameCapability.EXTRACT, GameCapability.TRANSLATE})
+            capabilities.update(
+                {
+                    GameCapability.EXTRACT,
+                    GameCapability.TRANSLATE,
+                    GameCapability.VALIDATE_IMPORT,
+                }
+            )
         return DetectionResult(
             adapter_id=self.adapter_id,
             display_name=self.display_name,
