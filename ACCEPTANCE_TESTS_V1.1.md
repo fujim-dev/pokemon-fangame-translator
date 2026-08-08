@@ -248,6 +248,29 @@ projets mal rattachés, les versions inconnues, les chemins redirigés et toute
 extraction de contrôle ambiguë. Le CSV et le FPK conservent exactement leurs
 empreintes ; aucune copie ni archive reconstruite n'est créée.
 
+### AC-611 — Plan d'import Flux en mémoire
+
+Le plan est déterministe, ne crée aucun fichier et contient uniquement les
+occurrences acceptées par AC-610. Il fige les empreintes du CSV/FPK, les chemins
+structurels et le nombre exact de fragments des dialogues. Les clés Ruby et les
+sources encore non prises en charge restent bloquées.
+
+### AC-612 — Candidat Flux synthétique séparé
+
+Le candidat est créé hors de l'original, réextrait avant publication et conserve
+exactement l'inventaire source. Tout membre modifié hors plan, toute destination
+concurrente ou tout échec de validation annule la publication sans écrasement.
+Les remplacements sont relus à leur occurrence exacte et `RECONSTRUCT` reste
+absente.
+
+### AC-613 — Copie de travail et rollback Flux
+
+Une copie complète est comparée à l'original avant le test. Le candidat est
+installé atomiquement uniquement dans cette copie, puis une sauvegarde externe
+restaure exactement son FPK. Les empreintes de toute la copie et de l'original
+sont identiques aux références après rollback. Un échec injecté après
+installation doit également aboutir à ce même état restauré.
+
 ## 9. Rapport communautaire
 
 ### AC-701 — Résumé Discord

@@ -90,6 +90,18 @@ class FluxImportValidationReport:
         )
 
 
+@dataclass(frozen=True)
+class FluxImportValidationContext:
+    """Données validées conservées en mémoire pour préparer l'étape suivante."""
+
+    game_root: Path
+    fpk_path: Path
+    csv_path: Path
+    report: FluxImportValidationReport
+    csv_rows: tuple[dict[str, str], ...]
+    expected_rows: tuple[dict[str, str], ...]
+
+
 def _is_redirected(path: Path) -> bool:
     try:
         if path.is_symlink():
@@ -145,14 +157,14 @@ def _read_stable_csv(path: Path) -> tuple[list[str], list[dict[str, str]], str]:
     return fields, rows, hashlib.sha256(raw).hexdigest()
 
 
-def validate_flux_import(
+def validate_flux_import_context(
     game_root: Path,
     csv_path: Path,
     *,
     adapter: PokemonFluxAdapter | None = None,
     progress=None,
     logger=None,
-) -> FluxImportValidationReport:
+) -> FluxImportValidationContext:
     """Compare le CSV à une nouvelle extraction fidèle, sans rien réinjecter."""
     root_input = game_root.expanduser()
     if _is_redirected(root_input):
@@ -279,6 +291,14 @@ def validate_flux_import(
                 ))
             continue
         translation_safe = True
+        if translation == expected["texte_source"]:
+            translation_safe = False
+            issues.append(FluxImportIssue(
+                "translation_unchanged",
+                "avertissement",
+                "La traduction est identique au texte source et restera exclue.",
+                row_id=row_id,
+            ))
         if "\x00" in translation:
             translation_safe = False
             issues.append(FluxImportIssue(
@@ -308,7 +328,7 @@ def validate_flux_import(
                 ))
 
     warnings = tuple((*fpk_warnings, *extraction_warnings))
-    return FluxImportValidationReport(
+    report = FluxImportValidationReport(
         adapter_version=detection.recognized_version,
         csv_sha256=csv_sha256,
         fpk_sha256_before=fpk_before,
@@ -322,3 +342,29 @@ def validate_flux_import(
         extraction_warnings=warnings,
         issues=tuple(issues),
     )
+    return FluxImportValidationContext(
+        game_root=root,
+        fpk_path=fpk.resolve(),
+        csv_path=csv_file,
+        report=report,
+        csv_rows=tuple(dict(row) for row in csv_rows),
+        expected_rows=tuple(dict(row) for row in expected_rows),
+    )
+
+
+def validate_flux_import(
+    game_root: Path,
+    csv_path: Path,
+    *,
+    adapter: PokemonFluxAdapter | None = None,
+    progress=None,
+    logger=None,
+) -> FluxImportValidationReport:
+    """Retourne uniquement le rapport public du contrôle indépendant."""
+    return validate_flux_import_context(
+        game_root,
+        csv_path,
+        adapter=adapter,
+        progress=progress,
+        logger=logger,
+    ).report

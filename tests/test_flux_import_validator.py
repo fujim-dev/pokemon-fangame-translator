@@ -6,11 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from adapters import PokemonFluxAdapter
+from adapters import GameCapability, PokemonFluxAdapter
 from adapters.pokemon_flux import SUPPORTED_RELEASES
 from analysis.integrity import compare_snapshots, snapshot_tree
 from flux_archive import FluxArchiveEntry, FluxArchiveInventory
 from flux_import_validator import FluxImportValidationError, validate_flux_import
+from flux_import_plan import FluxImportPlanError, _replacement_parts, build_flux_import_plan
 from project_identity import write_project_identity
 from ruby_marshal_reader import RubyString
 from ruby_marshal_writer import dumps
@@ -251,6 +252,68 @@ class FluxImportValidatorTests(unittest.TestCase):
                 ("structure synthétique incertaine",),
                 report.extraction_warnings,
             )
+
+
+class FluxImportPlanTests(unittest.TestCase):
+    def test_builds_deterministic_memory_only_plan(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_flux_plan_") as temp_dir:
+            base = Path(temp_dir)
+            root, adapter, rows, csv_path = prepared_project(base)
+            rows[0]["traduction_fr"] = r"\pn<color=blue>Bonjour dresseur.</color>"
+            rows[0]["statut"] = "Accepté"
+            write_csv(csv_path, rows)
+            game_before = snapshot_tree(root)
+            csv_before = csv_path.read_bytes()
+            project_before = snapshot_tree(csv_path.parent)
+
+            first = build_flux_import_plan(root, csv_path, adapter=adapter)
+            second = build_flux_import_plan(root, csv_path, adapter=adapter)
+
+            self.assertEqual(first.fingerprint, second.fingerprint)
+            self.assertEqual(first.items, second.items)
+            self.assertEqual(1, len(first.applicable_items))
+            self.assertEqual(1, len(first.excluded_items))
+            self.assertEqual(
+                (r"\pn<color=blue>Bonjour dresseur.</color>".encode("utf-8"),),
+                first.applicable_items[0].replacement_parts,
+            )
+            self.assertNotIn(GameCapability.RECONSTRUCT, adapter.probe(root).capabilities)
+            self.assertTrue(compare_snapshots(game_before, snapshot_tree(root)).passed)
+            self.assertTrue(compare_snapshots(project_before, snapshot_tree(csv_path.parent)).passed)
+            self.assertEqual(csv_before, csv_path.read_bytes())
+
+    def test_plan_is_blocked_when_control_extraction_has_warning(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_flux_plan_warning_") as temp_dir:
+            base = Path(temp_dir)
+            root, adapter, rows, csv_path = prepared_project(base)
+            rows[0]["traduction_fr"] = r"\pn<color=blue>Bonjour dresseur.</color>"
+            rows[0]["statut"] = "Accepté"
+            write_csv(csv_path, rows)
+
+            with patch.object(
+                adapter,
+                "extract",
+                return_value=(rows, ["avertissement synthétique"]),
+            ):
+                with self.assertRaisesRegex(FluxImportPlanError, "avertissements"):
+                    build_flux_import_plan(root, csv_path, adapter=adapter)
+
+    def test_dialogue_replacement_keeps_exact_line_count(self) -> None:
+        row = {
+            "type": "Dialogue",
+            "sous_index": "lignes:2",
+            "texte_source": r"Hello\nTrainer",
+            "traduction_fr": r"Bonjour\nDresseur",
+        }
+
+        self.assertEqual(
+            (b"Bonjour", b"Dresseur"),
+            _replacement_parts(row),
+        )
+
+        row["traduction_fr"] = "Bonjour dresseur"
+        with self.assertRaisesRegex(FluxImportPlanError, "nombre de lignes"):
+            _replacement_parts(row)
 
 
 if __name__ == "__main__":

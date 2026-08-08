@@ -117,7 +117,9 @@ def _member_path_issue(value: str) -> str | None:
     return None
 
 
-def _parse_integer(value: str, field: str) -> int:
+def _parse_integer(value: str, field: str, *, empty_as_zero: bool = False) -> int:
+    if empty_as_zero and not value.strip():
+        return 0
     try:
         parsed = int(value.strip())
     except ValueError as exc:
@@ -172,7 +174,11 @@ def parse_7zip_slt(output: str) -> FluxArchiveInventory:
             FluxArchiveEntry(
                 path=path,
                 size=_parse_integer(record.get("Size", "0"), "Size"),
-                packed_size=_parse_integer(record.get("Packed Size", "0"), "Packed Size"),
+                packed_size=_parse_integer(
+                    record.get("Packed Size", "0"),
+                    "Packed Size",
+                    empty_as_zero=True,
+                ),
                 attributes=record.get("Attributes", ""),
                 encrypted=record.get("Encrypted", "-").strip() != "-",
                 method=record.get("Method", ""),

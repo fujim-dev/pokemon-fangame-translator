@@ -247,14 +247,20 @@ Une fixture artificielle de format Flux passe les tests. Un vrai jeu n'est utili
   2.1.0 explicitement reconnue ;
 - validation indépendante du CSV : en place, strictement en lecture seule, avec
   réextraction de contrôle et vérification de l'empreinte du FPK original ;
-- import/réinjection : non implémenté ;
+- plan d'import en mémoire : en place et déterministe ;
+- réinjection expérimentale interne : validée sur archives synthétiques avec
+  relecture complète, refus des changements hors plan et rollback simulé ;
+- validation locale privée : réussie sur une occurrence de référence dans une
+  copie complète de Flux v2.1.0, avec 669 membres FPK, 741 fichiers du jeu et
+  restauration exacte de l'empreinte originale ;
+- import/réinjection dans l'interface : non exposé ;
 - reconstruction FPK : volontairement verrouillée.
 
-La prochaine étape autorisée est un plan d'import testable qui ne produit encore
-aucune archive. Les essais de réinjection viendront ensuite uniquement sur une
-copie de travail, avec relecture complète, contrôle d'intégrité et rollback. La
-capacité `RECONSTRUCT` ne sera ajoutée qu'après réussite de ces portes et d'une
-validation locale privée sur une copie, jamais sur l'original.
+Les prochaines portes sont la couverture synthétique de toutes les formes
+d'occurrences prises en charge, la validation privée d'un corpus représentatif,
+plusieurs échecs injectés pendant l'installation/rollback et un contrôle manuel
+du démarrage de la copie. La capacité `RECONSTRUCT` ne sera ajoutée qu'après ces
+preuves ; une validation analytique d'une occurrence ne suffit pas à l'activer.
 
 ## Hors périmètre initial
 

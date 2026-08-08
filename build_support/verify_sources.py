@@ -13,6 +13,8 @@ python_files = [
     "flux_archive.py",
     "flux_extractor.py",
     "flux_import_validator.py",
+    "flux_import_plan.py",
+    "flux_reinjection.py",
     "project_identity.py",
     "safe_io.py",
     "adapters/__init__.py",
@@ -34,6 +36,7 @@ python_files = [
     "repair/planner.py",
     "repair/rollback.py",
     "repair/safe_fixes.py",
+    "build_support/validate_private_flux_working_copy.py",
 ]
 required_files = [
     "README.md",

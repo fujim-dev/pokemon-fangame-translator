@@ -21,7 +21,9 @@ Pokemon_Fangame_Translator.py
 │   ├── language_coverage.py
 │   └── report_writer.py
 ├── flux_archive.py
+├── flux_import_plan.py
 ├── flux_import_validator.py
+├── flux_reinjection.py
 ├── project_identity.py
 ├── safe_io.py
 ├── structured_extractor.py
@@ -222,6 +224,15 @@ Déjà en place :
 - capacité `VALIDATE_IMPORT` distincte de `RECONSTRUCT` et accordée uniquement à
   la signature Flux 2.1.0 exacte ; un avertissement d'extraction conserve
   l'import futur bloqué.
+- plan d'import Flux déterministe construit uniquement en mémoire, avec fragments
+  UTF-8, chemins structurels et empreintes figés ;
+- moteur de candidat Flux encore interne : application dans un dossier temporaire,
+  relecture Marshal, reconstruction 7z séparée, inventaire identique, empreintes
+  inchangées pour tous les membres hors plan et réextraction complète ;
+- validation sur copie de travail avec sauvegarde externe, installation atomique
+  temporaire, comparaison des 741 fichiers puis rollback exact ; une validation
+  privée locale a réussi sur une occurrence de `messages_game.dat`, sans test de
+  jouabilité et sans publier de contenu du jeu ;
 - autorisation commune du registre réappliquée aux appels directs d'extraction ;
 - écritures atomiques communes avec fichiers temporaires voisins et uniques ;
 - sérialisation Ruby Marshal atomique avec relecture du temporaire avant
@@ -234,8 +245,11 @@ Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;
 - autres réparations déterministes au-delà des commandes protégées simples ;
-- application/réinjection du CSV et reconstruction de l'adaptateur Pokémon Flux
-  expérimental ; le validateur préalable seul est en place ;
+- exposition de l'import/réinjection Flux dans l'adaptateur et l'interface ; les
+  composants internes existent mais restent volontairement inaccessibles à
+  l'utilisateur ;
+- validation d'un corpus traduit représentatif de toutes les sources Flux,
+  tests de démarrage/jouabilité et multiplication des scénarios de rollback ;
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 
 ## 4. Problèmes à éviter dans la v1.1
@@ -318,6 +332,11 @@ les tests privés sur une copie locale propre, la version 2.1.0 exacte est limit
 dernière capacité confirme seulement qu'un CSV serait admissible à l'étape
 suivante : elle n'importe et ne réinjecte rien. La capacité `RECONSTRUCT` reste
 absente.
+
+`flux_import_plan.py` et `flux_reinjection.py` sont des portes internes de
+validation. Leur présence ne constitue pas une compatibilité de reconstruction :
+aucune méthode de reconstruction n'est exposée par `PokemonFluxAdapter`, aucun
+bouton n'est activé et le candidat n'est jamais installé dans le jeu original.
 
 #### `unknown.py`
 

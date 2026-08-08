@@ -493,6 +493,17 @@ class FluxArchiveListingTests(unittest.TestCase):
         self.assertTrue(inventory.safe)
         self.assertEqual(frozenset({"Data/messages_game.dat"}), inventory.member_paths)
 
+    def test_blank_solid_archive_packed_size_is_accepted_as_unknown(self) -> None:
+        listing = self._listing(r"Data\messages_game.dat").replace(
+            "Packed Size = 10",
+            "Packed Size = ",
+        )
+
+        inventory = parse_7zip_slt(listing)
+
+        self.assertTrue(inventory.safe)
+        self.assertEqual(0, inventory.file_entries[0].packed_size)
+
     def test_parent_traversal_is_rejected(self) -> None:
         inventory = parse_7zip_slt(self._listing(r"..\outside.txt"))
         self.assertFalse(inventory.safe)

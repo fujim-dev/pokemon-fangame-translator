@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -102,6 +103,44 @@ def atomic_write_bytes(
         if validator is not None:
             validator(temporary_path)
         os.replace(temporary_path, destination)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def atomic_copy_file(
+    source: Path,
+    destination: Path,
+    *,
+    validator: Callable[[Path], object] | None = None,
+    replace_existing: bool = True,
+) -> None:
+    """Copie un fichier par flux puis le publie atomiquement après validation."""
+    source_path = source.expanduser()
+    if not source_path.is_file() or _is_link_or_junction(source_path):
+        raise OSError("Le fichier source est absent ou redirigé.")
+    target = _prepare_destination(destination)
+    temporary_path: Path | None = None
+    try:
+        with source_path.open("rb") as source_handle, tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as target_handle:
+            temporary_path = Path(target_handle.name)
+            shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
+            target_handle.flush()
+            os.fsync(target_handle.fileno())
+        if validator is not None:
+            validator(temporary_path)
+        if replace_existing:
+            os.replace(temporary_path, target)
+        else:
+            os.link(temporary_path, target)
+            temporary_path.unlink()
         temporary_path = None
     finally:
         if temporary_path is not None:
