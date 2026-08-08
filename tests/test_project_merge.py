@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from Pokemon_Fangame_Translator import (
+    ProjectMergeError,
+    backup_project_csv,
     merge_project_rows,
     project_directory_for_game,
     write_project_csv,
@@ -168,6 +170,62 @@ class ProjectMergeTests(unittest.TestCase):
         self.assertEqual(new_row["chemin_structurel"], restored[0]["chemin_structurel"])
         self.assertEqual("pokemon_flux", restored[0]["adaptateur"])
         self.assertEqual("b" * 64, restored[0]["empreinte_source"])
+
+    def test_unreadable_existing_project_is_never_silently_replaced(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_invalid_project_") as temp_dir:
+            csv_path = Path(temp_dir) / "textes_structures.csv"
+            csv_path.write_bytes(b"\xff\xfe\x00invalid synthetic csv")
+            original = csv_path.read_bytes()
+            new_rows = [{
+                "id_stable": "new-row",
+                "texte_source": "Hello",
+                "traduction_fr": "",
+                "statut": "À traduire",
+            }]
+
+            with self.assertRaisesRegex(ProjectMergeError, "illisible"):
+                merge_project_rows(new_rows, csv_path)
+
+            self.assertEqual(original, csv_path.read_bytes())
+
+    def test_incompatible_existing_project_is_never_silently_replaced(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_incompatible_project_") as temp_dir:
+            csv_path = Path(temp_dir) / "textes_structures.csv"
+            csv_path.write_text("id_stable;texte_source\nrow;Hello\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ProjectMergeError, "colonnes manquantes"):
+                merge_project_rows(
+                    [{"id_stable": "row", "texte_source": "Hello"}],
+                    csv_path,
+                )
+
+    def test_empty_reextraction_keeps_existing_project(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_empty_reextract_") as temp_dir:
+            csv_path = Path(temp_dir) / "textes_structures.csv"
+            csv_path.write_text(
+                "id_stable;texte_source;traduction_fr;statut\nrow;Hello;Bonjour;Accepté\n",
+                encoding="utf-8",
+            )
+            original = csv_path.read_bytes()
+
+            with self.assertRaisesRegex(ProjectMergeError, "aucune ligne"):
+                merge_project_rows([], csv_path)
+
+            self.assertEqual(original, csv_path.read_bytes())
+
+    def test_reextraction_backups_are_exact_and_never_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_reextract_backup_") as temp_dir:
+            csv_path = Path(temp_dir) / "textes_structures.csv"
+            csv_path.write_bytes(b"synthetic project bytes")
+
+            first = backup_project_csv(csv_path)
+            second = backup_project_csv(csv_path)
+
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            self.assertNotEqual(first, second)
+            self.assertEqual(csv_path.read_bytes(), first.read_bytes())
+            self.assertEqual(csv_path.read_bytes(), second.read_bytes())
 
 
 if __name__ == "__main__":

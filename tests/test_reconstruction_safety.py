@@ -13,6 +13,7 @@ from reconstruction_engine import (
     reconstruct_copy,
     simulate_plan,
 )
+from project_identity import write_project_identity
 from structured_extractor import stable_id
 
 
@@ -58,6 +59,12 @@ def prepare_essentials_game(game_root: Path) -> None:
         path = game_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
+    write_project_identity(
+        game_root.parent,
+        game_root,
+        adapter_id="pokemon_essentials",
+        adapter_version="21.1",
+    )
 
 
 def pbs_row(relative: str, source: str = "Hello", translation: str = "Bonjour") -> dict[str, str]:
@@ -350,6 +357,72 @@ class ReconstructionSafetyTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ReconstructionError, "lien symbolique|jonction"):
                     build_plan(game_root, csv_path)
+
+    def test_csv_bound_to_another_game_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_wrong_project_") as temp_dir:
+            base = Path(temp_dir)
+            selected_game = base / "selected_game"
+            other_game = base / "other_game"
+            prepare_essentials_game(selected_game)
+            prepare_essentials_game(other_game)
+            pbs_path = selected_game / "PBS" / "fixture.txt"
+            pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row("PBS/fixture.txt"))
+            write_project_identity(
+                base,
+                other_game,
+                adapter_id="pokemon_essentials",
+                adapter_version="21.1",
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "autre fangame"):
+                build_plan(selected_game, csv_path)
+
+    def test_csv_changed_after_simulation_is_rejected_before_copy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_changed_csv_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            prepare_essentials_game(game_root)
+            pbs_path = game_root / "PBS" / "fixture.txt"
+            pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row("PBS/fixture.txt"))
+            plan = simulate_plan(build_plan(game_root, csv_path))
+
+            csv_path.write_bytes(csv_path.read_bytes() + b"\r\n")
+            target = base / "game_VERSION_FR"
+
+            with self.assertRaisesRegex(ReconstructionError, "CSV a changé"):
+                reconstruct_copy(plan, target, base / "reports")
+
+            self.assertFalse(target.exists())
+            self.assertFalse((base / "reports").exists())
+
+    def test_project_identity_changed_after_simulation_is_rejected_before_copy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_changed_identity_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            prepare_essentials_game(game_root)
+            pbs_path = game_root / "PBS" / "fixture.txt"
+            pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row("PBS/fixture.txt"))
+            plan = simulate_plan(build_plan(game_root, csv_path))
+
+            write_project_identity(
+                base,
+                game_root,
+                adapter_id="pokemon_essentials",
+                adapter_version="version-modifiee",
+            )
+            target = base / "game_VERSION_FR"
+
+            with self.assertRaisesRegex(ReconstructionError, "identité du projet a changé"):
+                reconstruct_copy(plan, target, base / "reports")
+
+            self.assertFalse(target.exists())
+            self.assertFalse((base / "reports").exists())
 
 
 if __name__ == "__main__":

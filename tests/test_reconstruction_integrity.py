@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import reconstruction_engine
 from analysis.integrity import compare_snapshots, snapshot_tree
+from project_identity import write_project_identity
 from reconstruction_engine import ReconstructionError, build_plan, reconstruct_copy, simulate_plan
 from structured_extractor import stable_id
 
@@ -61,6 +62,12 @@ def prepare_essentials_game(game_root: Path) -> None:
         path = game_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
+    write_project_identity(
+        game_root.parent,
+        game_root,
+        adapter_id="pokemon_essentials",
+        adapter_version="21.1",
+    )
 
 
 def synthetic_plan(base: Path):
@@ -156,6 +163,35 @@ class ReconstructionIntegrityTests(unittest.TestCase):
                     reconstruct_copy(plan, target, base / "reports")
 
             self.assertTrue((target / "RECONSTRUCTION_INCOMPLETE.txt").is_file())
+
+    def test_late_finalization_failure_marks_copy_incomplete_and_preserves_source(self) -> None:
+        for failing_name in ("MANIFESTE_RECONSTRUCTION_", "LIRE_AVANT_DE_JOUER.txt"):
+            with self.subTest(failing_name=failing_name):
+                with tempfile.TemporaryDirectory(prefix="pft_test_finalization_failure_") as temp_dir:
+                    base = Path(temp_dir)
+                    game_root, plan = synthetic_plan(base)
+                    source_before = snapshot_tree(game_root)
+                    target = base / "game_VERSION_FR"
+                    real_atomic_write = reconstruction_engine.atomic_write_text
+
+                    def fail_selected_artifact(path: Path, content: str, **kwargs) -> None:
+                        if Path(path).name.startswith(failing_name):
+                            raise OSError("synthetic finalization failure")
+                        real_atomic_write(path, content, **kwargs)
+
+                    with patch(
+                        "reconstruction_engine.atomic_write_text",
+                        side_effect=fail_selected_artifact,
+                    ):
+                        with self.assertRaisesRegex(ReconstructionError, "Finalisation impossible"):
+                            reconstruct_copy(plan, target, base / "reports")
+
+                    source_after = snapshot_tree(game_root)
+                    marker = target / "RECONSTRUCTION_INCOMPLETE.txt"
+
+                    self.assertTrue(marker.is_file())
+                    self.assertIn("ne doit pas être utilisée", marker.read_text(encoding="utf-8"))
+                    self.assertTrue(compare_snapshots(source_before, source_after).passed)
 
 
 if __name__ == "__main__":

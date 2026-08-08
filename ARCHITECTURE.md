@@ -21,6 +21,7 @@ Pokemon_Fangame_Translator.py
 │   ├── language_coverage.py
 │   └── report_writer.py
 ├── flux_archive.py
+├── project_identity.py
 ├── safe_io.py
 ├── structured_extractor.py
 │   └── ruby_marshal_reader.py
@@ -137,6 +138,9 @@ Forces :
 - préservation de l'original par copie.
 - revalidation de l'adaptateur Essentials au plan puis immédiatement avant la copie ;
 - refus des racines redirigées et des noms de sortie réservés déjà présents.
+- identité privée reliant le CSV au chemin canonique du jeu et à son adaptateur ;
+- empreintes du CSV et de l'identité figées dans le plan puis revérifiées avant copie ;
+- copie marquée incomplète si un manifeste, rapport ou guide final ne peut pas être écrit.
 
 Limite actuelle :
 
@@ -209,6 +213,8 @@ Déjà en place :
 - autorisation commune du registre réappliquée aux appels directs d'extraction ;
 - écritures atomiques communes avec fichiers temporaires voisins et uniques ;
 - rollback du CSV si la validation ou la journalisation d'une restauration échoue.
+- refus d'une réextraction vide, illisible ou incompatible avant remplacement du CSV ;
+- sauvegarde exacte et unique du projet avant chaque réextraction.
 
 Encore partiel ou pas encore en place :
 

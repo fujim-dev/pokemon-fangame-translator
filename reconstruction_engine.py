@@ -32,6 +32,7 @@ from analysis.integrity import (
 )
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
+from project_identity import ProjectIdentityError, read_project_identity
 from structured_extractor import (
     TRANSLATABLE_PBS_KEYS,
     extract_map,
@@ -93,6 +94,8 @@ class ReconstructionPlan:
     mode: str
     adapter_id: str = ""
     adapter_version: str = ""
+    csv_sha256: str = ""
+    project_identity_sha256: str = ""
     project_rows: int = 0
     translated_rows: int = 0
     untranslated_rows: int = 0
@@ -414,12 +417,25 @@ def load_project_rows(csv_path: Path) -> list[dict[str, str]]:
 
 def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> ReconstructionPlan:
     game_root = _resolve_safe_game_root(game_root)
-    csv_path = csv_path.expanduser().resolve()
+    csv_input = csv_path.expanduser()
+    if _is_link_or_junction(csv_input) or _is_link_or_junction(csv_input.parent):
+        raise ReconstructionError(
+            "Le CSV de traduction ou son dossier ne peut pas être un lien ou une jonction."
+        )
+    csv_path = csv_input.resolve()
     if not csv_path.is_file():
         raise ReconstructionError("Le projet de traduction est introuvable.")
     if mode not in {"accepted", "recommended", "all_reviewed"}:
         raise ReconstructionError(f"Mode de reconstruction inconnu : {mode}")
     detection = _require_essentials_reconstruction(game_root)
+    try:
+        identity = read_project_identity(
+            csv_path,
+            game_root,
+            expected_adapter_id=detection.adapter_id,
+        )
+    except ProjectIdentityError as exc:
+        raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
 
     plan = ReconstructionPlan(
         game_root=str(game_root),
@@ -428,6 +444,8 @@ def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> Re
         mode=mode,
         adapter_id=detection.adapter_id,
         adapter_version=detection.recognized_version,
+        csv_sha256=sha256_file(csv_path),
+        project_identity_sha256=identity.sha256,
     )
 
     rows = load_project_rows(csv_path)
@@ -870,6 +888,41 @@ def _copy_game(source: Path, target: Path, progress: Callable[[str], None] | Non
         raise
 
 
+def _mark_incomplete_copy(target_root: Path, reason: str) -> str:
+    """Marque une copie invalide sans masquer l'erreur métier d'origine."""
+    marker = target_root / "RECONSTRUCTION_INCOMPLETE.txt"
+    try:
+        atomic_write_text(
+            marker,
+            "Cette copie est incomplète et ne doit pas être utilisée.\n"
+            f"Étape en échec : {reason}.\n"
+            "Consultez le rapport du projet puis supprimez ce dossier.\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        return f" Le marqueur d'échec n'a pas pu être écrit ({type(exc).__name__})."
+    return ""
+
+
+def _write_final_artifact(
+    path: Path,
+    content: str,
+    *,
+    target_root: Path,
+    label: str,
+    newline: str | None = None,
+) -> None:
+    """Écrit un résultat final ou invalide explicitement la copie."""
+    try:
+        atomic_write_text(path, content, encoding="utf-8", newline=newline)
+    except Exception as exc:
+        marker_warning = _mark_incomplete_copy(target_root, label)
+        raise ReconstructionError(
+            f"Finalisation impossible pendant {label}. La copie est marquée incomplète."
+            f"{marker_warning}"
+        ) from exc
+
+
 def reconstruct_copy(
     plan: ReconstructionPlan,
     target_root: Path,
@@ -881,6 +934,26 @@ def reconstruct_copy(
     if plan.adapter_id != detection.adapter_id:
         raise ReconstructionError(
             "Le plan ne correspond plus à l'adaptateur détecté. Relancez la simulation."
+        )
+    csv_path = Path(plan.csv_path).expanduser().resolve()
+    if not plan.csv_sha256 or not csv_path.is_file() or sha256_file(csv_path) != plan.csv_sha256:
+        raise ReconstructionError(
+            "Le CSV a changé depuis la simulation. Relancez la simulation avant toute copie."
+        )
+    try:
+        identity = read_project_identity(
+            csv_path,
+            source_root,
+            expected_adapter_id=detection.adapter_id,
+        )
+    except ProjectIdentityError as exc:
+        raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
+    if (
+        not plan.project_identity_sha256
+        or identity.sha256 != plan.project_identity_sha256
+    ):
+        raise ReconstructionError(
+            "L'identité du projet a changé depuis la simulation. Relancez la simulation."
         )
     _assert_reserved_copy_outputs_absent(source_root)
     target_root = target_root.expanduser().resolve()
@@ -947,12 +1020,7 @@ def reconstruct_copy(
             )
     except Exception:
         # Une copie incomplète ne doit jamais sembler utilisable.
-        marker = target_root / "RECONSTRUCTION_INCOMPLETE.txt"
-        marker.write_text(
-            "Cette copie est incomplète et ne doit pas être utilisée.\n"
-            "Consultez le rapport du projet puis supprimez ce dossier.\n",
-            encoding="utf-8",
-        )
+        _mark_incomplete_copy(target_root, "validation ou contrôle d'intégrité")
         raise
 
     original_unchanged = bool(original_integrity and original_integrity.passed)
@@ -989,11 +1057,16 @@ def reconstruct_copy(
             ],
         },
     }
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_final_artifact(
+        manifest_path,
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        target_root=target_root,
+        label="l'écriture du manifeste",
+    )
 
     report_path = report_dir / f"RAPPORT_RECONSTRUCTION_{timestamp}.txt"
     counts = plan.counts()
-    report_path.write_text("\n".join([
+    _write_final_artifact(report_path, "\n".join([
         "POKÉMON FANGAME TRANSLATOR v1.0.2 — RAPPORT DE RECONSTRUCTION",
         "=" * 82,
         f"Jeu original : {source_root}",
@@ -1022,18 +1095,21 @@ def reconstruct_copy(
         "-" * 82,
         "Scripts.rxdata et PluginScripts.rxdata n'ont jamais été modifiés.",
         "Testez cette copie avant toute diffusion.",
-    ]), encoding="utf-8")
+    ]), target_root=target_root, label="l'écriture du rapport")
 
-    (target_root / "PFT_RECONSTRUCTION_V1.0.txt").write_text(
+    _write_final_artifact(
+        target_root / "PFT_RECONSTRUCTION_V1.0.txt",
         "Cette copie a été créée par Pokémon Fangame Translator v1.0.2.\n"
         f"Traductions appliquées : {applied}\n"
         f"Rapport : {report_path}\n"
         "Le dossier original n'a pas été modifié.\n",
-        encoding="utf-8",
+        target_root=target_root,
+        label="l'écriture de l'attestation de reconstruction",
     )
 
 
-    (target_root / "LIRE_AVANT_DE_JOUER.txt").write_text(
+    _write_final_artifact(
+        target_root / "LIRE_AVANT_DE_JOUER.txt",
         "VERSION FRANÇAISE SÉPARÉE\n"
         "===========================\n\n"
         "Ce dossier est une copie jouable du fangame original.\n"
@@ -1046,10 +1122,12 @@ def reconstruct_copy(
         "- Une nouvelle reconstruction doit être créée dans un nouveau dossier.\n\n"
         f"Traductions intégrées : {applied}\n"
         f"Textes laissés de côté par sécurité : {counts.get('blocked', 0) + counts.get('skipped', 0)}\n",
-        encoding="utf-8",
+        target_root=target_root,
+        label="l'écriture du guide de la copie",
     )
 
-    (target_root / "LANCER_VERSION_FR.bat").write_text(
+    _write_final_artifact(
+        target_root / "LANCER_VERSION_FR.bat",
         "@echo off\r\n"
         "chcp 65001 >nul\r\n"
         "cd /d \"%~dp0\"\r\n"
@@ -1059,7 +1137,9 @@ def reconstruct_copy(
         "  exit /b 1\r\n"
         ")\r\n"
         "start \"\" \"Game.exe\"\r\n",
-        encoding="utf-8",
+        target_root=target_root,
+        label="l'écriture du lanceur",
+        newline="",
     )
 
     return ReconstructionResult(
@@ -1079,5 +1159,8 @@ def reconstruct_copy(
 def save_plan(plan: ReconstructionPlan, path: Path) -> None:
     payload = asdict(plan)
     payload["counts"] = plan.counts()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )

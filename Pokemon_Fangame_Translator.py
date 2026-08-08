@@ -23,7 +23,8 @@ from translation_studio import TranslationStudio
 from reconstruction_studio import ReconstructionStudio
 from adapters import DetectionResult, GameCapability, create_default_registry
 from analysis import report_text as deep_report_text, write_analysis_reports
-from safe_io import atomic_text_writer
+from project_identity import ProjectIdentityError, write_project_identity
+from safe_io import atomic_text_writer, atomic_write_bytes, atomic_write_text
 
 
 APP_TITLE = "Pokémon Fangame Translator v1.0.2 — Bêta publique"
@@ -65,6 +66,11 @@ class Diagnostic:
 
 
 PROJECT_EXTRA_FIELDS = ["niveau_relecture", "alertes_relecture", "groupe_doublon", "origine_traduction"]
+PROJECT_REQUIRED_FIELDS = {"id_stable", "texte_source", "traduction_fr", "statut"}
+
+
+class ProjectMergeError(RuntimeError):
+    """Le projet existant doit être conservé au lieu d'être remplacé."""
 
 
 def default_projects_root() -> Path:
@@ -95,15 +101,30 @@ def merge_project_rows(new_rows: list[dict[str, str]], existing_csv: Path | None
     if not existing_csv or not existing_csv.exists():
         return [{field: row.get(field, "") for field in fields} for row in new_rows], 0, fields
 
+    if not new_rows:
+        raise ProjectMergeError(
+            "L'extraction n'a produit aucune ligne ; le projet existant est conservé."
+        )
+
     try:
         with existing_csv.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle, delimiter=";")
+            missing = sorted(PROJECT_REQUIRED_FIELDS - set(reader.fieldnames or []))
+            if missing:
+                raise ProjectMergeError(
+                    "Le CSV existant est incompatible, colonnes manquantes : "
+                    + ", ".join(missing)
+                )
             old_rows = list(reader)
             for field in reader.fieldnames or []:
                 if field not in fields:
                     fields.append(field)
-    except Exception:
-        return [{field: row.get(field, "") for field in fields} for row in new_rows], 0, fields
+    except ProjectMergeError:
+        raise
+    except Exception as exc:
+        raise ProjectMergeError(
+            f"Le CSV existant est illisible ({type(exc).__name__})."
+        ) from exc
 
     by_id = {row.get("id_stable", ""): row for row in old_rows if row.get("id_stable")}
     by_exact = {
@@ -150,6 +171,32 @@ def write_project_csv(path: Path, rows: list[dict[str, str]], fields: list[str])
         writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
         writer.writeheader()
         writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
+
+
+def backup_project_csv(csv_path: Path) -> Path | None:
+    """Crée une sauvegarde exacte et unique avant toute réextraction."""
+    if not csv_path.exists():
+        return None
+    is_junction = getattr(csv_path, "is_junction", None)
+    if csv_path.is_symlink() or bool(is_junction and is_junction()):
+        raise ProjectMergeError("Le CSV du projet ne peut pas être un lien ou une jonction.")
+    try:
+        before = csv_path.stat()
+        payload = csv_path.read_bytes()
+        after = csv_path.stat()
+    except OSError as exc:
+        raise ProjectMergeError("Le CSV existant ne peut pas être sauvegardé.") from exc
+    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+        raise ProjectMergeError("Le CSV existant a changé pendant sa sauvegarde.")
+
+    backup_dir = csv_path.parent / "Sauvegardes"
+    backup = backup_dir / (
+        "avant_reextraction_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".csv"
+    )
+    atomic_write_bytes(backup, payload)
+    if hashlib.sha256(backup.read_bytes()).digest() != hashlib.sha256(payload).digest():
+        raise ProjectMergeError("La sauvegarde du CSV n'est pas identique à l'original.")
+    return backup
 
 
 def _is_same_or_within(path: Path, root: Path) -> bool:
@@ -964,31 +1011,14 @@ class FangameTranslatorApp(tk.Tk):
         project.mkdir(parents=True, exist_ok=True)
         (project / "Sauvegardes").mkdir(exist_ok=True)
         (project / "Rapports").mkdir(exist_ok=True)
-        metadata = {
-            "nom": game_root.name,
-            "dossier_jeu": str(game_root.resolve()),
-            "version_logiciel": "1.0.2",
-            "mis_a_jour": datetime.now().isoformat(timespec="seconds"),
-        }
-        metadata_path = project / "projet.json"
-        metadata_temp = metadata_path.with_suffix(".json.tmp")
-        metadata_temp.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        metadata_temp.replace(metadata_path)
+        write_project_identity(project, game_root)
         self.project_dir = project
         existing = project / "textes_structures.csv"
         self.translation_csv_path = existing if existing.exists() else None
         return project
 
     def _backup_existing_project_csv(self, csv_path: Path) -> Path | None:
-        if not csv_path.exists():
-            return None
-        backup_dir = csv_path.parent / "Sauvegardes"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        backup = backup_dir / f"avant_reextraction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        shutil.copy2(csv_path, backup)
-        return backup
+        return backup_project_csv(csv_path)
 
     def choose_game(self):
         chosen = filedialog.askdirectory(title="Choisir le dossier principal de votre fangame")
@@ -998,7 +1028,7 @@ class FangameTranslatorApp(tk.Tk):
         self.game_dir = Path(chosen)
         try:
             project = self._activate_project(self.game_dir)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             self.game_dir = None
             messagebox.showerror("Dossier refusé", str(exc))
             return
@@ -1097,6 +1127,19 @@ class FangameTranslatorApp(tk.Tk):
         self.status_var.set("Analyse en cours…")
         self._clear_views()
         self._log("Début du diagnostic. Aucun fichier ne sera modifié.")
+        if self.project_dir:
+            try:
+                write_project_identity(
+                    self.project_dir,
+                    root,
+                    adapter_id=detection.adapter_id,
+                    adapter_version=detection.recognized_version,
+                )
+            except (OSError, ProjectIdentityError) as exc:
+                self._log(
+                    "Avertissement : identité du projet non mise à jour ; "
+                    f"la reconstruction restera bloquée ({exc})."
+                )
 
         data = root / "Data"
         graphics = root / "Graphics"
@@ -1450,10 +1493,34 @@ class FangameTranslatorApp(tk.Tk):
             self._log(f"Échec global : {type(exc).__name__}: {exc}")
             return
 
-        existing_backup = self._backup_existing_project_csv(csv_path)
-        merged_rows, preserved_translations, project_fields = merge_project_rows(rows, csv_path)
-        write_project_csv(csv_path, merged_rows, project_fields)
-        shutil.copy2(csv_path, compatibility_csv)
+        if not rows:
+            messagebox.showerror(
+                "Aucun texte extractible",
+                "L'extraction n'a produit aucune ligne vérifiable. Le projet existant "
+                "n'a pas été modifié.",
+            )
+            self._log("Extraction vide refusée : projet existant conservé.")
+            return
+
+        try:
+            existing_backup = self._backup_existing_project_csv(csv_path)
+            merged_rows, preserved_translations, project_fields = merge_project_rows(rows, csv_path)
+            write_project_csv(csv_path, merged_rows, project_fields)
+        except (OSError, ProjectMergeError) as exc:
+            messagebox.showerror(
+                "Projet conservé",
+                "La nouvelle extraction n'a pas remplacé le projet existant.\n\n"
+                f"{exc}",
+            )
+            self._log(f"Réextraction annulée sans écrasement : {exc}")
+            return
+        try:
+            atomic_write_bytes(compatibility_csv, csv_path.read_bytes())
+        except OSError as exc:
+            self._log(
+                "Avertissement : copie CSV de compatibilité non mise à jour "
+                f"({type(exc).__name__})."
+            )
         rows = merged_rows
 
         by_type = {}
@@ -1503,7 +1570,7 @@ class FangameTranslatorApp(tk.Tk):
             "-" * 82,
             *(f"{count:6d}  {file}" for file, count in sorted(by_file.items(), key=lambda item: (-item[1], item[0]))),
         ]
-        report_path.write_text("\n".join(report_lines), encoding="utf-8")
+        atomic_write_text(report_path, "\n".join(report_lines), encoding="utf-8")
 
         self._set_text(
             self.stats_text,

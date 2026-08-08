@@ -148,6 +148,23 @@ Si la relecture échoue, le résultat est un échec ; aucun statut vert ne peut 
 
 Le rapport indique les empreintes avant/après des fichiers ciblés sans exposer de contenu textuel.
 
+### AC-408 — Projet rattaché au fangame
+
+La reconstruction refuse un CSV associé à un autre chemin de jeu ou à un autre adaptateur.
+
+### AC-409 — Projet inchangé depuis la simulation
+
+Toute modification du CSV ou de son identité après la simulation bloque la copie et exige une nouvelle simulation.
+
+### AC-410 — Échec de finalisation
+
+Si le manifeste, le rapport ou un guide final ne peut pas être écrit, la copie porte un marqueur
+`RECONSTRUCTION_INCOMPLETE.txt` et aucun succès n'est annoncé.
+
+### AC-411 — Réextraction non destructive
+
+Une extraction vide ou un ancien CSV illisible/incompatible ne remplace jamais le projet existant.
+
 ## 7. Réparation assistée
 
 ### AC-501 — Plan avant application
