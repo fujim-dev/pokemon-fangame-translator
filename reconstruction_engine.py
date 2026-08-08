@@ -45,6 +45,7 @@ from structured_extractor import (
     text_value,
 )
 from safe_io import atomic_write_bytes, atomic_write_text
+from translation_project import TranslationProjectError, open_verified_project
 
 RPG_CODE_RE = re.compile(
     r"(\\(?:[Pp][Nn]|[Ss][Hh]|[Ww][Uu]|[NnLlGgBbRr])"
@@ -98,6 +99,7 @@ class ReconstructionPlan:
     adapter_version: str = ""
     csv_sha256: str = ""
     project_identity_sha256: str = ""
+    project_provenance_token: str = ""
     project_rows: int = 0
     translated_rows: int = 0
     untranslated_rows: int = 0
@@ -417,7 +419,11 @@ def load_project_rows(csv_path: Path) -> list[dict[str, str]]:
         return list(reader)
 
 
-def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> ReconstructionPlan:
+def _build_plan_verified_body(
+    game_root: Path,
+    csv_path: Path,
+    mode: str = "recommended",
+) -> ReconstructionPlan:
     game_root = _resolve_safe_game_root(game_root)
     csv_input = csv_path.expanduser()
     if _is_link_or_junction(csv_input) or _is_link_or_junction(csv_input.parent):
@@ -435,6 +441,7 @@ def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> Re
             csv_path,
             game_root,
             expected_adapter_id=detection.adapter_id,
+            require_extraction_provenance=True,
         )
     except ProjectIdentityError as exc:
         raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
@@ -522,6 +529,33 @@ def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> Re
     for relative in sorted({item.fichier for item in plan.items if item.decision == "applicable"}):
         plan.source_hashes[relative] = sha256_file(_resolve_contained_path(game_root, relative))
     return plan
+
+
+def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> ReconstructionPlan:
+    """Construit un plan seulement sous une garde de provenance exclusive."""
+    safe_root = _resolve_safe_game_root(game_root)
+    _require_essentials_reconstruction(safe_root)
+    csv_input = csv_path.expanduser()
+    if _is_link_or_junction(csv_input) or _is_link_or_junction(csv_input.parent):
+        raise ReconstructionError(
+            "Le CSV de traduction ou son dossier ne peut pas être un lien ou une jonction."
+        )
+    try:
+        guard = open_verified_project(
+            csv_input,
+            game_root=safe_root,
+            expected_adapter_id=ESSENTIALS_ADAPTER_ID,
+        )
+    except TranslationProjectError as exc:
+        raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
+    try:
+        plan = _build_plan_verified_body(safe_root, csv_input, mode)
+        guard.check_current()
+        assert guard.snapshot is not None
+        plan.project_provenance_token = guard.snapshot.provenance_token()
+        return plan
+    finally:
+        guard.close()
 
 
 def _ruby_string_set(value, text: str) -> RubyString:
@@ -943,7 +977,7 @@ def _write_final_artifact(
         ) from exc
 
 
-def reconstruct_copy(
+def _reconstruct_copy_verified_body(
     plan: ReconstructionPlan,
     target_root: Path,
     report_dir: Path,
@@ -965,6 +999,7 @@ def reconstruct_copy(
             csv_path,
             source_root,
             expected_adapter_id=detection.adapter_id,
+            require_extraction_provenance=True,
         )
     except ProjectIdentityError as exc:
         raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
@@ -1174,6 +1209,43 @@ def reconstruct_copy(
         report_path=str(report_path),
         manifest_path=str(manifest_path),
     )
+
+
+def reconstruct_copy(
+    plan: ReconstructionPlan,
+    target_root: Path,
+    report_dir: Path,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> ReconstructionResult:
+    """Garde le projet verrouillé et identique pendant toute la reconstruction."""
+    source_root = _resolve_safe_game_root(Path(plan.game_root))
+    csv_path = Path(plan.csv_path).expanduser()
+    try:
+        guard = open_verified_project(
+            csv_path,
+            game_root=source_root,
+            expected_adapter_id=ESSENTIALS_ADAPTER_ID,
+        )
+    except TranslationProjectError as exc:
+        raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
+    try:
+        assert guard.snapshot is not None
+        if (
+            not plan.project_provenance_token
+            or guard.snapshot.provenance_token() != plan.project_provenance_token
+        ):
+            raise ReconstructionError(
+                "La provenance du projet a changé depuis la simulation. "
+                "Relancez la simulation avant toute copie."
+            )
+        return _reconstruct_copy_verified_body(
+            plan,
+            target_root,
+            report_dir,
+            progress=progress,
+        )
+    finally:
+        guard.close()
 
 
 def save_plan(plan: ReconstructionPlan, path: Path) -> None:

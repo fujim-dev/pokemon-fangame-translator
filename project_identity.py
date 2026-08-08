@@ -119,20 +119,22 @@ def write_project_identity(
         )
         previous_adapter = str(previous.get("adapter_id") or "")
         compatible_adapter = not adapter_id or not previous_adapter or adapter_id == previous_adapter
-        if same_root and compatible_adapter:
-            adapter_id = adapter_id or previous_adapter
-            adapter_version = adapter_version or str(previous.get("adapter_version") or "")
-            source_manifest_sha256 = str(
-                previous.get("source_manifest_sha256") or ""
+        if not same_root:
+            raise ProjectIdentityError(
+                "L'identité existante appartient à un autre fangame et ne sera pas remplacée."
             )
-            extraction_manifest_name = str(
-                previous.get("extraction_manifest_name") or ""
+        if not compatible_adapter:
+            raise ProjectIdentityError(
+                "L'identité existante appartient à un autre adaptateur et ne sera pas remplacée."
             )
-            extraction_manifest_sha256 = str(
-                previous.get("extraction_manifest_sha256") or ""
-            )
-            extraction_id = str(previous.get("extraction_id") or "")
-            extracted_csv_sha256 = str(previous.get("extracted_csv_sha256") or "")
+        previous_source_manifest = str(previous.get("source_manifest_sha256") or "")
+        if previous_source_manifest:
+            # Un simple diagnostic ne constitue pas une nouvelle extraction. Il
+            # ne doit donc ni réhorodater ni réécrire une identité déjà ancrée à
+            # un manifeste, sinon une session ouverte verrait un faux conflit.
+            return destination
+        adapter_id = adapter_id or previous_adapter
+        adapter_version = adapter_version or str(previous.get("adapter_version") or "")
     atomic_write_bytes(
         destination,
         build_project_identity_bytes(
@@ -162,6 +164,7 @@ def read_project_identity(
     game_root: Path,
     *,
     expected_adapter_id: str,
+    require_extraction_provenance: bool = False,
 ) -> ProjectIdentity:
     csv_file = csv_path.expanduser()
     project_dir = csv_file.parent
@@ -251,6 +254,11 @@ def read_project_identity(
             raise ProjectIdentityError(
                 "Le manifeste d'extraction appartient à un autre fangame."
             )
+    elif require_extraction_provenance:
+        raise ProjectIdentityError(
+            "Ce projet ancien ne possède pas de manifeste de provenance fiable. "
+            "Relancez l'extraction pour conserver les traductions dans un projet vérifié."
+        )
 
     return ProjectIdentity(
         metadata_path=metadata_path.resolve(),

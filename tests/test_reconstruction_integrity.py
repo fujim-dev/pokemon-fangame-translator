@@ -12,6 +12,7 @@ from analysis.integrity import compare_snapshots, snapshot_tree
 from project_identity import write_project_identity
 from reconstruction_engine import ReconstructionError, build_plan, reconstruct_copy, simulate_plan
 from structured_extractor import stable_id
+from project_test_support import finalize_verified_essentials_project
 
 
 PROJECT_FIELDS = [
@@ -48,6 +49,9 @@ def write_project(path: Path, relative: str = "PBS/fixture.txt") -> None:
         writer = csv.DictWriter(handle, fieldnames=PROJECT_FIELDS, delimiter=";")
         writer.writeheader()
         writer.writerow({field: row.get(field, "") for field in PROJECT_FIELDS})
+    game_root = path.parent / "game"
+    if game_root.is_dir():
+        finalize_verified_essentials_project(game_root, path)
 
 
 def prepare_essentials_game(game_root: Path) -> None:

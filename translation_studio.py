@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 import random
@@ -30,6 +31,11 @@ from repair import (
     split_protected,
 )
 from safe_io import atomic_text_writer, atomic_write_bytes, atomic_write_text
+from translation_project import (
+    ESSENTIALS_ADAPTER_ID,
+    TranslationProjectError,
+    TranslationProjectSession,
+)
 
 EXPECTED_FIELDS = [
     "id_stable", "type", "fichier", "carte_id", "carte_nom",
@@ -475,7 +481,16 @@ def install_argos_english_french_model(package_module):
 class TranslationStudio(tk.Toplevel):
     PAGE_SIZE = 180
 
-    def __init__(self, master, csv_path: Path | None, colors: dict, logger=None):
+    def __init__(
+        self,
+        master,
+        csv_path: Path | None,
+        colors: dict,
+        logger=None,
+        *,
+        game_root: Path | None = None,
+        adapter_id: str = "",
+    ):
         super().__init__(master)
         self.title("Relecture intelligente — Pokémon Fangame Translator v1.0.2")
         self.geometry("1420x900")
@@ -486,6 +501,8 @@ class TranslationStudio(tk.Toplevel):
         self.base_dir = Path(__file__).resolve().parent
         self.colors = colors
         self.logger = logger or (lambda _message: None)
+        self.game_root = Path(game_root).resolve() if game_root else None
+        self.adapter_id = adapter_id
         self.initial_csv_path = Path(csv_path).resolve() if csv_path else None
         self.project_dir = self.initial_csv_path.parent if self.initial_csv_path else self.base_dir
         self.project_dir.mkdir(parents=True, exist_ok=True)
@@ -494,12 +511,35 @@ class TranslationStudio(tk.Toplevel):
         self.backup_dir = self.project_dir / "Sauvegardes"
         self.reports_dir = self.project_dir / "Rapports"
         self.resume_state_path = self.project_dir / "etat_traduction.json"
+        self.project_session: TranslationProjectSession | None = None
+        self.project_writable = True
+        self.project_conflict = ""
+        self.integrity_poll_id: str | None = None
+        if self.initial_csv_path and adapter_id == ESSENTIALS_ADAPTER_ID:
+            try:
+                self.project_session = TranslationProjectSession(
+                    self.initial_csv_path,
+                    game_root=self.game_root,
+                    expected_adapter_id=adapter_id,
+                )
+            except TranslationProjectError as exc:
+                self.destroy()
+                raise ProjectDataError(
+                    self.initial_csv_path,
+                    "projet de traduction",
+                    str(exc),
+                ) from exc
+            self.project_writable = self.project_session.writable
         try:
-            self._seed_project_files()
+            if self.project_writable:
+                self._seed_project_files()
             self.glossary = load_glossary(self.glossary_path)
             self.corrections = load_correction_memory(self.corrections_path)
-            self._recover_previous_preferences()
+            if self.project_writable:
+                self._recover_previous_preferences()
         except ProjectDataError:
+            if self.project_session is not None:
+                self.project_session.close()
             self.destroy()
             raise
 
@@ -532,6 +572,8 @@ class TranslationStudio(tk.Toplevel):
         else:
             self.after(150, self.open_csv)
         self.after(350, self.check_argos)
+        if self.project_session is not None:
+            self.integrity_poll_id = self.after(3000, self._poll_project_integrity)
 
     def _seed_project_files(self):
         """Crée les fichiers de travail persistants sans écraser l'utilisateur."""
@@ -1040,9 +1082,81 @@ class TranslationStudio(tk.Toplevel):
         tk.Label(footer, textvariable=self.offline_status_var, bg=self.colors["panel"], fg=self.colors["muted"], font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.bind(
+            "<Destroy>",
+            lambda event: self._release_project_session()
+            if event.widget is self
+            else None,
+            add="+",
+        )
         self.bind("<Control-s>", lambda _event: self.save_csv())
 
+    def _require_project_writable(self, action: str) -> bool:
+        if self.project_writable and not self.project_conflict:
+            return True
+        reason = self.project_conflict
+        if not reason and self.project_session is not None:
+            reason = self.project_session.read_only_reason
+        messagebox.showerror(
+            f"{action} bloqué(e)",
+            (reason or "La cohérence de ce projet ne peut plus être démontrée.")
+            + "\n\nAucun fichier n'a été modifié. Relancez une extraction Essentials "
+            "pour créer un projet dont la provenance est vérifiable.",
+            parent=self,
+        )
+        return False
+
+    def _mark_project_conflict(self, detail: str) -> None:
+        if self.project_conflict:
+            return
+        self.project_conflict = str(detail)
+        self.project_writable = False
+        self.offline_stop = True
+        if hasattr(self, "translate_btn"):
+            self.translate_btn.configure(state="disabled")
+        if hasattr(self, "offline_status_var"):
+            self.offline_status_var.set(
+                "Projet verrouillé : un fichier a changé hors du Studio. Aucun enregistrement autorisé."
+            )
+        self.log(f"Session verrouillée pour conflit externe : {detail}")
+
+    def _poll_project_integrity(self) -> None:
+        self.integrity_poll_id = None
+        if not self.winfo_exists() or self.project_session is None:
+            return
+        try:
+            self.project_session.check_current()
+        except TranslationProjectError as exc:
+            self._mark_project_conflict(str(exc))
+        if self.winfo_exists():
+            self.integrity_poll_id = self.after(3000, self._poll_project_integrity)
+
+    def _release_project_session(self) -> None:
+        if self.integrity_poll_id is not None:
+            try:
+                self.after_cancel(self.integrity_poll_id)
+            except tk.TclError:
+                pass
+            self.integrity_poll_id = None
+        if self.project_session is not None:
+            self.project_session.close()
+            self.project_session = None
+
+    def _serialize_csv(self) -> bytes:
+        handle = io.StringIO(newline="")
+        writer = csv.DictWriter(handle, fieldnames=self.fieldnames, delimiter=";")
+        writer.writeheader()
+        for row in self.rows:
+            writer.writerow({field: row.get(field, "") for field in self.fieldnames})
+        return handle.getvalue().encode("utf-8-sig")
+
     def _read_resume_state(self) -> dict[str, object]:
+        if self.project_session is not None:
+            try:
+                return self.project_session.read_resume_state()
+            except TranslationProjectError as exc:
+                self.log(f"Reprise bloquée : {exc}")
+                return {}
         try:
             if self.resume_state_path.exists():
                 data = json.loads(self.resume_state_path.read_text(encoding="utf-8"))
@@ -1052,6 +1166,17 @@ class TranslationStudio(tk.Toplevel):
         return {}
 
     def _write_resume_state(self, *, total: int, completed: int, remaining: int, active: bool):
+        project_conflict = getattr(self, "project_conflict", "")
+        project_session = getattr(self, "project_session", None)
+        if not getattr(self, "project_writable", True) or project_conflict:
+            raise TranslationProjectError(
+                project_conflict
+                or (
+                    project_session.read_only_reason
+                    if project_session is not None
+                    else "Projet non vérifiable"
+                )
+            )
         payload = {
             "version": "1.0",
             "active": bool(active),
@@ -1061,11 +1186,17 @@ class TranslationStudio(tk.Toplevel):
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "csv": str(self.csv_path or ""),
         }
-        atomic_write_text(
-            self.resume_state_path,
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if project_session is not None:
+            project_session.save(
+                self._serialize_csv(),
+                resume_state=payload,
+            )
+        else:
+            atomic_write_text(
+                self.resume_state_path,
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         self.resume_state = payload
 
     def _refresh_resume_button(self):
@@ -1081,6 +1212,8 @@ class TranslationStudio(tk.Toplevel):
             self.resume_button.pack_forget()
 
     def resume_last_batch(self):
+        if not self._require_project_writable("Reprise"):
+            return
         state = self._read_resume_state()
         remaining = int(state.get("remaining", 0) or 0)
         if not state.get("active") or remaining <= 0:
@@ -1120,6 +1253,21 @@ class TranslationStudio(tk.Toplevel):
     def open_csv(self):
         chosen = filedialog.askopenfilename(parent=self, title="Ouvrir les textes extraits", filetypes=[("CSV Pokémon Fangame Translator", "*.csv"), ("Tous les fichiers", "*.*")])
         if chosen:
+            if self.project_session is not None:
+                try:
+                    same_project = (
+                        Path(chosen).resolve() == self.project_session.csv_path
+                    )
+                except OSError:
+                    same_project = False
+                if not same_project:
+                    messagebox.showinfo(
+                        "Nouvelle fenêtre nécessaire",
+                        "Fermez ce Studio avant d'ouvrir un autre CSV. Le verrou du projet "
+                        "reste ainsi attaché à une seule session.",
+                        parent=self,
+                    )
+                    return
             self.load_csv(Path(chosen))
 
     def _previous_project_candidates(self) -> list[Path]:
@@ -1142,6 +1290,8 @@ class TranslationStudio(tk.Toplevel):
         return sorted(unique, key=lambda path: path.stat().st_mtime, reverse=True)
 
     def import_previous_project(self, manual: bool = False):
+        if not self._require_project_writable("Import"):
+            return 0
         candidates = self._previous_project_candidates()
         if not candidates:
             if manual:
@@ -1203,7 +1353,8 @@ class TranslationStudio(tk.Toplevel):
             imported += 1
 
         if imported:
-            self.save_csv(silent=True, save_editor=False)
+            if not self.save_csv(silent=True, save_editor=False):
+                return 0
             self.apply_filters()
             self.offline_status_var.set(f"{imported} traduction(s) récupérée(s) depuis une ancienne version.")
             messagebox.showinfo("Import terminé", f"{imported} traduction(s) ont été récupérées.", parent=self)
@@ -1213,7 +1364,13 @@ class TranslationStudio(tk.Toplevel):
 
     def load_csv(self, path: Path):
         try:
-            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            if self.project_session is not None:
+                payload = self.project_session.read_csv_payload()
+                text = payload.decode("utf-8-sig")
+                handle_context = io.StringIO(text, newline="")
+            else:
+                handle_context = path.open("r", encoding="utf-8-sig", newline="")
+            with handle_context as handle:
                 reader = csv.DictReader(handle, delimiter=";")
                 source_fields = list(reader.fieldnames or [])
                 missing = [field for field in EXPECTED_FIELDS if field not in source_fields]
@@ -1243,6 +1400,8 @@ class TranslationStudio(tk.Toplevel):
                             row["statut"] = "À traduire"
                     self.rows.append(row)
         except Exception as exc:
+            if isinstance(exc, TranslationProjectError):
+                self._mark_project_conflict(str(exc))
             messagebox.showerror("Ouverture impossible", str(exc), parent=self)
             return
 
@@ -1260,11 +1419,18 @@ class TranslationStudio(tk.Toplevel):
         self.log(f"Textes chargés : {len(self.rows)} lignes.")
         self.resume_state = self._read_resume_state()
         self._refresh_resume_button()
-        if self.resume_state.get("active") and int(self.resume_state.get("remaining", 0) or 0) > 0:
+        if not self.project_writable:
+            self.translate_btn.configure(state="disabled")
+            self.offline_status_var.set(
+                "Projet ancien ou incohérent ouvert en lecture seule. Nouvelle extraction requise."
+            )
+            if self.project_session is not None:
+                self.log(self.project_session.read_only_reason)
+        elif self.resume_state.get("active") and int(self.resume_state.get("remaining", 0) or 0) > 0:
             self.offline_status_var.set(
                 f"Un lot interrompu peut être repris : {self.resume_state.get('remaining')} texte(s) restant(s)."
             )
-        if not self.previous_import_checked:
+        if self.project_writable and not self.previous_import_checked:
             self.previous_import_checked = True
             self.after(250, lambda: self.import_previous_project(manual=False))
 
@@ -1449,6 +1615,15 @@ class TranslationStudio(tk.Toplevel):
         row["statut"] = reconciled_status(row.get("statut", ""), level)
 
     def repair_safe_problems(self):
+        if self.project_session is not None:
+            messagebox.showinfo(
+                "Réparation différée",
+                "La réparation assistée historique modifie directement le CSV. Elle reste "
+                "désactivée pendant une session de provenance afin de ne pas désynchroniser "
+                "les artefacts. Fermez le Studio et attendez son intégration transactionnelle.",
+                parent=self,
+            )
+            return
         if not self.csv_path or not self.csv_path.is_file():
             messagebox.showinfo(
                 "Aucun projet",
@@ -1536,6 +1711,14 @@ class TranslationStudio(tk.Toplevel):
         )
 
     def restore_previous_repair(self):
+        if self.project_session is not None:
+            messagebox.showinfo(
+                "Restauration différée",
+                "Cette restauration historique n'est pas encore reliée à l'état de provenance. "
+                "Elle reste bloquée pour éviter un CSV cohérent en apparence seulement.",
+                parent=self,
+            )
+            return
         if not self.csv_path or not self.csv_path.is_file():
             messagebox.showinfo("Aucun projet", "Ouvre d'abord un fichier CSV.", parent=self)
             return
@@ -1597,6 +1780,8 @@ class TranslationStudio(tk.Toplevel):
             self.review_preview_var.set("✓ Aucune alerte technique")
 
     def _save_current_to_memory(self, accepted: bool) -> bool:
+        if not self._require_project_writable("Modification"):
+            return False
         if self.current_index is None:
             return False
         row = self.rows[self.current_index]
@@ -1648,7 +1833,8 @@ class TranslationStudio(tk.Toplevel):
         else:
             propagated = 0
 
-        self.save_csv(silent=True, save_editor=False)
+        if not self.save_csv(silent=True, save_editor=False):
+            return
         self.apply_filters()
         self.select_next_row()
         self.offline_status_var.set(
@@ -1661,7 +1847,8 @@ class TranslationStudio(tk.Toplevel):
             return
         if not self._save_current_to_memory(accepted=True):
             return
-        self.save_csv(silent=True, save_editor=False)
+        if not self.save_csv(silent=True, save_editor=False):
+            return
         self.apply_filters()
         self.select_next_row()
 
@@ -1678,6 +1865,8 @@ class TranslationStudio(tk.Toplevel):
         self.on_tree_select()
 
     def save_csv(self, silent: bool = False, save_editor: bool = True):
+        if not self._require_project_writable("Enregistrement"):
+            return False
         if not self.csv_path:
             return self.save_csv_as()
         if save_editor and self.current_index is not None:
@@ -1686,6 +1875,11 @@ class TranslationStudio(tk.Toplevel):
         try:
             self._write_csv(self.csv_path)
         except Exception as exc:
+            if self.project_session is not None:
+                try:
+                    self.project_session.check_current()
+                except TranslationProjectError as conflict:
+                    self._mark_project_conflict(str(conflict))
             messagebox.showerror("Enregistrement impossible", str(exc), parent=self)
             return False
         if not silent:
@@ -1694,6 +1888,15 @@ class TranslationStudio(tk.Toplevel):
         return True
 
     def save_csv_as(self):
+        if self.project_session is not None:
+            messagebox.showinfo(
+                "Copie non rattachée refusée",
+                "Un projet vérifié doit rester à côté de son identité et de son manifeste. "
+                "Utilisez l'export des textes signalés pour produire un fichier séparé, ou "
+                "relancez une extraction dans le projet voulu.",
+                parent=self,
+            )
+            return False
         chosen = filedialog.asksaveasfilename(parent=self, title="Enregistrer les traductions", defaultextension=".csv", initialfile="textes_structures_fr.csv", filetypes=[("CSV", "*.csv")])
         if not chosen:
             return False
@@ -1701,6 +1904,16 @@ class TranslationStudio(tk.Toplevel):
         return self.save_csv()
 
     def _write_csv(self, path: Path):
+        if self.project_session is not None:
+            try:
+                is_project_csv = (
+                    path.resolve() == self.project_session.csv_path
+                )
+            except OSError:
+                is_project_csv = False
+            if is_project_csv:
+                self.project_session.save(self._serialize_csv())
+                return
         with atomic_text_writer(path, encoding="utf-8-sig", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=self.fieldnames, delimiter=";")
             writer.writeheader()
@@ -1756,6 +1969,8 @@ class TranslationStudio(tk.Toplevel):
         self.last_bulk_action = action_name
 
     def undo_last_bulk_acceptance(self):
+        if not self._require_project_writable("Annulation"):
+            return
         if not self.last_bulk_acceptance:
             messagebox.showinfo("Rien à annuler", "Aucune acceptation en lot n’a été effectuée pendant cette session.", parent=self)
             return
@@ -1774,12 +1989,15 @@ class TranslationStudio(tk.Toplevel):
         action = self.last_bulk_action
         self.last_bulk_acceptance = []
         self.last_bulk_action = ""
-        self.save_csv(silent=True, save_editor=False)
+        if not self.save_csv(silent=True, save_editor=False):
+            return
         self.apply_filters()
         self.offline_status_var.set(f"Acceptation annulée : {count} texte(s) restauré(s).")
         messagebox.showinfo("Annulation terminée", f"Le lot « {action} » a été annulé.", parent=self)
 
     def accept_all_ready(self):
+        if not self._require_project_writable("Acceptation"):
+            return
         indices = [index for index, row in enumerate(self.rows) if row.get("statut") == "Prêt"]
         if not indices:
             messagebox.showinfo("Rien à accepter", "Aucun texte n’est actuellement classé « Prêt ».", parent=self)
@@ -1794,12 +2012,15 @@ class TranslationStudio(tk.Toplevel):
         self._remember_bulk_acceptance(indices, "Accepter tous les prêts")
         for index in indices:
             self.rows[index]["statut"] = "Accepté"
-        self.save_csv(silent=True, save_editor=False)
+        if not self.save_csv(silent=True, save_editor=False):
+            return
         self.apply_filters()
         self.offline_status_var.set(f"{len(indices)} texte(s) prêts ont été acceptés en lot.")
 
 
     def recalculate_all_reviews(self):
+        if not self._require_project_writable("Recalcul"):
+            return
         changed = 0
         for row in self.rows:
             translation = row.get("traduction_fr", "").strip()
@@ -1813,7 +2034,8 @@ class TranslationStudio(tk.Toplevel):
             row["alertes_relecture"] = " | ".join(alerts)
             row["statut"] = reconciled_status(row.get("statut", ""), level)
             changed += 1
-        self.save_csv(silent=True, save_editor=False)
+        if not self.save_csv(silent=True, save_editor=False):
+            return
         self.apply_filters()
         messagebox.showinfo("Analyse terminée", f"{changed} traduction(s) analysée(s).", parent=self)
 
@@ -1821,6 +2043,8 @@ class TranslationStudio(tk.Toplevel):
         return [int(item) for item in self.tree.get_children()]
 
     def accept_ready_displayed(self):
+        if not self._require_project_writable("Acceptation"):
+            return
         indices = [i for i in self._displayed_indices() if self.rows[i].get("statut") == "Prêt"]
         if not indices:
             messagebox.showinfo("Rien à accepter", "Aucun texte prêt sur cette page.", parent=self)
@@ -1830,16 +2054,20 @@ class TranslationStudio(tk.Toplevel):
         self._remember_bulk_acceptance(indices, "Accepter les prêts affichés")
         for index in indices:
             self.rows[index]["statut"] = "Accepté"
-        self.save_csv(silent=True, save_editor=False)
+        if not self.save_csv(silent=True, save_editor=False):
+            return
         self.apply_filters()
 
     def mark_displayed_for_review(self):
+        if not self._require_project_writable("Modification"):
+            return
         indices = [i for i in self._displayed_indices() if self.rows[i].get("traduction_fr", "").strip()]
         for index in indices:
             self.rows[index]["statut"] = "À vérifier"
             note = self.rows[index].get("alertes_relecture", "")
             self.rows[index]["alertes_relecture"] = note or "Relecture demandée manuellement"
-        self.save_csv(silent=True, save_editor=False)
+        if not self.save_csv(silent=True, save_editor=False):
+            return
         self.apply_filters()
 
     def export_flagged(self):
@@ -2040,6 +2268,8 @@ class TranslationStudio(tk.Toplevel):
                 self.translate_btn.configure(text="VÉRIFIER LE NOMBRE")
 
     def start_translation(self, skip_confirmation: bool = False):
+        if not self._require_project_writable("Traduction"):
+            return
         if self.offline_running:
             return
         if not self.rows:
@@ -2068,6 +2298,18 @@ class TranslationStudio(tk.Toplevel):
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         backup = self.backup_dir / f"avant_traduction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         self._write_csv(backup)
+        try:
+            self._write_resume_state(
+                total=len(groups), completed=0, remaining=len(groups), active=True
+            )
+        except TranslationProjectError as exc:
+            self._mark_project_conflict(str(exc))
+            messagebox.showerror(
+                "Traduction annulée",
+                f"Le projet a changé avant le démarrage du lot.\n\n{exc}",
+                parent=self,
+            )
+            return
         self.offline_running = True
         self.offline_stop = False
         self.last_batch_indices = []
@@ -2075,7 +2317,6 @@ class TranslationStudio(tk.Toplevel):
         self.offline_progress["value"] = 0
         self.offline_status_var.set(f"Traduction de {len(groups)} texte(s) unique(s)…")
         self.log(f"Sauvegarde créée : {backup}")
-        self._write_resume_state(total=len(groups), completed=0, remaining=len(groups), active=True)
         self._refresh_resume_button()
         propagate_duplicates = bool(self.propagate_duplicates_var.get())
         threading.Thread(
@@ -2138,7 +2379,7 @@ class TranslationStudio(tk.Toplevel):
                     percent = position * 100 / max(1, len(groups))
                     self.after(0, lambda p=position, pc=percent, s=successes, r=filled_rows, f=len(failures): self._update_translation_progress(p, len(groups), pc, s, r, f))
                 if position % self.autosave_every == 0 or position == len(groups):
-                    if self.csv_path:
+                    if self.csv_path and self.project_session is None:
                         self._write_csv(self.csv_path)
                     self._write_resume_state(
                         total=len(groups),
@@ -2159,7 +2400,7 @@ class TranslationStudio(tk.Toplevel):
         self.offline_running = False
         self.translate_btn.configure(state="normal")
         self.offline_progress["value"] = 100 if not self.offline_stop else self.offline_progress["value"]
-        if self.csv_path:
+        if self.csv_path and self.project_session is None:
             self._write_csv(self.csv_path)
 
         self.reports_dir.mkdir(parents=True, exist_ok=True)
@@ -2190,11 +2431,29 @@ class TranslationStudio(tk.Toplevel):
             f"échantillon : {sample_size}"
         )
         self.last_batch_summary_var.set(self.last_batch_summary)
-        if not self.offline_stop:
-            self._write_resume_state(total=total, completed=total, remaining=0, active=False)
-        else:
-            remaining = max(0, total - successes - blocked_groups)
-            self._write_resume_state(total=total, completed=successes + blocked_groups, remaining=remaining, active=remaining > 0)
+        try:
+            if not self.offline_stop:
+                self._write_resume_state(
+                    total=total, completed=total, remaining=0, active=False
+                )
+            else:
+                remaining = max(0, total - successes - blocked_groups)
+                self._write_resume_state(
+                    total=total,
+                    completed=successes + blocked_groups,
+                    remaining=remaining,
+                    active=remaining > 0,
+                )
+        except TranslationProjectError as exc:
+            self._mark_project_conflict(str(exc))
+            if not self.close_requested:
+                messagebox.showerror(
+                    "Sauvegarde du lot annulée",
+                    "Le CSV précédent a été conservé car la provenance a changé.\n\n"
+                    f"{exc}",
+                    parent=self,
+                )
+            return
         self._refresh_resume_button()
         self.offline_status_var.set(
             f"Terminé : {ready_rows} prêt(s), {flagged_rows} à vérifier, {blocked_groups} bloqué(s)."
@@ -2221,7 +2480,11 @@ class TranslationStudio(tk.Toplevel):
 
     def _translation_failed(self, exc):
         self.offline_running = False
+        if isinstance(exc, TranslationProjectError):
+            self._mark_project_conflict(str(exc))
         self.translate_btn.configure(state="normal")
+        if self.project_conflict:
+            self.translate_btn.configure(state="disabled")
         self.resume_state = self._read_resume_state()
         self._refresh_resume_button()
         self.offline_progress["value"] = 0
@@ -2243,6 +2506,7 @@ class TranslationStudio(tk.Toplevel):
             self.offline_status_var.set("Arrêt demandé. Fermeture dès que les fichiers sont en sécurité…")
             self.after(100, self._close_when_idle)
             return
+        self._release_project_session()
         self.destroy()
 
     def _close_when_idle(self):
@@ -2251,4 +2515,5 @@ class TranslationStudio(tk.Toplevel):
         if self.offline_running:
             self.after(100, self._close_when_idle)
             return
+        self._release_project_session()
         self.destroy()

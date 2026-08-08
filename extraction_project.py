@@ -11,6 +11,9 @@ from structured_extractor import StructuredExtractionResult
 
 
 EXTRACTION_MANIFEST_NAME = "MANIFESTE_EXTRACTION.json"
+PROJECT_CSV_NAME = "textes_structures.csv"
+BASELINE_CSV_NAME = "textes_extraits.csv"
+EXTRACTION_REPORT_NAME = "RAPPORT_EXTRACTION_STRUCTUREE.txt"
 
 
 def extraction_id(source_manifest_sha256: str, csv_sha256: str) -> str:
@@ -39,6 +42,9 @@ def build_extraction_manifest_bytes(
         "source_count": len(result.sources),
         "sources": [source.public_record() for source in result.sources],
         "row_count": row_count,
+        "project_csv_name": PROJECT_CSV_NAME,
+        "baseline_csv_name": BASELINE_CSV_NAME,
+        "report_name": EXTRACTION_REPORT_NAME,
         "csv_sha256": csv_sha256,
         "report_sha256": report_sha256,
     }

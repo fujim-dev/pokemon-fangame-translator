@@ -207,6 +207,16 @@ Une interruption d'écriture conserve la version précédente du glossaire, de l
 mémoire de corrections et de l'état de reprise. Un fichier illisible ou des
 corrections contradictoires sont signalés sans remplacement silencieux.
 
+### AC-413 — Cycle de vie vérifiable du Studio Essentials
+
+À l'ouverture, le Studio relie le CSV principal à l'identité, au manifeste, au
+CSV témoin et au rapport de la même extraction. Une modification externe, un
+remplacement à octets identiques, un artefact absent ou incohérent, une seconde
+session ou une reprise rattachée à un autre état bloque les écritures. Le CSV,
+son état révisionné et la reprise sont publiés dans un même lot avec rollback.
+Un projet ancien sans manifeste reste consultable mais ne peut être sauvegardé,
+repris ni reconstruit avant une nouvelle extraction vérifiée.
+
 ## 7. Réparation assistée
 
 ### AC-501 — Plan avant application

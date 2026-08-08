@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import tempfile
 import unittest
@@ -15,9 +14,9 @@ from reconstruction_engine import (
     reconstruct_copy,
     simulate_plan,
 )
-from project_identity import write_project_identity
-from extraction_project import EXTRACTION_MANIFEST_NAME
-from structured_extractor import build_extraction_inventory, stable_id
+from project_identity import build_project_identity_bytes, write_project_identity
+from structured_extractor import stable_id
+from project_test_support import finalize_verified_essentials_project
 
 
 PROJECT_FIELDS = [
@@ -44,6 +43,9 @@ def write_projects(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in PROJECT_FIELDS})
+    game_root = path.parent / "game"
+    if game_root.is_dir():
+        finalize_verified_essentials_project(game_root, path)
 
 
 def write_project(path: Path, row: dict[str, str]) -> None:
@@ -87,6 +89,26 @@ def pbs_row(relative: str, source: str = "Hello", translation: str = "Bonjour") 
 
 
 class ReconstructionSafetyTests(unittest.TestCase):
+    def test_legacy_project_without_provenance_cannot_reconstruct(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_legacy_reconstruction_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            prepare_essentials_game(game_root)
+            relative = "PBS/fixture.txt"
+            (game_root / relative).write_text("Name = Hello\n", encoding="utf-8")
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row(relative))
+            (base / "projet.json").write_bytes(
+                build_project_identity_bytes(
+                    game_root,
+                    adapter_id="pokemon_essentials",
+                    adapter_version="21.1",
+                )
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "ancien|provenance"):
+                build_plan(game_root, csv_path)
+
     def test_csv_from_another_essentials_source_inventory_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_source_binding_") as temp_dir:
             base = Path(temp_dir)
@@ -95,36 +117,9 @@ class ReconstructionSafetyTests(unittest.TestCase):
             prepare_essentials_game(game_root)
             relative = "PBS/fixture.txt"
             (game_root / relative).write_text("[GLOBAL]\nName = Hello\n", encoding="utf-8")
-            source_manifest = build_extraction_inventory(
-                game_root
-            ).source_manifest_sha256
             row = pbs_row(relative)
-            row["source_manifest_sha256"] = source_manifest
             csv_path = base / "project.csv"
             write_project(csv_path, row)
-            csv_sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
-            run_id = "synthetic-extraction-id"
-            manifest = {
-                "format": "pft_essentials_extraction_v1",
-                "extraction_id": run_id,
-                "adapter_id": "pokemon_essentials",
-                "game_root": str(game_root.resolve()),
-                "source_manifest_sha256": source_manifest,
-                "csv_sha256": csv_sha256,
-            }
-            manifest_payload = json.dumps(manifest).encode("utf-8")
-            (base / EXTRACTION_MANIFEST_NAME).write_bytes(manifest_payload)
-            write_project_identity(
-                base,
-                game_root,
-                adapter_id="pokemon_essentials",
-                adapter_version="21.1",
-                source_manifest_sha256=source_manifest,
-                extraction_manifest_name=EXTRACTION_MANIFEST_NAME,
-                extraction_manifest_sha256=hashlib.sha256(manifest_payload).hexdigest(),
-                extraction_id=run_id,
-                extracted_csv_sha256=csv_sha256,
-            )
 
             accepted = build_plan(game_root, csv_path)
             self.assertEqual(1, accepted.project_rows)
@@ -138,7 +133,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
 
             row["source_manifest_sha256"] = "b" * 64
             write_project(csv_path, row)
-            with self.assertRaisesRegex(ReconstructionError, "inventaire Essentials"):
+            with self.assertRaisesRegex(ReconstructionError, "inventaire|occurrence"):
                 build_plan(game_root, csv_path)
 
     def test_blocks_windows_ambiguous_names(self) -> None:
@@ -163,10 +158,10 @@ class ReconstructionSafetyTests(unittest.TestCase):
             csv_path = base / "project.csv"
             write_project(csv_path, pbs_row(relative))
 
-            plan = build_plan(game_root, csv_path)
+            with self.assertRaisesRegex(ReconstructionError, "provenance|empreinte"):
+                build_plan(game_root, csv_path)
 
-        self.assertEqual("blocked", plan.items[0].decision)
-        self.assertIn("Chemin", plan.items[0].reason)
+            self.assertEqual("Name = Hello\n", outside.read_text(encoding="utf-8"))
 
     def test_blocks_windows_absolute_path(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_absolute_") as temp_dir:
@@ -180,10 +175,10 @@ class ReconstructionSafetyTests(unittest.TestCase):
             csv_path = base / "project.csv"
             write_project(csv_path, pbs_row(relative))
 
-            plan = build_plan(game_root, csv_path)
+            with self.assertRaisesRegex(ReconstructionError, "provenance|empreinte"):
+                build_plan(game_root, csv_path)
 
-        self.assertEqual("blocked", plan.items[0].decision)
-        self.assertIn("Chemin", plan.items[0].reason)
+            self.assertEqual("Name = Hello\n", outside.read_text(encoding="utf-8"))
 
     def test_reconstructs_synthetic_pbs_without_changing_source(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_rebuild_") as temp_dir:
@@ -420,19 +415,20 @@ class ReconstructionSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="pft_test_wrong_project_") as temp_dir:
             base = Path(temp_dir)
             selected_game = base / "selected_game"
-            other_game = base / "other_game"
+            other_game = base / "other_project" / "other_game"
             prepare_essentials_game(selected_game)
             prepare_essentials_game(other_game)
             pbs_path = selected_game / "PBS" / "fixture.txt"
             pbs_path.write_text("Name = Hello\n", encoding="utf-8")
             csv_path = base / "project.csv"
             write_project(csv_path, pbs_row("PBS/fixture.txt"))
-            write_project_identity(
-                base,
+            other_identity = write_project_identity(
+                other_game.parent,
                 other_game,
                 adapter_id="pokemon_essentials",
                 adapter_version="21.1",
             )
+            (base / "projet.json").write_bytes(other_identity.read_bytes())
 
             with self.assertRaisesRegex(ReconstructionError, "autre fangame"):
                 build_plan(selected_game, csv_path)
@@ -451,7 +447,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
             csv_path.write_bytes(csv_path.read_bytes() + b"\r\n")
             target = base / "game_VERSION_FR"
 
-            with self.assertRaisesRegex(ReconstructionError, "CSV a changé"):
+            with self.assertRaisesRegex(ReconstructionError, "CSV a (déjà été modifié|changé)"):
                 reconstruct_copy(plan, target, base / "reports")
 
             self.assertFalse(target.exists())
@@ -468,15 +464,13 @@ class ReconstructionSafetyTests(unittest.TestCase):
             write_project(csv_path, pbs_row("PBS/fixture.txt"))
             plan = simulate_plan(build_plan(game_root, csv_path))
 
-            write_project_identity(
-                base,
-                game_root,
-                adapter_id="pokemon_essentials",
-                adapter_version="version-modifiee",
-            )
+            identity_path = base / "projet.json"
+            identity = json.loads(identity_path.read_text(encoding="utf-8"))
+            identity["adapter_version"] = "version-modifiee"
+            identity_path.write_text(json.dumps(identity), encoding="utf-8")
             target = base / "game_VERSION_FR"
 
-            with self.assertRaisesRegex(ReconstructionError, "identité du projet a changé"):
+            with self.assertRaisesRegex(ReconstructionError, "provenance du projet a changé"):
                 reconstruct_copy(plan, target, base / "reports")
 
             self.assertFalse(target.exists())

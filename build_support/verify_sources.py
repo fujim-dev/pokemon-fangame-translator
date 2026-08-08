@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parent.parent
 python_files = [
     "Pokemon_Fangame_Translator.py",
     "translation_studio.py",
+    "translation_project.py",
     "reconstruction_studio.py",
     "reconstruction_engine.py",
     "structured_extractor.py",

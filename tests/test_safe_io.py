@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import safe_io
-from safe_io import atomic_copy_file, atomic_write_bundle
+from safe_io import atomic_copy_file, atomic_write_bundle, read_stable_file
 
 
 class AtomicCopyTests(unittest.TestCase):
@@ -80,6 +80,53 @@ class AtomicCopyTests(unittest.TestCase):
 
 
 class AtomicBundleTests(unittest.TestCase):
+    def test_same_bytes_replacement_is_rejected_by_expected_signature(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_atomic_bundle_identity_") as temp_dir:
+            base = Path(temp_dir)
+            destination = base / "project.csv"
+            destination.write_bytes(b"same bytes")
+            _payload, expected = read_stable_file(destination)
+            replacement = base / "replacement.csv"
+            replacement.write_bytes(b"same bytes")
+            replacement.replace(destination)
+
+            with self.assertRaisesRegex(OSError, "remplacé"):
+                atomic_write_bundle(
+                    {destination: b"new bytes"},
+                    expected_existing_sha256={destination: expected.sha256},
+                    expected_existing_signatures={destination: expected.signature},
+                )
+
+            self.assertEqual(b"same bytes", destination.read_bytes())
+
+    def test_late_guard_change_rolls_back_published_artifact(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_atomic_bundle_guard_") as temp_dir:
+            base = Path(temp_dir)
+            destination = base / "project.csv"
+            guard = base / "manifest.json"
+            destination.write_bytes(b"old csv")
+            guard.write_bytes(b"stable manifest")
+            _guard_payload, guard_state = read_stable_file(guard)
+            real_replace = safe_io._replace_file
+            calls = 0
+
+            def change_guard_after_publish(source: Path, target: Path) -> None:
+                nonlocal calls
+                calls += 1
+                real_replace(source, target)
+                if calls == 1:
+                    guard.write_bytes(b"external manifest")
+
+            with patch("safe_io._replace_file", side_effect=change_guard_after_publish):
+                with self.assertRaisesRegex(OSError, "surveillé"):
+                    atomic_write_bundle(
+                        {destination: b"new csv"},
+                        guarded_existing={guard: guard_state},
+                    )
+
+            self.assertEqual(b"old csv", destination.read_bytes())
+            self.assertEqual(b"external manifest", guard.read_bytes())
+
     def test_rollback_failure_preserves_exact_previous_artifact_for_recovery(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_atomic_bundle_failed_rollback_") as temp_dir:
             base = Path(temp_dir)

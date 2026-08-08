@@ -26,6 +26,7 @@ Pokemon_Fangame_Translator.py
 ├── flux_reinjection.py
 ├── project_identity.py
 ├── safe_io.py
+├── translation_project.py
 ├── structured_extractor.py
 │   └── ruby_marshal_reader.py
 ├── translation_studio.py
@@ -102,6 +103,13 @@ Responsabilités :
 Les CSV du studio, le glossaire, la mémoire de corrections, l'état de reprise et
 les rapports sont écrits atomiquement. Un glossaire ou une mémoire illisible ou
 contradictoire bloque le studio sans être remplacé silencieusement.
+
+Pour Pokémon Essentials, `translation_project.py` ouvre désormais une session
+exclusive liée à `projet.json`, au manifeste, au CSV témoin et au rapport
+d'extraction. Le Studio compare les champs immuables des occurrences, surveille
+les identités de fichiers et publie le CSV, son état de provenance et la reprise
+comme un lot avec rollback. Un projet ancien reste consultable en lecture seule,
+mais doit être réextrait avant sauvegarde, reprise ou reconstruction.
 
 Risques :
 
@@ -266,6 +274,13 @@ Déjà en place :
 - publication transactionnelle du CSV principal, de sa copie compatible, du
   rapport, du manifeste et de l'identité, avec détection des modifications
   concurrentes et rollback exact des artefacts déjà remplacés.
+- session de traduction Essentials exclusive avec verrou interprocessus, contrôle
+  périodique du CSV et de ses artefacts, détection des remplacements à octets
+  identiques et état de traduction révisionné ; CSV et reprise sont publiés dans
+  une transaction commune et la reconstruction exige la même provenance.
+- réextraction refusée tant que le projet est ouvert dans le Studio ; une
+  publication réussie régénère ensemble l'état de traduction et une reprise
+  inactive afin qu'aucun état d'une extraction précédente ne soit réutilisé.
 
 Encore partiel ou pas encore en place :
 
@@ -279,6 +294,10 @@ Encore partiel ou pas encore en place :
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 - limite de temps des sondes et des analyses statiques : une sonde qui se bloque
   sans lever d'exception n'est pas encore interrompue automatiquement.
+- réparation assistée historique du CSV non encore intégrée à la transaction de
+  session : elle reste volontairement bloquée pendant une session Essentials
+  vérifiée, jusqu'à ce que son plan et son rollback mettent aussi à jour l'état
+  de provenance.
 
 ## 4. Problèmes à éviter dans la v1.1
 

@@ -11,6 +11,17 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Iterator, Mapping, TextIO
 
 
+FileSignature = tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class StableFileState:
+    """Empreinte de contenu et identité d'un fichier lu sans changement."""
+
+    sha256: str
+    signature: FileSignature
+
+
 def _is_link_or_junction(path: Path) -> bool:
     try:
         if path.is_symlink():
@@ -121,7 +132,7 @@ def _copy_stream_and_hash(source_handle: BinaryIO, target_handle: BinaryIO) -> s
         digest.update(chunk)
 
 
-def _source_signature(stat_result: os.stat_result) -> tuple[int, int, int, int]:
+def _source_signature(stat_result: os.stat_result) -> FileSignature:
     return (
         stat_result.st_dev,
         stat_result.st_ino,
@@ -130,7 +141,7 @@ def _source_signature(stat_result: os.stat_result) -> tuple[int, int, int, int]:
     )
 
 
-def _read_stable_bytes_with_signature(path: Path) -> tuple[bytes, tuple[int, int, int, int]]:
+def _read_stable_bytes_with_signature(path: Path) -> tuple[bytes, FileSignature]:
     source = path.expanduser()
     if (
         not source.is_file()
@@ -161,6 +172,15 @@ def read_stable_bytes(path: Path) -> bytes:
     """Lit un fichier sans accepter un remplacement ou une redirection en cours."""
     payload, _signature = _read_stable_bytes_with_signature(path)
     return payload
+
+
+def read_stable_file(path: Path) -> tuple[bytes, StableFileState]:
+    """Lit un fichier et fige aussi son identité pour les contrôles ultérieurs."""
+    payload, signature = _read_stable_bytes_with_signature(path)
+    return payload, StableFileState(
+        sha256=hashlib.sha256(payload).hexdigest(),
+        signature=signature,
+    )
 
 
 def atomic_copy_file(
@@ -268,6 +288,8 @@ def atomic_write_bundle(
     artifacts: Mapping[Path, bytes],
     *,
     expected_existing_sha256: Mapping[Path, str | None] | None = None,
+    expected_existing_signatures: Mapping[Path, FileSignature | None] | None = None,
+    guarded_existing: Mapping[Path, StableFileState | None] | None = None,
 ) -> None:
     """Publie plusieurs artefacts atomiques ou restaure exactement l'état précédent.
 
@@ -282,11 +304,38 @@ def atomic_write_bundle(
         os.path.normcase(str(Path(path).expanduser().resolve())): expected
         for path, expected in (expected_existing_sha256 or {}).items()
     }
+    expected_signatures_by_path = {
+        os.path.normcase(str(Path(path).expanduser().resolve())): expected
+        for path, expected in (expected_existing_signatures or {}).items()
+    }
+    guarded_by_path = {
+        os.path.normcase(str(Path(path).expanduser().resolve())): (
+            Path(path).expanduser(),
+            expected,
+        )
+        for path, expected in (guarded_existing or {}).items()
+    }
+
+    def assert_guards_unchanged() -> None:
+        for path, expected in guarded_by_path.values():
+            exists, current_sha256, current_signature, _payload = _current_artifact_state(path)
+            if expected is None:
+                if exists:
+                    raise OSError("Un artefact surveillé est apparu pendant la publication.")
+                continue
+            if (
+                not exists
+                or current_sha256 != expected.sha256
+                or current_signature != expected.signature
+            ):
+                raise OSError("Un artefact surveillé a changé pendant la publication.")
+
     prepared: list[_BundleArtifact] = []
     seen: set[str] = set()
     committed: list[_BundleArtifact] = []
     preserved_rollback_paths: set[Path] = set()
     try:
+        assert_guards_unchanged()
         for requested, payload in sorted(
             artifacts.items(),
             key=lambda item: os.path.normcase(str(Path(item[0]).expanduser().resolve())),
@@ -309,6 +358,12 @@ def atomic_write_bundle(
                     raise OSError("Un artefact concurrent est apparu avant la publication.")
                 if expected is not None and previous_sha256 != expected.casefold():
                     raise OSError("Un artefact a changé depuis sa validation initiale.")
+            if identity in expected_signatures_by_path:
+                expected_signature = expected_signatures_by_path[identity]
+                if expected_signature is None and existed:
+                    raise OSError("Un artefact concurrent a remplacé une destination absente.")
+                if expected_signature is not None and previous_signature != expected_signature:
+                    raise OSError("Un artefact a été remplacé depuis sa validation initiale.")
 
             rollback_path = (
                 _write_neighbor_temporary(
@@ -332,6 +387,7 @@ def atomic_write_bundle(
                 )
             )
 
+        assert_guards_unchanged()
         for artifact in prepared:
             (
                 existed,
@@ -347,6 +403,7 @@ def atomic_write_bundle(
                 raise OSError("Un artefact a changé pendant la préparation du lot.")
             _replace_file(artifact.staged_path, artifact.destination)
             committed.append(artifact)
+        assert_guards_unchanged()
 
     except Exception as publication_error:
         rollback_errors: list[str] = []

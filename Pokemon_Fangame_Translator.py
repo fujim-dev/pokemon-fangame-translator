@@ -25,7 +25,10 @@ from reconstruction_studio import ReconstructionStudio
 from adapters import DetectionResult, GameCapability, create_default_registry
 from analysis import report_text as deep_report_text, write_analysis_reports
 from extraction_project import (
+    BASELINE_CSV_NAME,
+    EXTRACTION_REPORT_NAME,
     EXTRACTION_MANIFEST_NAME,
+    PROJECT_CSV_NAME,
     build_extraction_manifest_bytes,
     extraction_id,
 )
@@ -41,6 +44,15 @@ from safe_io import (
     atomic_write_bytes,
     atomic_write_text,
     read_stable_bytes,
+)
+from translation_project import (
+    RESUME_STATE_NAME,
+    TRANSLATION_STATE_NAME,
+    ProjectSessionLock,
+    TranslationProjectError,
+    build_resume_state_bytes,
+    build_translation_state_bytes,
+    inspect_csv_structure,
 )
 
 
@@ -972,6 +984,12 @@ class FangameTranslatorApp(tk.Tk):
                 Path(csv_path),
                 self.colors,
                 logger=self._log,
+                game_root=self.game_dir,
+                adapter_id=(
+                    self.detection_result.adapter_id
+                    if self.detection_result is not None
+                    else ""
+                ),
             )
         except ProjectDataError as exc:
             messagebox.showerror("Fichier de traduction protégé", str(exc))
@@ -1505,9 +1523,9 @@ class FangameTranslatorApp(tk.Tk):
 
         out_dir = self._outputs_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = out_dir / "textes_structures.csv"
-        compatibility_csv = out_dir / "textes_extraits.csv"
-        report_path = out_dir / "RAPPORT_EXTRACTION_STRUCTUREE.txt"
+        csv_path = out_dir / PROJECT_CSV_NAME
+        compatibility_csv = out_dir / BASELINE_CSV_NAME
+        report_path = out_dir / EXTRACTION_REPORT_NAME
 
         self.progress["value"] = 0
         self.progress_percent.set("0%")
@@ -1670,7 +1688,7 @@ class FangameTranslatorApp(tk.Tk):
             )
             manifest_sha256 = hashlib.sha256(manifest_payload).hexdigest()
             artifacts[out_dir / EXTRACTION_MANIFEST_NAME] = manifest_payload
-            artifacts[out_dir / PROJECT_METADATA_NAME] = build_project_identity_bytes(
+            identity_payload = build_project_identity_bytes(
                 root,
                 adapter_id="pokemon_essentials",
                 adapter_version=adapter_version,
@@ -1680,11 +1698,54 @@ class FangameTranslatorApp(tk.Tk):
                 extraction_id=run_id,
                 extracted_csv_sha256=csv_sha256,
             )
+            artifacts[out_dir / PROJECT_METADATA_NAME] = identity_payload
+            immutable_rows_sha256 = inspect_csv_structure(
+                csv_payload
+            ).immutable_sha256
+            artifacts[out_dir / TRANSLATION_STATE_NAME] = build_translation_state_bytes(
+                revision=1,
+                csv_name=csv_path.name,
+                csv_sha256=csv_sha256,
+                identity_sha256=hashlib.sha256(identity_payload).hexdigest(),
+                manifest_sha256=manifest_sha256,
+                baseline_sha256=csv_sha256,
+                report_sha256=hashlib.sha256(report_payload).hexdigest(),
+                source_manifest_sha256=source_manifest_sha256,
+                extraction_id=run_id,
+                immutable_rows_sha256=immutable_rows_sha256,
+            )
+            artifacts[out_dir / RESUME_STATE_NAME] = build_resume_state_bytes(
+                {
+                    "version": "1.0",
+                    "active": False,
+                    "total": 0,
+                    "completed": 0,
+                    "remaining": 0,
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    "csv": str(csv_path),
+                },
+                csv_name=csv_path.name,
+                csv_sha256=csv_sha256,
+                source_manifest_sha256=source_manifest_sha256,
+                extraction_id=run_id,
+            )
         expected_csv_sha256 = (
             hashlib.sha256(existing_payload).hexdigest()
             if existing_payload is not None
             else None
         )
+        publication_lock = ProjectSessionLock(out_dir)
+        try:
+            publication_lock.acquire()
+        except TranslationProjectError as exc:
+            messagebox.showerror(
+                "Projet déjà ouvert",
+                "La nouvelle extraction est prête, mais le Studio utilise encore ce projet. "
+                "Fermez le Studio puis relancez l'extraction. Aucun artefact existant n'a "
+                f"été remplacé.\n\n{exc}",
+            )
+            self._log(f"Publication d'extraction bloquée par une session active : {exc}")
+            return
         try:
             atomic_write_bundle(
                 artifacts,
@@ -1706,6 +1767,8 @@ class FangameTranslatorApp(tk.Tk):
             )
             self._log(f"Publication de l'extraction annulée avec rollback : {exc}")
             return
+        finally:
+            publication_lock.close()
 
         self._set_text(
             self.stats_text,
