@@ -8,6 +8,18 @@ from structured_extractor import extract_structured
 from analysis.deep_analyzer import analyze_game
 
 
+def _is_link_or_junction(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction and is_junction():
+            return True
+        return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x0400)
+    except OSError:
+        return False
+
+
 class PokemonEssentialsAdapter:
     adapter_id = "pokemon_essentials"
     display_name = "Pokémon Essentials classique"
@@ -49,7 +61,11 @@ class PokemonEssentialsAdapter:
             re.compile(rb"ESSENTIALS_VERSION.{0,30}?(\d+(?:\.\d+)*)", re.I),
         )
         for path in candidates:
-            if not path.is_file():
+            if (
+                not path.is_file()
+                or _is_link_or_junction(path)
+                or _is_link_or_junction(path.parent)
+            ):
                 continue
             try:
                 raw = path.read_bytes()[:8_000_000]
@@ -59,16 +75,36 @@ class PokemonEssentialsAdapter:
                 match = pattern.search(raw)
                 if match:
                     return match.group(1).decode("ascii", "ignore")
-        return "inconnue (structure PBS détectée)" if (root / "PBS").is_dir() else "inconnue"
+        pbs = root / "PBS"
+        return (
+            "inconnue (structure PBS détectée)"
+            if pbs.is_dir() and not _is_link_or_junction(pbs)
+            else "inconnue"
+        )
 
     def probe(self, root: Path) -> DetectionResult:
-        root = root.expanduser().resolve()
+        root_input = root.expanduser()
+        if not root_input.is_dir() or _is_link_or_junction(root_input):
+            return DetectionResult(
+                adapter_id=self.adapter_id,
+                display_name=self.display_name,
+                confidence=0,
+                capabilities=frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
+                warnings=("Dossier Essentials absent ou redirigé.",),
+                adapter_recognized=False,
+                write_actions_allowed=False,
+            )
+        root = root_input.resolve()
         data = root / "Data"
         evidence: list[DetectionEvidence] = []
 
         def is_nonempty_file(path: Path) -> bool:
             try:
-                return path.is_file() and path.stat().st_size > 0
+                return (
+                    path.is_file()
+                    and not _is_link_or_junction(path)
+                    and path.stat().st_size > 0
+                )
             except OSError:
                 return False
 
@@ -84,21 +120,24 @@ class PokemonEssentialsAdapter:
                     )
                 )
 
-        game_exe = (root / "Game.exe").is_file()
-        game_ini = (root / "Game.ini").is_file()
-        data_dir = data.is_dir()
-        rmxp_database = (data / "System.rxdata").is_file() or (data / "MapInfos.rxdata").is_file()
+        game_exe = is_nonempty_file(root / "Game.exe")
+        game_ini = is_nonempty_file(root / "Game.ini")
+        data_dir = data.is_dir() and not _is_link_or_junction(data)
+        rmxp_database = is_nonempty_file(data / "System.rxdata") or is_nonempty_file(
+            data / "MapInfos.rxdata"
+        )
         map_count = (
             sum(
                 1
                 for path in data.glob("Map*.rxdata")
-                if path.is_file() and re.fullmatch(r"Map\d{3,4}\.rxdata", path.name, re.I)
+                if is_nonempty_file(path)
+                and re.fullmatch(r"Map\d{3,4}\.rxdata", path.name, re.I)
             )
             if data_dir
             else 0
         )
         pbs = root / "PBS"
-        pbs_dir = pbs.is_dir()
+        pbs_dir = pbs.is_dir() and not _is_link_or_junction(pbs)
         pbs_content = pbs_dir and any(
             is_nonempty_file(pbs / name)
             for name in ("pokemon.txt", "moves.txt", "items.txt", "metadata.txt", "types.txt")
@@ -108,10 +147,51 @@ class PokemonEssentialsAdapter:
             for name in ("messages.dat", "messages_game.dat", "messages_core.dat")
         )
         plugin_scripts = is_nonempty_file(data / "PluginScripts.rxdata")
-        pokemon_graphics = any(
-            path.is_dir()
+        graphics = root / "Graphics"
+        pokemon_graphics = not _is_link_or_junction(graphics) and any(
+            path.is_dir() and not _is_link_or_junction(path)
             for path in (root / "Graphics" / "Pokemon", root / "Graphics" / "Battlers")
         )
+
+        redirected_markers = [
+            relative
+            for relative, path in (
+                ("Game.exe", root / "Game.exe"),
+                ("Game.ini", root / "Game.ini"),
+                ("Data/", data),
+                ("Data/System.rxdata", data / "System.rxdata"),
+                ("Data/MapInfos.rxdata", data / "MapInfos.rxdata"),
+                ("Data/messages.dat", data / "messages.dat"),
+                ("Data/messages_game.dat", data / "messages_game.dat"),
+                ("Data/messages_core.dat", data / "messages_core.dat"),
+                ("Data/Scripts.rxdata", data / "Scripts.rxdata"),
+                ("Data/PluginScripts.rxdata", data / "PluginScripts.rxdata"),
+                ("PBS/", pbs),
+                ("Graphics/", graphics),
+                ("Graphics/Pokemon/", graphics / "Pokemon"),
+                ("Graphics/Battlers/", graphics / "Battlers"),
+            )
+            if _is_link_or_junction(path)
+        ]
+        redirected_markers.extend(
+            f"PBS/{name}"
+            for name in ("pokemon.txt", "moves.txt", "items.txt", "metadata.txt", "types.txt")
+            if _is_link_or_junction(pbs / name)
+        )
+        if data_dir:
+            redirected_markers.extend(
+                path.relative_to(root).as_posix()
+                for path in data.glob("Map*.rxdata")
+                if _is_link_or_junction(path)
+            )
+        if redirected_markers:
+            warnings = [
+                "Indices Essentials redirigés par lien ou jonction : "
+                + ", ".join(sorted(set(redirected_markers), key=str.casefold))
+                + "."
+            ]
+        else:
+            warnings = []
 
         add("game_exe", "Game.exe", game_exe, 10, "Exécutable RPG Maker XP détecté.")
         add("game_ini", "Game.ini", game_ini, 10, "Configuration RPG Maker détectée.")
@@ -126,9 +206,13 @@ class PokemonEssentialsAdapter:
         core_detected = game_exe and game_ini and data_dir and rmxp_database
         essentials_markers = sum((pbs_content, message_bank, plugin_scripts, pokemon_graphics))
         strong_markers = sum((pbs_content, message_bank, plugin_scripts))
-        recognized = core_detected and strong_markers >= 1 and essentials_markers >= 2
+        recognized = (
+            core_detected
+            and strong_markers >= 1
+            and essentials_markers >= 2
+            and not redirected_markers
+        )
         confidence = min(100, sum(item.weight for item in evidence))
-        warnings: list[str] = []
         if not core_detected:
             warnings.append("Structure RPG Maker XP classique incomplète.")
         if essentials_markers < 2:

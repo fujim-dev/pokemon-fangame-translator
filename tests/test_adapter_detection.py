@@ -33,6 +33,15 @@ class StaticAdapter:
         )
 
 
+class FailingAdapter:
+    adapter_id = "failing"
+    display_name = "Adaptateur synthétique défaillant"
+
+    def probe(self, root: Path) -> DetectionResult:
+        del root
+        raise OSError("chemin privé volontairement absent du message public")
+
+
 class FixedRegistry:
     def __init__(self, result: DetectionResult):
         self.result = result
@@ -121,6 +130,63 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertEqual(result.adapter_id, "unknown")
             self.assertFalse(result.write_actions_allowed)
 
+    def test_redirected_game_root_is_blocked_before_adapter_probes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "JeuRedirige"
+            root.mkdir()
+
+            with (
+                patch("adapters.registry._is_link_or_junction", return_value=True),
+                patch.object(PokemonEssentialsAdapter, "probe") as essentials_probe,
+            ):
+                result = create_default_registry().detect(root)
+
+            self.assertEqual(result.adapter_id, "unknown")
+            self.assertFalse(result.write_actions_allowed)
+            self.assertEqual(
+                result.capabilities,
+                frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
+            )
+            self.assertTrue(any("redirig" in warning.casefold() for warning in result.warnings))
+            essentials_probe.assert_not_called()
+
+    def test_redirected_essentials_marker_blocks_detection_and_direct_extraction(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "JeuTest"
+            self._write(root / "Game.exe")
+            self._write(root / "Game.ini")
+            self._write(root / "Data" / "System.rxdata")
+            self._write(root / "Data" / "Map001.rxdata")
+            self._write(root / "Data" / "messages_game.dat")
+            self._write(root / "PBS" / "pokemon.txt", b"Pokemon Essentials v21.1")
+            redirected = root / "PBS"
+
+            def marks_pbs_as_redirected(path: Path) -> bool:
+                return path == redirected
+
+            with patch(
+                "adapters.pokemon_essentials._is_link_or_junction",
+                side_effect=marks_pbs_as_redirected,
+            ):
+                result = create_default_registry().detect(root)
+
+            self.assertEqual(result.adapter_id, "unknown")
+            self.assertFalse(result.write_actions_allowed)
+            self.assertTrue(any("redirig" in warning.casefold() for warning in result.warnings))
+            self.assertNotEqual("21.1", result.recognized_version)
+
+            with (
+                patch(
+                    "adapters.pokemon_essentials._is_link_or_junction",
+                    side_effect=marks_pbs_as_redirected,
+                ),
+                patch("adapters.pokemon_essentials.extract_structured") as extractor,
+            ):
+                with self.assertRaisesRegex(AdapterOperationBlocked, "bloqu"):
+                    PokemonEssentialsAdapter().extract(root)
+
+            extractor.assert_not_called()
+
     def test_close_scores_are_reported_as_ambiguous(self):
         registry = AdapterRegistry(
             (StaticAdapter("adapter_a", 90), StaticAdapter("adapter_b", 85)),
@@ -133,6 +199,22 @@ class AdapterDetectionTests(unittest.TestCase):
         self.assertTrue(result.ambiguous)
         self.assertFalse(result.write_actions_allowed)
         self.assertTrue(any("ambigu" in warning.casefold() for warning in result.warnings))
+
+    def test_probe_failure_keeps_the_registry_read_only_without_raw_error_details(self):
+        registry = AdapterRegistry((StaticAdapter("adapter_valide", 95), FailingAdapter()))
+
+        result = registry.detect(Path("."))
+
+        self.assertEqual(result.adapter_id, "unknown")
+        self.assertFalse(result.write_actions_allowed)
+        self.assertEqual(
+            result.capabilities,
+            frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
+        )
+        warning = " ".join(result.warnings)
+        self.assertIn("Détection incomplète", warning)
+        self.assertIn("OSError", warning)
+        self.assertNotIn("chemin privé", warning)
 
     def test_unknown_adapter_refuses_extraction_even_if_called_directly(self):
         with self.assertRaises(AdapterOperationBlocked):

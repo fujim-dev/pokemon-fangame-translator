@@ -197,6 +197,11 @@ Déjà en place :
 - contrat commun de détection et de capacités ;
 - registre avec seuil de confiance et refus des scores ambigus ;
 - détection Essentials fondée sur plusieurs indices réels ;
+- refus central d'une racine de fangame redirigée avant l'appel des adaptateurs,
+  et déclassement en lecture seule des structures Essentials dont un indice
+  critique est un lien ou une jonction ;
+- détection incomplète si une sonde d'adaptateur échoue : aucun autre profil
+  n'est choisi par défaut et toutes les actions d'écriture restent bloquées ;
 - `UnknownAdapter` limité à l'analyse en lecture seule ;
 - extraction Essentials déléguée à l'adaptateur ;
 - boutons et commandes sensibles bloqués pour les structures inconnues ;

@@ -62,6 +62,19 @@ Un dossier nommé « Pokemon Flux » sans structure Flux ne doit pas être recon
 
 L'interface ne présente que les actions autorisées par l'adaptateur.
 
+### AC-107 — Racines et indices redirigés
+
+Une racine de fangame, un fichier ou un dossier critique utilisé comme indice
+de détection qui est un lien symbolique ou une jonction ne peut pas autoriser
+l'extraction, la traduction ou la reconstruction. La détection reste en lecture
+seule et un appel direct à l'extraction est également refusé.
+
+### AC-108 — Échec d'une sonde d'adaptateur
+
+Si une sonde échoue, le registre ne choisit pas silencieusement un autre moteur.
+Il retourne un profil en lecture seule, signale une détection incomplète sans
+exposer le détail brut de l'exception et bloque toutes les actions d'écriture.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

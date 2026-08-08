@@ -8,6 +8,18 @@ from .pokemon_flux import PokemonFluxAdapter
 from .unknown import UnknownAdapter
 
 
+def _is_link_or_junction(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction and is_junction():
+            return True
+        return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x0400)
+    except OSError:
+        return False
+
+
 class AdapterRegistry:
     def __init__(
         self,
@@ -20,11 +32,27 @@ class AdapterRegistry:
         self.confidence_threshold = confidence_threshold
         self.ambiguity_margin = ambiguity_margin
 
-    def _unknown_from(self, candidate: DetectionResult | None, *, ambiguous: bool = False) -> DetectionResult:
+    def _unknown_from(
+        self,
+        candidate: DetectionResult | None,
+        *,
+        ambiguous: bool = False,
+        warning: str = "",
+    ) -> DetectionResult:
         base = UnknownAdapter().probe(Path("."))
         if candidate is None:
-            return base
-        warning = (
+            if not warning:
+                return base
+            return DetectionResult(
+                adapter_id=base.adapter_id,
+                display_name=base.display_name,
+                confidence=0,
+                capabilities=base.capabilities,
+                warnings=(warning, *base.warnings),
+                adapter_recognized=False,
+                write_actions_allowed=False,
+            )
+        primary_warning = warning or (
             "Détection ambiguë : plusieurs adaptateurs ont des scores trop proches."
             if ambiguous
             else "Confiance insuffisante : actions d'écriture bloquées."
@@ -35,7 +63,7 @@ class AdapterRegistry:
             confidence=candidate.confidence,
             capabilities=frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
             evidence=candidate.evidence,
-            warnings=(warning, *candidate.warnings),
+            warnings=(primary_warning, *candidate.warnings),
             recognized_version=candidate.recognized_version,
             adapter_recognized=False,
             write_actions_allowed=False,
@@ -43,11 +71,39 @@ class AdapterRegistry:
         )
 
     def detect(self, root: Path) -> DetectionResult:
-        results = sorted(
-            (adapter.probe(root) for adapter in self.adapters),
-            key=lambda result: result.confidence,
-            reverse=True,
-        )
+        root_input = root.expanduser()
+        if not root_input.is_dir():
+            return self._unknown_from(
+                None,
+                warning="Dossier de fangame absent ou inaccessible : actions d'écriture bloquées.",
+            )
+        if _is_link_or_junction(root_input):
+            return self._unknown_from(
+                None,
+                warning=(
+                    "Dossier de fangame redirigé par un lien ou une jonction : "
+                    "actions d'écriture bloquées."
+                ),
+            )
+        results: list[DetectionResult] = []
+        probe_failures: list[str] = []
+        for adapter in self.adapters:
+            try:
+                results.append(adapter.probe(root))
+            except Exception as exc:
+                probe_failures.append(
+                    f"{adapter.display_name} ({type(exc).__name__})"
+                )
+        results.sort(key=lambda result: result.confidence, reverse=True)
+        if probe_failures:
+            candidate = results[0] if results else None
+            return self._unknown_from(
+                candidate,
+                warning=(
+                    "Détection incomplète : une ou plusieurs sondes d'adaptateur ont échoué "
+                    f"({', '.join(probe_failures)}). Actions d'écriture bloquées."
+                ),
+            )
         if not results:
             return self._unknown_from(None)
 
