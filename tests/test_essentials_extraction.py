@@ -107,18 +107,32 @@ class EssentialsExtractionIntegrityTests(unittest.TestCase):
 
     def test_source_replaced_between_inventory_and_snapshot_is_refused(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_essentials_replace_") as temp_dir:
-            root = Path(temp_dir) / "game"
-            prepare_essentials_game(root)
-            pbs = root / "PBS" / "pokemon.txt"
+            actual_root = Path(temp_dir) / "game"
+            prepare_essentials_game(actual_root)
+            alias_parent = Path(temp_dir) / "path_alias"
+            alias_parent.mkdir()
+            root = alias_parent / ".." / actual_root.name
+            pbs_alias = root / "PBS" / "pokemon.txt"
+            pbs = actual_root.resolve() / "PBS" / "pokemon.txt"
             original = pbs.read_bytes()
+            original_sha256 = hashlib.sha256(original).hexdigest()
             real_copy = structured_extractor.atomic_copy_file
             changed = False
+            expected_sha256 = ""
+            replacement_sha256 = ""
+
+            self.assertNotEqual(pbs_alias, pbs)
+            self.assertEqual(pbs_alias.resolve(), pbs)
 
             def replace_before_copy(source: Path, destination: Path, **kwargs) -> None:
-                nonlocal changed
-                if Path(source) == pbs and not changed:
+                nonlocal changed, expected_sha256, replacement_sha256
+                if Path(source).resolve() == pbs and not changed:
                     changed = True
-                    pbs.write_bytes(original + b"# changed before copy\n")
+                    expected_sha256 = str(kwargs.get("expected_sha256") or "")
+                    replacement = pbs.with_name("pokemon.replacement")
+                    replacement.write_bytes(original + b"# changed before copy\n")
+                    replacement.replace(pbs)
+                    replacement_sha256 = hashlib.sha256(pbs.read_bytes()).hexdigest()
                 real_copy(source, destination, **kwargs)
 
             with patch(
@@ -127,6 +141,10 @@ class EssentialsExtractionIntegrityTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ExtractionIntegrityError, "chang|empreinte"):
                     extract_structured_verified(root)
+
+            self.assertTrue(changed, "Le remplacement synthétique doit réellement avoir lieu.")
+            self.assertEqual(original_sha256, expected_sha256)
+            self.assertNotEqual(original_sha256, replacement_sha256)
 
     def test_new_source_appearing_during_parsing_invalidates_whole_extraction(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_essentials_appeared_") as temp_dir:
