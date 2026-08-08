@@ -5,6 +5,7 @@ from __future__ import annotations
 import configparser
 import csv
 import hashlib
+import io
 import json
 import os
 import platform
@@ -23,8 +24,24 @@ from translation_studio import ProjectDataError, TranslationStudio
 from reconstruction_studio import ReconstructionStudio
 from adapters import DetectionResult, GameCapability, create_default_registry
 from analysis import report_text as deep_report_text, write_analysis_reports
-from project_identity import ProjectIdentityError, write_project_identity
-from safe_io import atomic_text_writer, atomic_write_bytes, atomic_write_text
+from extraction_project import (
+    EXTRACTION_MANIFEST_NAME,
+    build_extraction_manifest_bytes,
+    extraction_id,
+)
+from project_identity import (
+    PROJECT_METADATA_NAME,
+    ProjectIdentityError,
+    build_project_identity_bytes,
+    write_project_identity,
+)
+from safe_io import (
+    atomic_text_writer,
+    atomic_write_bundle,
+    atomic_write_bytes,
+    atomic_write_text,
+    read_stable_bytes,
+)
 
 
 APP_TITLE = "Pokémon Fangame Translator v1.0.2 — Bêta publique"
@@ -94,11 +111,16 @@ def project_directory_for_game(game_root: Path, projects_root: Path | None = Non
     return project
 
 
-def merge_project_rows(new_rows: list[dict[str, str]], existing_csv: Path | None) -> tuple[list[dict[str, str]], int, list[str]]:
+def merge_project_rows(
+    new_rows: list[dict[str, str]],
+    existing_csv: Path | None,
+    *,
+    existing_payload: bytes | None = None,
+) -> tuple[list[dict[str, str]], int, list[str]]:
     """Réinjecte uniquement le travail de traduction dans une nouvelle extraction."""
     base_fields = list(new_rows[0].keys()) if new_rows else []
     fields = base_fields + [field for field in PROJECT_EXTRA_FIELDS if field not in base_fields]
-    if not existing_csv or not existing_csv.exists():
+    if not existing_csv or (existing_payload is None and not existing_csv.exists()):
         return [{field: row.get(field, "") for field in fields} for row in new_rows], 0, fields
 
     if not new_rows:
@@ -107,7 +129,9 @@ def merge_project_rows(new_rows: list[dict[str, str]], existing_csv: Path | None
         )
 
     try:
-        with existing_csv.open("r", encoding="utf-8-sig", newline="") as handle:
+        payload = existing_payload if existing_payload is not None else read_stable_bytes(existing_csv)
+        text = payload.decode("utf-8-sig")
+        with io.StringIO(text, newline="") as handle:
             reader = csv.DictReader(handle, delimiter=";")
             missing = sorted(PROJECT_REQUIRED_FIELDS - set(reader.fieldnames or []))
             if missing:
@@ -166,28 +190,37 @@ def merge_project_rows(new_rows: list[dict[str, str]], existing_csv: Path | None
     return merged, preserved, fields
 
 
+def serialize_project_csv(rows: list[dict[str, str]], fields: list[str]) -> bytes:
+    handle = io.StringIO(newline="")
+    writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
+    writer.writeheader()
+    writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
+    return handle.getvalue().encode("utf-8-sig")
+
+
 def write_project_csv(path: Path, rows: list[dict[str, str]], fields: list[str]) -> None:
-    with atomic_text_writer(path, encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
-        writer.writeheader()
-        writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
+    atomic_write_bytes(path, serialize_project_csv(rows, fields))
 
 
-def backup_project_csv(csv_path: Path) -> Path | None:
+def backup_project_csv(
+    csv_path: Path,
+    *,
+    existing_payload: bytes | None = None,
+) -> Path | None:
     """Crée une sauvegarde exacte et unique avant toute réextraction."""
     if not csv_path.exists():
         return None
-    is_junction = getattr(csv_path, "is_junction", None)
-    if csv_path.is_symlink() or bool(is_junction and is_junction()):
-        raise ProjectMergeError("Le CSV du projet ne peut pas être un lien ou une jonction.")
     try:
-        before = csv_path.stat()
-        payload = csv_path.read_bytes()
-        after = csv_path.stat()
+        current_payload = read_stable_bytes(csv_path)
     except OSError as exc:
         raise ProjectMergeError("Le CSV existant ne peut pas être sauvegardé.") from exc
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise ProjectMergeError("Le CSV existant a changé pendant sa sauvegarde.")
+    if (
+        existing_payload is not None
+        and hashlib.sha256(current_payload).digest()
+        != hashlib.sha256(existing_payload).digest()
+    ):
+        raise ProjectMergeError("Le CSV existant a changé depuis sa validation.")
+    payload = existing_payload if existing_payload is not None else current_payload
 
     backup_dir = csv_path.parent / "Sauvegardes"
     backup = backup_dir / (
@@ -1490,7 +1523,17 @@ class FangameTranslatorApp(tk.Tk):
 
         try:
             adapter = self.adapter_registry.adapter_for(self.detection_result)
-            rows, errors = adapter.extract(root, progress=progress, logger=self._log)
+            extract_with_provenance = getattr(adapter, "extract_with_provenance", None)
+            if callable(extract_with_provenance):
+                extraction_result = extract_with_provenance(
+                    root,
+                    progress=progress,
+                    logger=self._log,
+                )
+                rows, errors = extraction_result.rows, extraction_result.errors
+            else:
+                extraction_result = None
+                rows, errors = adapter.extract(root, progress=progress, logger=self._log)
         except Exception as exc:
             messagebox.showerror(
                 "Extraction impossible",
@@ -1508,10 +1551,19 @@ class FangameTranslatorApp(tk.Tk):
             self._log("Extraction vide refusée : projet existant conservé.")
             return
 
+        existing_payload: bytes | None = None
         try:
-            existing_backup = self._backup_existing_project_csv(csv_path)
-            merged_rows, preserved_translations, project_fields = merge_project_rows(rows, csv_path)
-            write_project_csv(csv_path, merged_rows, project_fields)
+            if csv_path.exists():
+                existing_payload = read_stable_bytes(csv_path)
+            existing_backup = backup_project_csv(
+                csv_path,
+                existing_payload=existing_payload,
+            )
+            merged_rows, preserved_translations, project_fields = merge_project_rows(
+                rows,
+                csv_path,
+                existing_payload=existing_payload,
+            )
         except (OSError, ProjectMergeError) as exc:
             messagebox.showerror(
                 "Projet conservé",
@@ -1520,14 +1572,9 @@ class FangameTranslatorApp(tk.Tk):
             )
             self._log(f"Réextraction annulée sans écrasement : {exc}")
             return
-        try:
-            atomic_write_bytes(compatibility_csv, csv_path.read_bytes())
-        except OSError as exc:
-            self._log(
-                "Avertissement : copie CSV de compatibilité non mise à jour "
-                f"({type(exc).__name__})."
-            )
         rows = merged_rows
+        csv_payload = serialize_project_csv(rows, project_fields)
+        csv_sha256 = hashlib.sha256(csv_payload).hexdigest()
 
         by_type = {}
         by_file = {}
@@ -1542,6 +1589,16 @@ class FangameTranslatorApp(tk.Tk):
         unique_texts = len({row["texte_source"] for row in rows})
         duplicates = len(rows) - unique_texts
         protected = sum(1 for row in rows if row["codes_proteges"])
+        source_manifest_sha256 = (
+            extraction_result.source_manifest_sha256
+            if extraction_result is not None
+            else ""
+        )
+        run_id = (
+            extraction_id(source_manifest_sha256, csv_sha256)
+            if source_manifest_sha256
+            else ""
+        )
 
         report_lines = [
             "POKÉMON FANGAME TRANSLATOR v1.0.2 — RAPPORT D'EXTRACTION STRUCTURÉE",
@@ -1557,6 +1614,9 @@ class FangameTranslatorApp(tk.Tk):
             f"Lignes avec commandes protégées : {protected}",
             f"Traductions conservées du projet : {preserved_translations}",
             f"Sauvegarde avant réextraction : {existing_backup or 'Aucune'}",
+            f"Identifiant d'extraction : {run_id or 'non disponible'}",
+            f"Empreinte de l'inventaire source : {source_manifest_sha256 or 'non disponible'}",
+            f"Empreinte du CSV extrait : {csv_sha256}",
             "",
             "SÉCURITÉ",
             "-" * 82,
@@ -1568,6 +1628,18 @@ class FangameTranslatorApp(tk.Tk):
             "-" * 82,
             *(errors or ["Aucune erreur."]),
             "",
+            "INVENTAIRE DES SOURCES UTILISÉES",
+            "-" * 82,
+            *(
+                [
+                    f"{source.kind:12s}  {source.relative_path}  "
+                    f"{source.size} octet(s)  SHA-256 {source.sha256}"
+                    for source in extraction_result.sources
+                ]
+                if extraction_result is not None
+                else ["Provenance détaillée non fournie par cet adaptateur."]
+            ),
+            "",
             "DÉTAIL PAR TYPE",
             "-" * 82,
             *(f"{count:6d}  {kind}" for kind, count in sorted(by_type.items(), key=lambda item: (-item[1], item[0]))),
@@ -1576,7 +1648,64 @@ class FangameTranslatorApp(tk.Tk):
             "-" * 82,
             *(f"{count:6d}  {file}" for file, count in sorted(by_file.items(), key=lambda item: (-item[1], item[0]))),
         ]
-        atomic_write_text(report_path, "\n".join(report_lines), encoding="utf-8")
+        report_payload = "\n".join(report_lines).encode("utf-8")
+        artifacts = {
+            csv_path: csv_payload,
+            compatibility_csv: csv_payload,
+            report_path: report_payload,
+        }
+        if extraction_result is not None:
+            adapter_version = (
+                self.detection_result.recognized_version
+                if self.detection_result is not None
+                else ""
+            )
+            manifest_payload = build_extraction_manifest_bytes(
+                extraction_result,
+                game_root=root,
+                adapter_version=adapter_version,
+                csv_sha256=csv_sha256,
+                report_sha256=hashlib.sha256(report_payload).hexdigest(),
+                row_count=len(rows),
+            )
+            manifest_sha256 = hashlib.sha256(manifest_payload).hexdigest()
+            artifacts[out_dir / EXTRACTION_MANIFEST_NAME] = manifest_payload
+            artifacts[out_dir / PROJECT_METADATA_NAME] = build_project_identity_bytes(
+                root,
+                adapter_id="pokemon_essentials",
+                adapter_version=adapter_version,
+                source_manifest_sha256=source_manifest_sha256,
+                extraction_manifest_name=EXTRACTION_MANIFEST_NAME,
+                extraction_manifest_sha256=manifest_sha256,
+                extraction_id=run_id,
+                extracted_csv_sha256=csv_sha256,
+            )
+        expected_csv_sha256 = (
+            hashlib.sha256(existing_payload).hexdigest()
+            if existing_payload is not None
+            else None
+        )
+        try:
+            atomic_write_bundle(
+                artifacts,
+                expected_existing_sha256={csv_path: expected_csv_sha256},
+            )
+        except (OSError, ValueError) as exc:
+            rollback_incomplete = "rollback incomplet" in str(exc).casefold()
+            safety_status = (
+                "La restauration automatique est incomplète. N'utilisez pas le projet avant "
+                "d'avoir restauré le fichier de récupération conservé dans son dossier."
+                if rollback_incomplete
+                else "L'état précédent a été restauré."
+            )
+            messagebox.showerror(
+                "Publication annulée",
+                "Le CSV, le rapport et l'identité n'ont pas pu être publiés comme un "
+                f"ensemble cohérent. {safety_status}\n\n"
+                f"{exc}",
+            )
+            self._log(f"Publication de l'extraction annulée avec rollback : {exc}")
+            return
 
         self._set_text(
             self.stats_text,

@@ -34,7 +34,9 @@ from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
 from structured_extractor import (
+    ExtractionIntegrityError,
     TRANSLATABLE_PBS_KEYS,
+    build_extraction_inventory,
     extract_map,
     extract_message_bank,
     extract_pbs,
@@ -436,6 +438,18 @@ def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> Re
         )
     except ProjectIdentityError as exc:
         raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
+    if identity.source_manifest_sha256:
+        try:
+            current_inventory = build_extraction_inventory(game_root)
+        except ExtractionIntegrityError as exc:
+            raise ReconstructionError(
+                f"Projet de traduction refusé : inventaire Essentials invérifiable ({exc})."
+            ) from exc
+        if current_inventory.source_manifest_sha256 != identity.source_manifest_sha256:
+            raise ReconstructionError(
+                "Projet de traduction refusé : les sources Essentials ne correspondent plus "
+                "à l'état enregistré lors de l'extraction. Relancez l'extraction."
+            )
 
     plan = ReconstructionPlan(
         game_root=str(game_root),
@@ -449,6 +463,16 @@ def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> Re
     )
 
     rows = load_project_rows(csv_path)
+    if identity.source_manifest_sha256:
+        row_manifests = {
+            str(row.get("source_manifest_sha256") or "").casefold()
+            for row in rows
+        }
+        if row_manifests != {identity.source_manifest_sha256}:
+            raise ReconstructionError(
+                "Projet de traduction refusé : le CSV ne correspond pas à l'inventaire "
+                "Essentials enregistré lors de l'extraction."
+            )
     plan.project_rows = len(rows)
     for row in rows:
         translation = (row.get("traduction_fr") or "").strip()

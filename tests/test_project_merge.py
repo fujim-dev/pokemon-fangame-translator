@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,9 +15,73 @@ from Pokemon_Fangame_Translator import (
     project_directory_for_game,
     write_project_csv,
 )
+from extraction_project import EXTRACTION_MANIFEST_NAME
+from project_identity import (
+    ProjectIdentityError,
+    read_project_identity,
+    write_project_identity,
+)
 
 
 class ProjectMergeTests(unittest.TestCase):
+    def test_diagnostic_identity_refresh_preserves_verified_extraction_binding(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_identity_binding_") as temp_dir:
+            project = Path(temp_dir) / "project"
+            game = Path(temp_dir) / "game"
+            project.mkdir()
+            game.mkdir()
+            csv_path = project / "textes_structures.csv"
+            csv_path.write_text("synthetic csv", encoding="utf-8")
+            source_manifest = "a" * 64
+            csv_sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+            run_id = "synthetic-run"
+            manifest = {
+                "format": "pft_essentials_extraction_v1",
+                "extraction_id": run_id,
+                "adapter_id": "pokemon_essentials",
+                "game_root": str(game.resolve()),
+                "source_manifest_sha256": source_manifest,
+                "csv_sha256": csv_sha256,
+            }
+            manifest_payload = json.dumps(manifest).encode("utf-8")
+            manifest_path = project / EXTRACTION_MANIFEST_NAME
+            manifest_path.write_bytes(manifest_payload)
+            manifest_sha256 = hashlib.sha256(manifest_payload).hexdigest()
+            write_project_identity(
+                project,
+                game,
+                adapter_id="pokemon_essentials",
+                adapter_version="21.1",
+                source_manifest_sha256=source_manifest,
+                extraction_manifest_name=EXTRACTION_MANIFEST_NAME,
+                extraction_manifest_sha256=manifest_sha256,
+                extraction_id=run_id,
+                extracted_csv_sha256=csv_sha256,
+            )
+
+            write_project_identity(
+                project,
+                game,
+                adapter_id="pokemon_essentials",
+                adapter_version="21.1",
+            )
+            identity = read_project_identity(
+                csv_path,
+                game,
+                expected_adapter_id="pokemon_essentials",
+            )
+
+            self.assertEqual(source_manifest, identity.source_manifest_sha256)
+            self.assertEqual(manifest_sha256, identity.extraction_manifest_sha256)
+
+            manifest_path.write_bytes(manifest_payload + b"\n")
+            with self.assertRaisesRegex(ProjectIdentityError, "ne correspond plus"):
+                read_project_identity(
+                    csv_path,
+                    game,
+                    expected_adapter_id="pokemon_essentials",
+                )
+
     def test_project_directory_is_never_inside_original_game(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_project_path_") as temp_dir:
             game_root = Path(temp_dir) / "Jeu"

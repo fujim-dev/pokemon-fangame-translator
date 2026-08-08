@@ -4,7 +4,11 @@ import re
 from pathlib import Path
 
 from .base import AdapterOperationBlocked, DetectionEvidence, DetectionResult, GameCapability
-from structured_extractor import extract_structured
+from structured_extractor import (
+    ExtractionIntegrityError,
+    StructuredExtractionResult,
+    extract_structured_verified,
+)
 from analysis.deep_analyzer import analyze_game
 
 
@@ -35,15 +39,52 @@ class PokemonEssentialsAdapter:
         )
 
     def extract(self, root: Path, progress=None, logger=None) -> tuple[list[dict], list[str]]:
+        result = self.extract_with_provenance(root, progress=progress, logger=logger)
+        return result.rows, result.errors
+
+    def extract_with_provenance(
+        self,
+        root: Path,
+        progress=None,
+        logger=None,
+    ) -> StructuredExtractionResult:
         from .registry import authorize_adapter_operation
 
-        authorize_adapter_operation(
+        detection_before = authorize_adapter_operation(
             root,
             expected_adapter_id=self.adapter_id,
             capability=GameCapability.EXTRACT,
             adapter=self,
         )
-        return extract_structured(root, progress=progress, logger=logger)
+        result = extract_structured_verified(root, progress=progress, logger=logger)
+        detection_after = authorize_adapter_operation(
+            root,
+            expected_adapter_id=self.adapter_id,
+            capability=GameCapability.EXTRACT,
+            adapter=self,
+        )
+        before_fingerprint = (
+            detection_before.adapter_id,
+            detection_before.confidence,
+            detection_before.recognized_version,
+            detection_before.evidence,
+            detection_before.warnings,
+            detection_before.capabilities,
+        )
+        after_fingerprint = (
+            detection_after.adapter_id,
+            detection_after.confidence,
+            detection_after.recognized_version,
+            detection_after.evidence,
+            detection_after.warnings,
+            detection_after.capabilities,
+        )
+        if before_fingerprint != after_fingerprint:
+            raise ExtractionIntegrityError(
+                "L'identité Essentials du fangame a changé pendant l'extraction. "
+                "Aucun résultat n'est accepté."
+            )
+        return result
 
     @staticmethod
     def _detect_version(root: Path) -> str:

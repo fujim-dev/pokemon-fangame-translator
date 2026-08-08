@@ -17,6 +17,7 @@ from adapters import (
     UnknownAdapter,
     create_default_registry,
 )
+from structured_extractor import StructuredExtractionResult
 
 
 class StaticAdapter:
@@ -232,7 +233,9 @@ class AdapterDetectionTests(unittest.TestCase):
                     "adapters.pokemon_essentials._is_link_or_junction",
                     side_effect=marks_pbs_as_redirected,
                 ),
-                patch("adapters.pokemon_essentials.extract_structured") as extractor,
+                patch(
+                    "adapters.pokemon_essentials.extract_structured_verified"
+                ) as extractor,
             ):
                 with self.assertRaisesRegex(AdapterOperationBlocked, "bloqu"):
                     PokemonEssentialsAdapter().extract(root)
@@ -281,10 +284,16 @@ class AdapterDetectionTests(unittest.TestCase):
             self._write(root / "Data" / "messages_game.dat")
             self._write(root / "PBS" / "pokemon.txt")
             expected = ([{"identifiant": "synthetic"}], ["alerte synthétique"])
+            verified = StructuredExtractionResult(
+                rows=expected[0],
+                errors=expected[1],
+                sources=(),
+                source_manifest_sha256="0" * 64,
+            )
 
             with patch(
-                "adapters.pokemon_essentials.extract_structured",
-                return_value=expected,
+                "adapters.pokemon_essentials.extract_structured_verified",
+                return_value=verified,
             ) as extractor:
                 result = PokemonEssentialsAdapter().extract(root)
 
@@ -307,7 +316,9 @@ class AdapterDetectionTests(unittest.TestCase):
                 "adapters.registry.create_default_registry",
                 return_value=FixedRegistry(ambiguous),
             ),
-            patch("adapters.pokemon_essentials.extract_structured") as extractor,
+            patch(
+                "adapters.pokemon_essentials.extract_structured_verified"
+            ) as extractor,
         ):
             with self.assertRaisesRegex(AdapterOperationBlocked, "ambigu"):
                 PokemonEssentialsAdapter().extract(Path("synthetic"))

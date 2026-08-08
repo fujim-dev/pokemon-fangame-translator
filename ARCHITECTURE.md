@@ -254,6 +254,18 @@ Déjà en place :
 - rollback du CSV si la validation ou la journalisation d'une restauration échoue.
 - refus d'une réextraction vide, illisible ou incompatible avant remplacement du CSV ;
 - sauvegarde exacte et unique du projet avant chaque réextraction.
+- extraction Essentials précédée d'un inventaire canonique de ses marqueurs
+  d'identité et de toutes les sources Data/PBS prises en charge ; chaque fichier
+  est empreinté pendant une lecture stable, sans lien, jonction ni reparse point ;
+- parsing Essentials effectué uniquement depuis un instantané temporaire isolé,
+  puis second inventaire de l'original : ajout, retrait, remplacement, changement
+  d'octets ou d'identité de fichier invalide toute l'extraction ;
+- manifeste privé reliant l'inventaire source, chaque ligne CSV, le rapport et
+  l'identité du projet ; la reconstruction refuse un CSV Essentials provenant
+  d'un autre inventaire ;
+- publication transactionnelle du CSV principal, de sa copie compatible, du
+  rapport, du manifeste et de l'identité, avec détection des modifications
+  concurrentes et rollback exact des artefacts déjà remplacés.
 
 Encore partiel ou pas encore en place :
 
@@ -265,6 +277,8 @@ Encore partiel ou pas encore en place :
 - validation d'un corpus traduit représentatif de toutes les sources Flux,
   tests de démarrage/jouabilité et multiplication des scénarios de rollback ;
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
+- limite de temps des sondes et des analyses statiques : une sonde qui se bloque
+  sans lever d'exception n'est pas encore interrompue automatiquement.
 
 ## 4. Problèmes à éviter dans la v1.1
 

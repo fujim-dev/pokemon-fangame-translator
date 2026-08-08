@@ -6,8 +6,9 @@ import hashlib
 import os
 import tempfile
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Callable, Iterator, TextIO
+from typing import BinaryIO, Callable, Iterator, Mapping, TextIO
 
 
 def _is_link_or_junction(path: Path) -> bool:
@@ -129,6 +130,39 @@ def _source_signature(stat_result: os.stat_result) -> tuple[int, int, int, int]:
     )
 
 
+def _read_stable_bytes_with_signature(path: Path) -> tuple[bytes, tuple[int, int, int, int]]:
+    source = path.expanduser()
+    if (
+        not source.is_file()
+        or _is_link_or_junction(source)
+        or _is_link_or_junction(source.parent)
+    ):
+        raise OSError("Le fichier est absent, inaccessible ou redirigé.")
+    before = source.stat()
+    with source.open("rb") as handle:
+        opened_before = os.fstat(handle.fileno())
+        if _source_signature(before) != _source_signature(opened_before):
+            raise OSError("Le fichier a changé avant sa lecture.")
+        payload = handle.read()
+        opened_after = os.fstat(handle.fileno())
+    after = source.stat()
+    signatures = {
+        _source_signature(before),
+        _source_signature(opened_before),
+        _source_signature(opened_after),
+        _source_signature(after),
+    }
+    if len(signatures) != 1 or _is_link_or_junction(source):
+        raise OSError("Le fichier a changé pendant sa lecture.")
+    return payload, _source_signature(after)
+
+
+def read_stable_bytes(path: Path) -> bytes:
+    """Lit un fichier sans accepter un remplacement ou une redirection en cours."""
+    payload, _signature = _read_stable_bytes_with_signature(path)
+    return payload
+
+
 def atomic_copy_file(
     source: Path,
     destination: Path,
@@ -186,3 +220,165 @@ def atomic_copy_file(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def _replace_file(source: Path, destination: Path) -> None:
+    """Point d'injection testé pour la publication et son rollback."""
+    os.replace(source, destination)
+
+
+@dataclass
+class _BundleArtifact:
+    destination: Path
+    payload: bytes
+    existed: bool
+    previous_sha256: str | None
+    previous_signature: tuple[int, int, int, int] | None
+    staged_path: Path
+    rollback_path: Path | None
+
+
+def _write_neighbor_temporary(destination: Path, payload: bytes, role: str) -> Path:
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=destination.parent,
+        prefix=f".{destination.name}.pft-bundle-{role}-",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return temporary
+
+
+def _current_artifact_state(
+    destination: Path,
+) -> tuple[bool, str | None, tuple[int, int, int, int] | None, bytes | None]:
+    if not destination.exists():
+        if _is_link_or_junction(destination):
+            raise OSError("Un artefact de destination est redirigé.")
+        return False, None, None, None
+    payload, signature = _read_stable_bytes_with_signature(destination)
+    return True, hashlib.sha256(payload).hexdigest(), signature, payload
+
+
+def atomic_write_bundle(
+    artifacts: Mapping[Path, bytes],
+    *,
+    expected_existing_sha256: Mapping[Path, str | None] | None = None,
+) -> None:
+    """Publie plusieurs artefacts atomiques ou restaure exactement l'état précédent.
+
+    Chaque fichier est remplacé atomiquement. La transaction vérifie à nouveau
+    sa destination juste avant chaque remplacement ; une modification concurrente
+    annule le lot et les fichiers déjà publiés sont restaurés.
+    """
+    if not artifacts:
+        return
+
+    expected_by_path = {
+        os.path.normcase(str(Path(path).expanduser().resolve())): expected
+        for path, expected in (expected_existing_sha256 or {}).items()
+    }
+    prepared: list[_BundleArtifact] = []
+    seen: set[str] = set()
+    committed: list[_BundleArtifact] = []
+    preserved_rollback_paths: set[Path] = set()
+    try:
+        for requested, payload in sorted(
+            artifacts.items(),
+            key=lambda item: os.path.normcase(str(Path(item[0]).expanduser().resolve())),
+        ):
+            destination = _prepare_destination(Path(requested))
+            identity = os.path.normcase(str(destination.resolve()))
+            if identity in seen:
+                raise ValueError("Le lot contient deux chemins désignant le même artefact.")
+            seen.add(identity)
+
+            (
+                existed,
+                previous_sha256,
+                previous_signature,
+                previous_payload,
+            ) = _current_artifact_state(destination)
+            if identity in expected_by_path:
+                expected = expected_by_path[identity]
+                if expected is None and existed:
+                    raise OSError("Un artefact concurrent est apparu avant la publication.")
+                if expected is not None and previous_sha256 != expected.casefold():
+                    raise OSError("Un artefact a changé depuis sa validation initiale.")
+
+            rollback_path = (
+                _write_neighbor_temporary(
+                    destination,
+                    previous_payload or b"",
+                    "old",
+                )
+                if existed
+                else None
+            )
+            staged_path = _write_neighbor_temporary(destination, bytes(payload), "new")
+            prepared.append(
+                _BundleArtifact(
+                    destination=destination,
+                    payload=bytes(payload),
+                    existed=existed,
+                    previous_sha256=previous_sha256,
+                    previous_signature=previous_signature,
+                    staged_path=staged_path,
+                    rollback_path=rollback_path,
+                )
+            )
+
+        for artifact in prepared:
+            (
+                existed,
+                current_sha256,
+                current_signature,
+                _current_payload,
+            ) = _current_artifact_state(artifact.destination)
+            if (
+                existed != artifact.existed
+                or current_sha256 != artifact.previous_sha256
+                or current_signature != artifact.previous_signature
+            ):
+                raise OSError("Un artefact a changé pendant la préparation du lot.")
+            _replace_file(artifact.staged_path, artifact.destination)
+            committed.append(artifact)
+
+    except Exception as publication_error:
+        rollback_errors: list[str] = []
+        for artifact in reversed(committed):
+            try:
+                if artifact.rollback_path is not None:
+                    _replace_file(artifact.rollback_path, artifact.destination)
+                    artifact.rollback_path = None
+                else:
+                    artifact.destination.unlink(missing_ok=True)
+            except OSError as exc:
+                recovery = (
+                    artifact.rollback_path.name
+                    if artifact.rollback_path is not None
+                    else "indisponible"
+                )
+                rollback_errors.append(
+                    f"{artifact.destination.name} ({type(exc).__name__}, récupération : {recovery})"
+                )
+                if artifact.rollback_path is not None:
+                    preserved_rollback_paths.add(artifact.rollback_path)
+        if rollback_errors:
+            raise OSError(
+                "Échec de publication et rollback incomplet du lot : "
+                + ", ".join(rollback_errors)
+            ) from publication_error
+        raise
+    finally:
+        for artifact in prepared:
+            artifact.staged_path.unlink(missing_ok=True)
+            if (
+                artifact.rollback_path is not None
+                and artifact.rollback_path not in preserved_rollback_paths
+            ):
+                artifact.rollback_path.unlink(missing_ok=True)

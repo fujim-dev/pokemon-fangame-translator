@@ -75,6 +75,29 @@ Si une sonde échoue, le registre ne choisit pas silencieusement un autre moteur
 Il retourne un profil en lecture seule, signale une détection incomplète sans
 exposer le détail brut de l'exception et bloque toutes les actions d'écriture.
 
+### AC-109 — Inventaire d'extraction Essentials
+
+Avant de parser une source Essentials, l'extracteur inventorie et empreinte les
+marqueurs d'identité ainsi que les fichiers Data/PBS pris en charge. Un lien
+symbolique, une jonction, un reparse point, un chemin Windows ambigu ou une
+entrée spéciale dans les arborescences critiques bloque l'extraction.
+
+### AC-110 — Résistance TOCTOU de l'extraction Essentials
+
+Les fichiers sont copiés vers un instantané temporaire isolé par une lecture
+contrôlée, puis seul cet instantané est parsé. Un fichier remplacé entre
+l'inventaire et la copie, ou une source ajoutée, supprimée, réorientée ou modifiée
+avant la vérification finale, invalide toute l'extraction. Aucun résultat partiel
+n'est accepté.
+
+### AC-111 — Provenance et publication cohérentes
+
+Chaque ligne Essentials référence l'empreinte de son fichier et de l'inventaire
+global. Le CSV, le rapport, le manifeste privé et l'identité du projet sont
+publiés comme un lot : une panne tardive restaure les versions précédentes. Une
+modification concurrente annule la publication et un CSV provenant d'un autre
+inventaire est refusé avant reconstruction.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

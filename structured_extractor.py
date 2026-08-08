@@ -3,12 +3,16 @@
 from __future__ import annotations
 import csv
 import hashlib
+import json
+import os
 import re
+import tempfile
 from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
-from ruby_marshal_reader import RubyObject, RubyString, load, as_text
+from ruby_marshal_reader import RubyObject, RubyString, load
+from safe_io import atomic_copy_file
 
 TRANSLATABLE_PBS_KEYS = {
     "Name", "NamePlural", "PortionName", "PortionNamePlural",
@@ -17,6 +21,357 @@ TRANSLATABLE_PBS_KEYS = {
 }
 
 RPG_CODE_RE = re.compile(r"\\(?:[A-Za-z]+\[[^\]]*\]|pn|sh|wu|n|l|g|b|r|[.!|^><]|[0-9]+)|<[^>]+>", re.I)
+
+
+class ExtractionIntegrityError(RuntimeError):
+    """L'extraction ne peut pas prouver que ses sources sont restées stables."""
+
+
+@dataclass(frozen=True)
+class ExtractionSource:
+    kind: str
+    relative_path: str
+    path: Path = field(repr=False, compare=False)
+    size: int
+    sha256: str
+    signature: tuple[int, int, int, int] = field(repr=False)
+
+    def public_record(self) -> dict[str, str | int]:
+        return {
+            "kind": self.kind,
+            "relative_path": self.relative_path,
+            "size": self.size,
+            "sha256": self.sha256,
+        }
+
+
+@dataclass(frozen=True)
+class ExtractionInventory:
+    root: Path = field(compare=False)
+    root_signature: tuple[int, int, int, int]
+    tree_entries: tuple[tuple[str, str], ...]
+    directory_signatures: tuple[tuple[str, tuple[int, int, int, int]], ...]
+    sources: tuple[ExtractionSource, ...]
+    source_manifest_sha256: str
+
+    def operation_token(self) -> tuple[object, ...]:
+        return (
+            self.root_signature,
+            self.tree_entries,
+            self.directory_signatures,
+            tuple(
+                (
+                    source.kind,
+                    source.relative_path,
+                    source.size,
+                    source.sha256,
+                    source.signature,
+                )
+                for source in self.sources
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class StructuredExtractionResult:
+    rows: list[dict]
+    errors: list[str]
+    sources: tuple[ExtractionSource, ...]
+    source_manifest_sha256: str
+
+
+def _is_link_or_junction(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction and is_junction():
+            return True
+        return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x0400)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ExtractionIntegrityError(
+            "Impossible de vérifier si une source Essentials est redirigée."
+        ) from exc
+
+
+def _source_signature(stat_result: os.stat_result) -> tuple[int, int, int, int]:
+    return (
+        stat_result.st_dev,
+        stat_result.st_ino,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+    )
+
+
+def _canonical_extraction_root(root: Path) -> Path:
+    requested = root.expanduser()
+    if not requested.is_dir() or _is_link_or_junction(requested):
+        raise ExtractionIntegrityError(
+            "Le dossier du fangame est absent, inaccessible ou redirigé."
+        )
+    canonical = requested.resolve()
+    if not canonical.is_dir() or _is_link_or_junction(canonical):
+        raise ExtractionIntegrityError(
+            "La racine canonique du fangame est absente ou redirigée."
+        )
+    return canonical
+
+
+def _relative(path: Path, root: Path) -> str:
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise ExtractionIntegrityError(
+            "Une source Essentials sort du dossier canonique du fangame."
+        ) from exc
+    invalid_windows = set('<>:"|?*')
+    reserved_windows = {
+        "con", "prn", "aux", "nul",
+        *(f"com{index}" for index in range(1, 10)),
+        *(f"lpt{index}" for index in range(1, 10)),
+    }
+    for part in Path(relative).parts:
+        if (
+            part in {"", ".", ".."}
+            or part.endswith((" ", "."))
+            or any(ord(character) < 32 or character in invalid_windows for character in part)
+            or part.split(".", 1)[0].casefold() in reserved_windows
+        ):
+            raise ExtractionIntegrityError(
+                f"Chemin de source ambigu sous Windows refusé : {relative}."
+            )
+    return relative
+
+
+def _assert_no_redirected_components(root: Path, path: Path) -> None:
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError as exc:
+        raise ExtractionIntegrityError(
+            "Une source Essentials sort du dossier canonique du fangame."
+        ) from exc
+    current = root
+    if _is_link_or_junction(current):
+        raise ExtractionIntegrityError("La racine du fangame est redirigée.")
+    for part in parts:
+        current = current / part
+        if _is_link_or_junction(current):
+            raise ExtractionIntegrityError(
+                f"Source Essentials redirigée refusée : {_relative(current, root)}."
+            )
+
+
+def _scan_tree(root: Path, directory: Path) -> dict[str, tuple[Path, str]]:
+    if not directory.exists():
+        return {}
+    if not directory.is_dir() or _is_link_or_junction(directory):
+        raise ExtractionIntegrityError(
+            f"Dossier critique absent ou redirigé : {_relative(directory, root)}."
+        )
+    pending = [directory]
+    entries: dict[str, tuple[Path, str]] = {}
+    folded_paths: dict[str, str] = {}
+    while pending:
+        current = pending.pop()
+        _assert_no_redirected_components(root, current)
+        try:
+            current_entries = list(os.scandir(current))
+        except OSError as exc:
+            raise ExtractionIntegrityError(
+                f"Impossible d'inventorier le dossier critique {_relative(current, root)}."
+            ) from exc
+        for entry in current_entries:
+            path = Path(entry.path)
+            relative = _relative(path, root)
+            folded = relative.casefold()
+            previous = folded_paths.get(folded)
+            if previous is not None and previous != relative:
+                raise ExtractionIntegrityError(
+                    "Deux sources Essentials ont des chemins ambigus sous Windows : "
+                    f"{previous} et {relative}."
+                )
+            folded_paths[folded] = relative
+            if _is_link_or_junction(path):
+                raise ExtractionIntegrityError(
+                    f"Source Essentials redirigée refusée : {relative}."
+                )
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    entry_type = "directory"
+                    pending.append(path)
+                elif entry.is_file(follow_symlinks=False):
+                    entry_type = "file"
+                else:
+                    raise ExtractionIntegrityError(
+                        f"Entrée spéciale non vérifiable refusée : {relative}."
+                    )
+            except OSError as exc:
+                raise ExtractionIntegrityError(
+                    f"Type de source impossible à vérifier : {relative}."
+                ) from exc
+            entries[relative] = (path, entry_type)
+    return entries
+
+
+def _hash_stable_source(root: Path, path: Path, kind: str) -> ExtractionSource:
+    relative = _relative(path, root)
+    _assert_no_redirected_components(root, path)
+    if not path.is_file():
+        raise ExtractionIntegrityError(f"Source Essentials absente : {relative}.")
+    digest = hashlib.sha256()
+    try:
+        before = path.stat()
+        with path.open("rb") as handle:
+            opened_before = os.fstat(handle.fileno())
+            if _source_signature(before) != _source_signature(opened_before):
+                raise ExtractionIntegrityError(
+                    f"Source Essentials remplacée avant lecture : {relative}."
+                )
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            opened_after = os.fstat(handle.fileno())
+        after = path.stat()
+    except ExtractionIntegrityError:
+        raise
+    except OSError as exc:
+        raise ExtractionIntegrityError(
+            f"Source Essentials impossible à lire : {relative}."
+        ) from exc
+    signatures = {
+        _source_signature(before),
+        _source_signature(opened_before),
+        _source_signature(opened_after),
+        _source_signature(after),
+    }
+    if len(signatures) != 1 or _is_link_or_junction(path):
+        raise ExtractionIntegrityError(
+            f"Source Essentials modifiée pendant son inventaire : {relative}."
+        )
+    return ExtractionSource(
+        kind=kind,
+        relative_path=relative,
+        path=path,
+        size=after.st_size,
+        sha256=digest.hexdigest(),
+        signature=_source_signature(after),
+    )
+
+
+def _source_kind(relative: str, entry_type: str) -> str | None:
+    path = Path(relative)
+    name = path.name.casefold()
+    parent = path.parent.as_posix().casefold()
+    if relative.casefold() in {"game.exe", "game.ini"}:
+        return "identity"
+    if parent == "data":
+        if name in {"system.rxdata", "scripts.rxdata", "pluginscripts.rxdata"}:
+            return "identity"
+        if name == "mapinfos.rxdata":
+            return "map_names"
+        if re.fullmatch(r"map\d{3,4}\.rxdata", name, re.I):
+            return "map"
+        if name in {"messages.dat", "messages_game.dat", "messages_core.dat"}:
+            return "bank"
+    if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
+        if any("backup" in part.casefold() for part in path.parts[1:]):
+            return None
+        return "pbs"
+    return None
+
+
+def build_extraction_inventory(root: Path) -> ExtractionInventory:
+    canonical = _canonical_extraction_root(root)
+    try:
+        root_before = canonical.stat()
+    except OSError as exc:
+        raise ExtractionIntegrityError("La racine du fangame est inaccessible.") from exc
+    data = canonical / "Data"
+    if not data.is_dir() or _is_link_or_junction(data):
+        raise ExtractionIntegrityError("Le dossier Data est absent ou redirigé.")
+
+    tree = _scan_tree(canonical, data)
+    pbs = canonical / "PBS"
+    if pbs.exists():
+        tree.update(_scan_tree(canonical, pbs))
+
+    for direct in (canonical / "Game.exe", canonical / "Game.ini"):
+        if direct.exists():
+            if not direct.is_file() or _is_link_or_junction(direct):
+                raise ExtractionIntegrityError(
+                    f"Marqueur d'identité Essentials redirigé ou ambigu : {direct.name}."
+                )
+            tree[direct.name] = (direct, "file")
+
+    sources: list[ExtractionSource] = []
+    for relative, (path, entry_type) in sorted(
+        tree.items(), key=lambda item: item[0].casefold()
+    ):
+        kind = _source_kind(relative, entry_type)
+        if kind is None:
+            continue
+        if entry_type != "file":
+            raise ExtractionIntegrityError(
+                f"Source Essentials ambiguë : {relative} n'est pas un fichier ordinaire."
+            )
+        sources.append(_hash_stable_source(canonical, path, kind))
+
+    try:
+        root_after = canonical.stat()
+    except OSError as exc:
+        raise ExtractionIntegrityError("La racine du fangame a disparu.") from exc
+    if _source_signature(root_before) != _source_signature(root_after):
+        raise ExtractionIntegrityError(
+            "La racine du fangame a changé pendant l'inventaire."
+        )
+
+    public_sources = [source.public_record() for source in sources]
+    serialized = json.dumps(
+        public_sources,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    directories = [("Data", data)]
+    if pbs.exists():
+        directories.append(("PBS", pbs))
+    directories.extend(
+        (relative, path)
+        for relative, (path, entry_type) in tree.items()
+        if entry_type == "directory"
+    )
+    directory_signatures: list[tuple[str, tuple[int, int, int, int]]] = []
+    for relative, directory in sorted(
+        directories,
+        key=lambda item: item[0].casefold(),
+    ):
+        _assert_no_redirected_components(canonical, directory)
+        try:
+            directory_signatures.append(
+                (relative, _source_signature(directory.stat()))
+            )
+        except OSError as exc:
+            raise ExtractionIntegrityError(
+                f"Dossier source disparu pendant l'inventaire : {relative}."
+            ) from exc
+
+    return ExtractionInventory(
+        root=canonical,
+        root_signature=_source_signature(root_after),
+        tree_entries=tuple(
+            sorted(
+                ((relative, entry_type) for relative, (_path, entry_type) in tree.items()),
+                key=lambda item: item[0].casefold(),
+            )
+        ),
+        directory_signatures=tuple(directory_signatures),
+        sources=tuple(sources),
+        source_manifest_sha256=hashlib.sha256(serialized).hexdigest(),
+    )
 
 
 def stable_id(*parts: object) -> str:
@@ -45,12 +400,14 @@ def codes(text: str) -> str:
     return " | ".join(RPG_CODE_RE.findall(text))
 
 
-def load_map_names(data_dir: Path) -> dict[int, str]:
+def load_map_names(data_dir: Path, *, strict: bool = False) -> dict[int, str]:
     path = data_dir / "MapInfos.rxdata"
     if not path.exists():
         return {}
     root = load(path)
     names = {}
+    if strict and not isinstance(root, dict):
+        raise ValueError("Table MapInfos attendue")
     if isinstance(root, dict):
         for map_id, info in root.items():
             if isinstance(map_id, int) and isinstance(info, RubyObject):
@@ -65,9 +422,17 @@ def map_id_from_path(path: Path) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def extract_map(path: Path, relative: str, map_name: str) -> list[dict]:
+def extract_map(
+    path: Path,
+    relative: str,
+    map_name: str,
+    *,
+    strict: bool = False,
+) -> list[dict]:
     root = load(path)
     if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
+        if strict:
+            raise ValueError("Objet RPG::Map attendu")
         return []
     map_id = map_id_from_path(path)
     rows: list[dict] = []
@@ -182,6 +547,8 @@ def walk_message_bank(value, path=()):
 
 def extract_message_bank(path: Path, relative: str) -> list[dict]:
     root = load(path)
+    if not isinstance(root, (list, dict)):
+        raise ValueError("Banque de messages Array ou Hash attendue")
     rows = []
     for location, source, current in walk_message_bank(root):
         location_text = "/".join(map(str, location))
@@ -255,42 +622,144 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
     return rows
 
 
-def extract_structured(root: Path, progress=None, logger=None) -> tuple[list[dict], list[str]]:
-    data_dir = root / "Data"
-    pbs_dir = root / "PBS"
-    rows: list[dict] = []
-    errors: list[str] = []
-    map_names = load_map_names(data_dir)
+def _is_same_or_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
-    candidates: list[tuple[str, Path]] = []
-    for path in sorted(data_dir.glob("Map*.rxdata")):
-        if map_id_from_path(path) is not None:
-            candidates.append(("map", path))
-    for name in ("messages_game.dat", "messages_core.dat"):
-        path = data_dir / name
-        if path.exists():
-            candidates.append(("bank", path))
-    for path in iter_pbs_files(pbs_dir) or []:
-        candidates.append(("pbs", path))
 
-    total = max(1, len(candidates))
-    for index, (kind, path) in enumerate(candidates, start=1):
-        relative = str(path.relative_to(root)).replace("\\", "/")
+def _snapshot_sources(inventory: ExtractionInventory, snapshot_root: Path) -> None:
+    if _is_same_or_within(snapshot_root, inventory.root):
+        raise ExtractionIntegrityError(
+            "L'instantané temporaire d'extraction ne peut pas être placé dans le fangame."
+        )
+    for source in inventory.sources:
+        destination = snapshot_root.joinpath(*Path(source.relative_path).parts)
         try:
-            if kind == "map":
+            atomic_copy_file(
+                source.path,
+                destination,
+                expected_sha256=source.sha256,
+                replace_existing=False,
+            )
+            current = source.path.stat()
+        except OSError as exc:
+            raise ExtractionIntegrityError(
+                f"La source {source.relative_path} a changé avant la création de l'instantané."
+            ) from exc
+        _assert_no_redirected_components(inventory.root, source.path)
+        if _source_signature(current) != source.signature:
+            raise ExtractionIntegrityError(
+                f"La source {source.relative_path} a été remplacée avant son extraction."
+            )
+
+
+def _extract_snapshot(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    *,
+    progress=None,
+) -> list[dict]:
+    records = {source.relative_path: source for source in inventory.sources}
+    map_names_record = next(
+        (source for source in inventory.sources if source.kind == "map_names"),
+        None,
+    )
+    map_names = (
+        load_map_names(snapshot_root / "Data", strict=True)
+        if map_names_record is not None
+        else {}
+    )
+    candidates = [
+        source
+        for source in inventory.sources
+        if source.kind in {"map", "bank", "pbs"}
+    ]
+    order = {"map": 0, "bank": 1, "pbs": 2}
+    candidates.sort(key=lambda source: (order[source.kind], source.relative_path.casefold()))
+    rows: list[dict] = []
+    total = max(1, len(candidates))
+    for index, source in enumerate(candidates, start=1):
+        path = snapshot_root.joinpath(*Path(source.relative_path).parts)
+        try:
+            if source.kind == "map":
                 map_id = map_id_from_path(path)
-                rows.extend(extract_map(path, relative, map_names.get(map_id or -1, "")))
-            elif kind == "bank":
-                rows.extend(extract_message_bank(path, relative))
+                extracted = extract_map(
+                    path,
+                    source.relative_path,
+                    map_names.get(map_id or -1, ""),
+                    strict=True,
+                )
+            elif source.kind == "bank":
+                extracted = extract_message_bank(path, source.relative_path)
             else:
-                rows.extend(extract_pbs(path, relative))
-        except Exception as exc:  # rapport plutôt que plantage global
-            errors.append(f"{relative}: {type(exc).__name__}: {exc}")
-            if logger:
-                logger(errors[-1])
+                extracted = extract_pbs(path, source.relative_path)
+        except Exception as exc:
+            raise ExtractionIntegrityError(
+                "Extraction Essentials refusée : source compatible illisible "
+                f"{source.relative_path} ({type(exc).__name__})."
+            ) from exc
+        for row in extracted:
+            row["adaptateur"] = "pokemon_essentials"
+            row["source_sha256"] = records[source.relative_path].sha256
+            row["source_manifest_sha256"] = inventory.source_manifest_sha256
+        rows.extend(extracted)
         if progress:
-            progress(index, total, relative)
-    return rows, errors
+            progress(index, total, source.relative_path)
+
+    duplicates = [
+        row_id
+        for row_id, count in Counter(
+            str(row.get("id_stable") or "") for row in rows
+        ).items()
+        if not row_id or count > 1
+    ]
+    if duplicates:
+        raise ExtractionIntegrityError(
+            "Extraction Essentials ambiguë : identifiants d'occurrence absents ou dupliqués."
+        )
+    return rows
+
+
+def extract_structured_verified(
+    root: Path,
+    progress=None,
+    logger=None,
+) -> StructuredExtractionResult:
+    del logger  # Les erreurs sont bloquantes et remontées sans résultat partiel.
+    before = build_extraction_inventory(root)
+    try:
+        with tempfile.TemporaryDirectory(prefix="pft_essentials_extraction_") as temp_dir:
+            snapshot_root = Path(temp_dir) / "snapshot"
+            snapshot_root.mkdir()
+            _snapshot_sources(before, snapshot_root)
+            rows = _extract_snapshot(snapshot_root, before, progress=progress)
+    except ExtractionIntegrityError:
+        raise
+    except OSError as exc:
+        raise ExtractionIntegrityError(
+            "Impossible de créer ou supprimer l'instantané temporaire d'extraction."
+        ) from exc
+
+    after = build_extraction_inventory(before.root)
+    if before.operation_token() != after.operation_token():
+        raise ExtractionIntegrityError(
+            "Les sources Essentials ont été modifiées, ajoutées, supprimées ou réorientées "
+            "pendant l'extraction. Aucun résultat n'est accepté."
+        )
+    return StructuredExtractionResult(
+        rows=rows,
+        errors=[],
+        sources=before.sources,
+        source_manifest_sha256=before.source_manifest_sha256,
+    )
+
+
+def extract_structured(root: Path, progress=None, logger=None) -> tuple[list[dict], list[str]]:
+    result = extract_structured_verified(root, progress=progress, logger=logger)
+    return result.rows, result.errors
 
 
 FIELDNAMES = [

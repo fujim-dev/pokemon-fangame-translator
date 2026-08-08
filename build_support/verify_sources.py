@@ -15,6 +15,7 @@ python_files = [
     "flux_import_validator.py",
     "flux_import_plan.py",
     "flux_reinjection.py",
+    "extraction_project.py",
     "project_identity.py",
     "safe_io.py",
     "adapters/__init__.py",

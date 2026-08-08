@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from safe_io import atomic_write_text
+from safe_io import atomic_write_bytes, read_stable_bytes
 
 
 PROJECT_METADATA_NAME = "projet.json"
@@ -26,6 +26,10 @@ class ProjectIdentity:
     adapter_id: str
     adapter_version: str
     sha256: str
+    source_manifest_sha256: str = ""
+    extraction_manifest_sha256: str = ""
+    extraction_id: str = ""
+    extracted_csv_sha256: str = ""
 
 
 def _is_redirected(path: Path) -> bool:
@@ -40,20 +44,18 @@ def _is_redirected(path: Path) -> bool:
         return False
 
 
-def write_project_identity(
-    project_dir: Path,
+def build_project_identity_bytes(
     game_root: Path,
     *,
     adapter_id: str = "",
     adapter_version: str = "",
     software_version: str = "1.0.2",
-) -> Path:
-    project = project_dir.expanduser()
-    project.mkdir(parents=True, exist_ok=True)
-    if _is_redirected(project):
-        raise ProjectIdentityError(
-            "Le dossier du projet ne peut pas être un lien ou une jonction."
-        )
+    source_manifest_sha256: str = "",
+    extraction_manifest_name: str = "",
+    extraction_manifest_sha256: str = "",
+    extraction_id: str = "",
+    extracted_csv_sha256: str = "",
+) -> bytes:
     root = game_root.expanduser().resolve()
     payload = {
         "format": "pft_project_identity_v1",
@@ -64,13 +66,95 @@ def write_project_identity(
         "version_logiciel": software_version,
         "mis_a_jour": datetime.now().isoformat(timespec="seconds"),
     }
+    if source_manifest_sha256:
+        payload.update(
+            {
+                "source_manifest_sha256": source_manifest_sha256,
+                "extraction_manifest_name": extraction_manifest_name,
+                "extraction_manifest_sha256": extraction_manifest_sha256,
+                "extraction_id": extraction_id,
+                "extracted_csv_sha256": extracted_csv_sha256,
+            }
+        )
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def write_project_identity(
+    project_dir: Path,
+    game_root: Path,
+    *,
+    adapter_id: str = "",
+    adapter_version: str = "",
+    software_version: str = "1.0.2",
+    source_manifest_sha256: str = "",
+    extraction_manifest_name: str = "",
+    extraction_manifest_sha256: str = "",
+    extraction_id: str = "",
+    extracted_csv_sha256: str = "",
+) -> Path:
+    project = project_dir.expanduser()
+    project.mkdir(parents=True, exist_ok=True)
+    if _is_redirected(project):
+        raise ProjectIdentityError(
+            "Le dossier du projet ne peut pas être un lien ou une jonction."
+        )
     destination = project / PROJECT_METADATA_NAME
-    atomic_write_text(
+    if destination.exists() and not source_manifest_sha256:
+        try:
+            previous = json.loads(read_stable_bytes(destination).decode("utf-8-sig"))
+        except Exception as exc:
+            raise ProjectIdentityError(
+                "L'identité existante est illisible et ne sera pas remplacée silencieusement."
+            ) from exc
+        if not isinstance(previous, dict):
+            raise ProjectIdentityError(
+                "L'identité existante est inconnue et ne sera pas remplacée silencieusement."
+            )
+        previous_root = Path(str(previous.get("dossier_jeu") or "")).expanduser()
+        same_root = (
+            previous.get("format") == "pft_project_identity_v1"
+            and previous_root.is_absolute()
+            and os.path.normcase(str(previous_root.resolve()))
+            == os.path.normcase(str(game_root.expanduser().resolve()))
+        )
+        previous_adapter = str(previous.get("adapter_id") or "")
+        compatible_adapter = not adapter_id or not previous_adapter or adapter_id == previous_adapter
+        if same_root and compatible_adapter:
+            adapter_id = adapter_id or previous_adapter
+            adapter_version = adapter_version or str(previous.get("adapter_version") or "")
+            source_manifest_sha256 = str(
+                previous.get("source_manifest_sha256") or ""
+            )
+            extraction_manifest_name = str(
+                previous.get("extraction_manifest_name") or ""
+            )
+            extraction_manifest_sha256 = str(
+                previous.get("extraction_manifest_sha256") or ""
+            )
+            extraction_id = str(previous.get("extraction_id") or "")
+            extracted_csv_sha256 = str(previous.get("extracted_csv_sha256") or "")
+    atomic_write_bytes(
         destination,
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+        build_project_identity_bytes(
+            game_root,
+            adapter_id=adapter_id,
+            adapter_version=adapter_version,
+            software_version=software_version,
+            source_manifest_sha256=source_manifest_sha256,
+            extraction_manifest_name=extraction_manifest_name,
+            extraction_manifest_sha256=extraction_manifest_sha256,
+            extraction_id=extraction_id,
+            extracted_csv_sha256=extracted_csv_sha256,
+        ),
     )
     return destination
+
+
+def _validated_sha256(value: object, label: str) -> str:
+    digest = str(value or "").casefold()
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise ProjectIdentityError(f"L'empreinte {label} de l'identité est invalide.")
+    return digest
 
 
 def read_project_identity(
@@ -91,14 +175,10 @@ def read_project_identity(
             "Identité de projet absente. Relancez l'analyse et l'extraction pour rattacher ce CSV."
         )
     try:
-        before = metadata_path.stat()
-        raw = metadata_path.read_bytes()
-        after = metadata_path.stat()
+        raw = read_stable_bytes(metadata_path)
         payload = json.loads(raw.decode("utf-8-sig"))
     except Exception as exc:
         raise ProjectIdentityError("L'identité du projet est illisible.") from exc
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise ProjectIdentityError("L'identité du projet a changé pendant sa lecture.")
     if not isinstance(payload, dict) or payload.get("format") != "pft_project_identity_v1":
         raise ProjectIdentityError(
             "Identité de projet ancienne ou inconnue. Relancez l'analyse du fangame."
@@ -120,10 +200,66 @@ def read_project_identity(
         raise ProjectIdentityError(
             "L'adaptateur du projet est absent ou différent. Relancez l'analyse et l'extraction."
         )
+    source_manifest_sha256 = str(payload.get("source_manifest_sha256") or "")
+    extraction_manifest_sha256 = ""
+    extraction_id = str(payload.get("extraction_id") or "")
+    extracted_csv_sha256 = ""
+    if source_manifest_sha256:
+        source_manifest_sha256 = _validated_sha256(
+            source_manifest_sha256,
+            "de l'inventaire source",
+        )
+        extraction_manifest_sha256 = _validated_sha256(
+            payload.get("extraction_manifest_sha256"),
+            "du manifeste d'extraction",
+        )
+        extracted_csv_sha256 = _validated_sha256(
+            payload.get("extracted_csv_sha256"),
+            "du CSV extrait",
+        )
+        manifest_name = str(payload.get("extraction_manifest_name") or "")
+        if not manifest_name or Path(manifest_name).name != manifest_name:
+            raise ProjectIdentityError("Le chemin du manifeste d'extraction est invalide.")
+        manifest_path = project_dir / manifest_name
+        if _is_redirected(manifest_path):
+            raise ProjectIdentityError("Le manifeste d'extraction est redirigé.")
+        try:
+            manifest_raw = read_stable_bytes(manifest_path)
+            manifest = json.loads(manifest_raw.decode("utf-8-sig"))
+        except Exception as exc:
+            raise ProjectIdentityError("Le manifeste d'extraction est illisible.") from exc
+        if hashlib.sha256(manifest_raw).hexdigest() != extraction_manifest_sha256:
+            raise ProjectIdentityError("Le manifeste d'extraction ne correspond plus au projet.")
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("format") != "pft_essentials_extraction_v1"
+            or str(manifest.get("adapter_id") or "") != adapter_id
+            or str(manifest.get("source_manifest_sha256") or "").casefold()
+            != source_manifest_sha256
+            or str(manifest.get("extraction_id") or "") != extraction_id
+            or str(manifest.get("csv_sha256") or "").casefold() != extracted_csv_sha256
+        ):
+            raise ProjectIdentityError(
+                "Le manifeste d'extraction est incohérent avec l'identité du projet."
+            )
+        manifest_root = Path(str(manifest.get("game_root") or "")).expanduser()
+        if (
+            not manifest_root.is_absolute()
+            or os.path.normcase(str(manifest_root.resolve()))
+            != os.path.normcase(str(expected_root))
+        ):
+            raise ProjectIdentityError(
+                "Le manifeste d'extraction appartient à un autre fangame."
+            )
+
     return ProjectIdentity(
         metadata_path=metadata_path.resolve(),
         game_root=stored_root,
         adapter_id=adapter_id,
         adapter_version=str(payload.get("adapter_version") or ""),
         sha256=hashlib.sha256(raw).hexdigest(),
+        source_manifest_sha256=source_manifest_sha256,
+        extraction_manifest_sha256=extraction_manifest_sha256,
+        extraction_id=extraction_id,
+        extracted_csv_sha256=extracted_csv_sha256,
     )

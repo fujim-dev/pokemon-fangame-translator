@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,7 +16,8 @@ from reconstruction_engine import (
     simulate_plan,
 )
 from project_identity import write_project_identity
-from structured_extractor import stable_id
+from extraction_project import EXTRACTION_MANIFEST_NAME
+from structured_extractor import build_extraction_inventory, stable_id
 
 
 PROJECT_FIELDS = [
@@ -31,6 +34,7 @@ PROJECT_FIELDS = [
     "page",
     "commande",
     "sous_index",
+    "source_manifest_sha256",
 ]
 
 
@@ -83,6 +87,60 @@ def pbs_row(relative: str, source: str = "Hello", translation: str = "Bonjour") 
 
 
 class ReconstructionSafetyTests(unittest.TestCase):
+    def test_csv_from_another_essentials_source_inventory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_source_binding_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            game_root.mkdir()
+            prepare_essentials_game(game_root)
+            relative = "PBS/fixture.txt"
+            (game_root / relative).write_text("[GLOBAL]\nName = Hello\n", encoding="utf-8")
+            source_manifest = build_extraction_inventory(
+                game_root
+            ).source_manifest_sha256
+            row = pbs_row(relative)
+            row["source_manifest_sha256"] = source_manifest
+            csv_path = base / "project.csv"
+            write_project(csv_path, row)
+            csv_sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+            run_id = "synthetic-extraction-id"
+            manifest = {
+                "format": "pft_essentials_extraction_v1",
+                "extraction_id": run_id,
+                "adapter_id": "pokemon_essentials",
+                "game_root": str(game_root.resolve()),
+                "source_manifest_sha256": source_manifest,
+                "csv_sha256": csv_sha256,
+            }
+            manifest_payload = json.dumps(manifest).encode("utf-8")
+            (base / EXTRACTION_MANIFEST_NAME).write_bytes(manifest_payload)
+            write_project_identity(
+                base,
+                game_root,
+                adapter_id="pokemon_essentials",
+                adapter_version="21.1",
+                source_manifest_sha256=source_manifest,
+                extraction_manifest_name=EXTRACTION_MANIFEST_NAME,
+                extraction_manifest_sha256=hashlib.sha256(manifest_payload).hexdigest(),
+                extraction_id=run_id,
+                extracted_csv_sha256=csv_sha256,
+            )
+
+            accepted = build_plan(game_root, csv_path)
+            self.assertEqual(1, accepted.project_rows)
+
+            game_ini = game_root / "Game.ini"
+            original_ini = game_ini.read_bytes()
+            game_ini.write_bytes(original_ini + b"# changed after extraction\n")
+            with self.assertRaisesRegex(ReconstructionError, "sources Essentials"):
+                build_plan(game_root, csv_path)
+            game_ini.write_bytes(original_ini)
+
+            row["source_manifest_sha256"] = "b" * 64
+            write_project(csv_path, row)
+            with self.assertRaisesRegex(ReconstructionError, "inventaire Essentials"):
+                build_plan(game_root, csv_path)
+
     def test_blocks_windows_ambiguous_names(self) -> None:
         for relative in (
             "PBS/fixture:stream.txt",
