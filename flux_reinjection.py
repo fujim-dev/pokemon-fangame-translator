@@ -65,6 +65,25 @@ def _is_redirected(path: Path) -> bool:
         return False
 
 
+def _resolved_game_root(plan: FluxImportPlan) -> Path:
+    """Canonise la racine protégée avant toute comparaison de confinement."""
+    root_input = Path(plan.game_root).expanduser()
+    if _is_redirected(root_input):
+        raise FluxReinjectionError("La racine du jeu original est redirigée.")
+    try:
+        return root_input.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise FluxReinjectionError("La racine du jeu original ne peut pas être résolue.") from exc
+
+
+def _is_same_or_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _stable_sha256(path: Path) -> str:
     try:
         before = path.stat()
@@ -291,11 +310,7 @@ def apply_flux_plan_to_tree(plan: FluxImportPlan, extracted_root: Path) -> tuple
     if not root.is_dir() or _is_redirected(root) or not plan.applicable_items:
         raise FluxReinjectionError("Dossier temporaire ou plan Flux invalide.")
     root = root.resolve()
-    try:
-        root.relative_to(plan.game_root)
-    except ValueError:
-        pass
-    else:
+    if _is_same_or_within(root, _resolved_game_root(plan)):
         raise FluxReinjectionError("La réinjection directe dans le jeu original est interdite.")
     _tree_files(root)
     grouped: dict[str, list[FluxImportPlanItem]] = {}
@@ -383,11 +398,7 @@ def build_flux_candidate_archive(
     target = target_input.resolve()
     if target.exists():
         raise FluxReinjectionError("Le FPK candidat existe déjà.")
-    try:
-        target.relative_to(plan.game_root)
-    except ValueError:
-        pass
-    else:
+    if _is_same_or_within(target, _resolved_game_root(plan)):
         raise FluxReinjectionError("Le FPK candidat ne peut pas être créé dans le jeu original.")
 
     if _stable_sha256(plan.fpk_path) != plan.source_fpk_sha256:
@@ -512,7 +523,7 @@ def _copy_regular_file(source_file: str, target_file: str):
 
 def create_flux_working_copy(plan: FluxImportPlan, destination: Path) -> Path:
     """Crée une copie complète prouvée identique, sans toucher au jeu source."""
-    source = plan.game_root.resolve()
+    source = _resolved_game_root(plan)
     target = destination.expanduser().resolve()
     if target.exists() or _is_redirected(target.parent):
         raise FluxReinjectionError("La destination de copie Flux existe ou est redirigée.")
@@ -571,7 +582,7 @@ def validate_candidate_on_working_copy(
     work = working_copy.expanduser().resolve()
     backup = backup_path.expanduser().resolve()
     candidate_path = candidate.candidate_path.resolve()
-    source = plan.game_root.resolve()
+    source = _resolved_game_root(plan)
     if not work.is_dir() or _is_redirected(work) or _is_redirected(backup.parent):
         raise FluxReinjectionError("Copie de travail ou dossier de sauvegarde non sûr.")
     if backup.exists():
@@ -594,7 +605,10 @@ def validate_candidate_on_working_copy(
     if _stable_sha256(candidate_path) != candidate.candidate_fpk_sha256:
         raise FluxReinjectionError("Le candidat Flux a changé avant son test.")
 
-    relative_fpk = plan.fpk_path.relative_to(source)
+    try:
+        relative_fpk = plan.fpk_path.expanduser().resolve().relative_to(source)
+    except ValueError as exc:
+        raise FluxReinjectionError("Le FPK du plan se trouve hors du jeu original.") from exc
     working_fpk = work / relative_fpk
     if not working_fpk.is_file() or _is_redirected(working_fpk):
         raise FluxReinjectionError("Le FPK de la copie de travail est absent ou redirigé.")
@@ -622,6 +636,7 @@ def validate_candidate_on_working_copy(
         backup,
         validator=lambda path: reader.inspect(path),
         replace_existing=False,
+        expected_sha256=plan.source_fpk_sha256,
     )
     installed = False
     validation_error: Exception | None = None
@@ -631,6 +646,7 @@ def validate_candidate_on_working_copy(
             candidate_path,
             working_fpk,
             validator=lambda path: reader.inspect(path),
+            expected_sha256=candidate.candidate_fpk_sha256,
         )
         installed = True
         installed_hash = _stable_sha256(working_fpk)
@@ -657,6 +673,7 @@ def validate_candidate_on_working_copy(
                     backup,
                     working_fpk,
                     validator=lambda path: reader.inspect(path),
+                    expected_sha256=plan.source_fpk_sha256,
                 )
             except Exception as rollback_exc:
                 try:
@@ -682,6 +699,10 @@ def validate_candidate_on_working_copy(
     if not rollback_valid:
         raise FluxReinjectionError("Le rollback Flux n'a pas restauré exactement la copie.")
     if validation_error is not None:
+        if not installed:
+            raise FluxReinjectionError(
+                "Installation du candidat Flux annulée avant modification ; copie intacte."
+            ) from validation_error
         raise FluxReinjectionError(
             "Validation sur copie de travail annulée ; rollback exact réussi."
         ) from validation_error

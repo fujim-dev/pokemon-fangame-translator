@@ -249,7 +249,8 @@ Une fixture artificielle de format Flux passe les tests. Un vrai jeu n'est utili
   réextraction de contrôle et vérification de l'empreinte du FPK original ;
 - plan d'import en mémoire : en place et déterministe ;
 - réinjection expérimentale interne : validée sur archives synthétiques avec
-  relecture complète, refus des changements hors plan et rollback simulé ;
+  relecture complète, refus des changements hors plan, contrôle SHA-256 des
+  copies et pannes injectées avant installation et pendant le rollback ;
 - validation locale privée : réussie sur une occurrence de référence dans une
   copie complète de Flux v2.1.0, avec 669 membres FPK, 741 fichiers du jeu et
   restauration exacte de l'empreinte originale ;
@@ -258,8 +259,9 @@ Une fixture artificielle de format Flux passe les tests. Un vrai jeu n'est utili
 
 Les prochaines portes sont la couverture synthétique de toutes les formes
 d'occurrences prises en charge, la validation privée d'un corpus représentatif,
-plusieurs échecs injectés pendant l'installation/rollback et un contrôle manuel
-du démarrage de la copie. La capacité `RECONSTRUCT` ne sera ajoutée qu'après ces
+l'élargissement de la matrice d'échecs injectés (sauvegarde, validation,
+inventaire et signalement d'une copie invalide) et un contrôle manuel du
+démarrage de la copie. La capacité `RECONSTRUCT` ne sera ajoutée qu'après ces
 preuves ; une validation analytique d'une occurrence ne suffit pas à l'activer.
 
 ## Hors périmètre initial

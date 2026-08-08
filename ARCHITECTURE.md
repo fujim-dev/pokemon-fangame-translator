@@ -233,6 +233,15 @@ Déjà en place :
   temporaire, comparaison des 741 fichiers puis rollback exact ; une validation
   privée locale a réussi sur une occurrence de `messages_game.dat`, sans test de
   jouabilité et sans publier de contenu du jeu ;
+- copie atomique renforcée : refus d'une source modifiée pendant sa lecture et
+  contrôle SHA-256 exact pour la sauvegarde, l'installation candidate et le
+  rollback Flux ;
+- pannes synthétiques avant installation et pendant le rollback : la première
+  laisse la copie intacte, la seconde conserve la sauvegarde externe exacte et
+  marque explicitement la copie comme inutilisable ;
+- comparaisons de confinement Flux effectuées sur les deux chemins canonisés :
+  une racine originale exprimée par un alias Windows ou des segments `..` reste
+  protégée contre toute réinjection directe et toute création de candidat ;
 - autorisation commune du registre réappliquée aux appels directs d'extraction ;
 - écritures atomiques communes avec fichiers temporaires voisins et uniques ;
 - sérialisation Ruby Marshal atomique avec relecture du temporaire avant

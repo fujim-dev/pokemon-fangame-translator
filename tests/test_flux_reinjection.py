@@ -4,6 +4,7 @@ import hashlib
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -281,13 +282,25 @@ class FluxSyntheticReinjectionTests(unittest.TestCase):
                 self.seven_zip,
             )
 
-            with self.assertRaisesRegex(FluxReinjectionError, "jeu original"):
-                build_flux_candidate_archive(
+            alias_anchor = base / "path_alias"
+            alias_anchor.mkdir()
+            plans = {
+                "chemin direct": plan,
+                "chemin équivalent non canonique": replace(
                     plan,
-                    root / "candidate.fpk",
-                    archive_reader=reader,
-                    seven_zip=self.seven_zip,
-                )
+                    game_root=alias_anchor / ".." / root.name,
+                ),
+            }
+            for label, current_plan in plans.items():
+                with self.subTest(label=label):
+                    self.assertEqual(root.resolve(), current_plan.game_root.resolve())
+                    with self.assertRaisesRegex(FluxReinjectionError, "jeu original"):
+                        build_flux_candidate_archive(
+                            current_plan,
+                            root / "candidate.fpk",
+                            archive_reader=reader,
+                            seven_zip=self.seven_zip,
+                        )
 
     def test_map_dialogue_and_choice_are_reinjected_by_exact_occurrence(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_flux_map_reinject_") as temp_dir:
@@ -359,6 +372,10 @@ class FluxSyntheticReinjectionTests(unittest.TestCase):
             data.mkdir(parents=True)
             source = ruby_text("Hello")
             (data / "messages.dat").write_bytes(dumps([source]))
+            nested_root = base / "game" / "temporary_extraction"
+            nested_data = nested_root / "Data"
+            nested_data.mkdir(parents=True)
+            (nested_data / "messages.dat").write_bytes(dumps([source]))
             item = FluxImportPlanItem(
                 id_stable="d" * 64,
                 source_kind="messages",
@@ -370,22 +387,41 @@ class FluxSyntheticReinjectionTests(unittest.TestCase):
                 decision="applicable",
                 reason="test synthétique",
             )
-            plan = FluxImportPlan(
-                game_root=base / "game",
-                fpk_path=base / "unused.fpk",
-                csv_path=base / "unused.csv",
-                adapter_version="2.1.0",
-                source_fpk_sha256="0" * 64,
-                source_csv_sha256="0" * 64,
-                items=(item,),
-                fingerprint="e" * 64,
-            )
             before = (data / "messages.dat").read_bytes()
+            nested_before = (nested_data / "messages.dat").read_bytes()
 
-            with self.assertRaisesRegex(FluxReinjectionError, "jeu original"):
-                apply_flux_plan_to_tree(plan, base / "game")
+            alias_anchor = base / "path_alias"
+            alias_anchor.mkdir()
+            cases = {
+                "racine directe": (base / "game", base / "game"),
+                "racine équivalente non canonique": (
+                    alias_anchor / ".." / "game",
+                    base / "game",
+                ),
+                "sous-dossier direct": (base / "game", nested_root),
+                "sous-dossier avec racine non canonique": (
+                    alias_anchor / ".." / "game",
+                    nested_root,
+                ),
+            }
+            for label, (game_root, destination) in cases.items():
+                with self.subTest(label=label):
+                    self.assertEqual((base / "game").resolve(), game_root.resolve())
+                    plan = FluxImportPlan(
+                        game_root=game_root,
+                        fpk_path=base / "unused.fpk",
+                        csv_path=base / "unused.csv",
+                        adapter_version="2.1.0",
+                        source_fpk_sha256="0" * 64,
+                        source_csv_sha256="0" * 64,
+                        items=(item,),
+                        fingerprint="e" * 64,
+                    )
+                    with self.assertRaisesRegex(FluxReinjectionError, "jeu original"):
+                        apply_flux_plan_to_tree(plan, destination)
 
             self.assertEqual(before, (data / "messages.dat").read_bytes())
+            self.assertEqual(nested_before, (nested_data / "messages.dat").read_bytes())
 
     def test_common_event_dialogue_is_reinjected_by_exact_occurrence(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_flux_common_reinject_") as temp_dir:
@@ -498,6 +534,97 @@ class FluxSyntheticReinjectionTests(unittest.TestCase):
 
             self.assertTrue(compare_snapshots(before, snapshot_tree(working)).passed)
             self.assertTrue(compare_snapshots(snapshot_tree(root), snapshot_tree(working)).passed)
+
+    def test_candidate_install_failure_leaves_working_copy_untouched(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_flux_install_failure_") as temp_dir:
+            base = Path(temp_dir)
+            root, reader, _adapter, _csv_path, plan, _canonical = prepare_real_archive_project(
+                base,
+                self.seven_zip,
+            )
+            candidate_path = base / "candidate" / "Data_0.fpk"
+            candidate_path.parent.mkdir()
+            candidate = build_flux_candidate_archive(
+                plan,
+                candidate_path,
+                archive_reader=reader,
+                seven_zip=self.seven_zip,
+            )
+            working = create_flux_working_copy(plan, base / "working_copy")
+            working_before = snapshot_tree(working)
+            real_atomic_copy = flux_reinjection.atomic_copy_file
+            copy_calls = 0
+
+            def fail_install(*args, **kwargs):
+                nonlocal copy_calls
+                copy_calls += 1
+                if copy_calls == 2:
+                    raise OSError("échec synthétique avant installation")
+                return real_atomic_copy(*args, **kwargs)
+
+            backup = base / "backups" / "Data_0.before-install-failure.fpk"
+            with patch("flux_reinjection.atomic_copy_file", side_effect=fail_install):
+                with self.assertRaisesRegex(FluxReinjectionError, "copie intacte"):
+                    validate_candidate_on_working_copy(
+                        plan,
+                        candidate,
+                        working,
+                        backup,
+                        archive_reader=reader,
+                    )
+
+            self.assertTrue(compare_snapshots(working_before, snapshot_tree(working)).passed)
+            self.assertTrue(compare_snapshots(snapshot_tree(root), snapshot_tree(working)).passed)
+            self.assertEqual(plan.source_fpk_sha256, hashlib.sha256(backup.read_bytes()).hexdigest())
+
+    def test_rollback_failure_marks_copy_and_preserves_exact_backup(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_flux_rollback_failure_") as temp_dir:
+            base = Path(temp_dir)
+            root, reader, _adapter, _csv_path, plan, _canonical = prepare_real_archive_project(
+                base,
+                self.seven_zip,
+            )
+            candidate_path = base / "candidate" / "Data_0.fpk"
+            candidate_path.parent.mkdir()
+            candidate = build_flux_candidate_archive(
+                plan,
+                candidate_path,
+                archive_reader=reader,
+                seven_zip=self.seven_zip,
+            )
+            working = create_flux_working_copy(plan, base / "working_copy")
+            source_before = snapshot_tree(root)
+            real_atomic_copy = flux_reinjection.atomic_copy_file
+            copy_calls = 0
+
+            def fail_rollback(*args, **kwargs):
+                nonlocal copy_calls
+                copy_calls += 1
+                if copy_calls == 3:
+                    raise OSError("échec synthétique du rollback")
+                return real_atomic_copy(*args, **kwargs)
+
+            backup = base / "backups" / "Data_0.before-rollback-failure.fpk"
+            with patch("flux_reinjection.atomic_copy_file", side_effect=fail_rollback):
+                with self.assertRaisesRegex(FluxReinjectionError, "Échec critique du rollback"):
+                    validate_candidate_on_working_copy(
+                        plan,
+                        candidate,
+                        working,
+                        backup,
+                        archive_reader=reader,
+                    )
+
+            marker = working / "COPIE_FLUX_INCOMPLETE.txt"
+            working_fpk = working / plan.fpk_path.relative_to(plan.game_root)
+            self.assertTrue(marker.is_file())
+            self.assertIn("ne doit pas être utilisée", marker.read_text(encoding="utf-8"))
+            self.assertEqual(plan.source_fpk_sha256, hashlib.sha256(backup.read_bytes()).hexdigest())
+            self.assertEqual(
+                candidate.candidate_fpk_sha256,
+                hashlib.sha256(working_fpk.read_bytes()).hexdigest(),
+            )
+            self.assertTrue(compare_snapshots(source_before, snapshot_tree(root)).passed)
 
 
 if __name__ == "__main__":

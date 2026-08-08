@@ -2,12 +2,12 @@
 """Écritures atomiques communes, sans nom temporaire prévisible."""
 from __future__ import annotations
 
+import hashlib
 import os
-import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, TextIO
+from typing import BinaryIO, Callable, Iterator, TextIO
 
 
 def _is_link_or_junction(path: Path) -> bool:
@@ -109,20 +109,47 @@ def atomic_write_bytes(
             temporary_path.unlink(missing_ok=True)
 
 
+def _copy_stream_and_hash(source_handle: BinaryIO, target_handle: BinaryIO) -> str:
+    """Copie le flux tout en calculant l'empreinte des octets effectivement lus."""
+    digest = hashlib.sha256()
+    while True:
+        chunk = source_handle.read(1024 * 1024)
+        if not chunk:
+            return digest.hexdigest()
+        target_handle.write(chunk)
+        digest.update(chunk)
+
+
+def _source_signature(stat_result: os.stat_result) -> tuple[int, int, int, int]:
+    return (
+        stat_result.st_dev,
+        stat_result.st_ino,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+    )
+
+
 def atomic_copy_file(
     source: Path,
     destination: Path,
     *,
     validator: Callable[[Path], object] | None = None,
     replace_existing: bool = True,
+    expected_sha256: str | None = None,
 ) -> None:
     """Copie un fichier par flux puis le publie atomiquement après validation."""
     source_path = source.expanduser()
     if not source_path.is_file() or _is_link_or_junction(source_path):
         raise OSError("Le fichier source est absent ou redirigé.")
+    expected = expected_sha256.casefold() if expected_sha256 is not None else None
+    if expected is not None and (
+        len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise ValueError("L'empreinte SHA-256 attendue est invalide.")
     target = _prepare_destination(destination)
     temporary_path: Path | None = None
     try:
+        source_before = source_path.stat()
         with source_path.open("rb") as source_handle, tempfile.NamedTemporaryFile(
             mode="wb",
             dir=target.parent,
@@ -131,9 +158,23 @@ def atomic_copy_file(
             delete=False,
         ) as target_handle:
             temporary_path = Path(target_handle.name)
-            shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
+            opened_before = os.fstat(source_handle.fileno())
+            if _source_signature(source_before) != _source_signature(opened_before):
+                raise OSError("Le fichier source a changé avant sa copie.")
+            copied_sha256 = _copy_stream_and_hash(source_handle, target_handle)
+            opened_after = os.fstat(source_handle.fileno())
             target_handle.flush()
             os.fsync(target_handle.fileno())
+        source_after = source_path.stat()
+        if not (
+            _source_signature(source_before)
+            == _source_signature(opened_before)
+            == _source_signature(opened_after)
+            == _source_signature(source_after)
+        ):
+            raise OSError("Le fichier source a changé pendant sa copie.")
+        if expected is not None and copied_sha256 != expected:
+            raise OSError("La copie ne correspond pas à l'empreinte SHA-256 attendue.")
         if validator is not None:
             validator(temporary_path)
         if replace_existing:
