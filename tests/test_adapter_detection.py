@@ -3,8 +3,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import adapters.pokemon_essentials as pokemon_essentials_module
+import adapters.registry as registry_module
 from adapters import (
     AdapterOperationBlocked,
     AdapterRegistry,
@@ -49,6 +52,29 @@ class FixedRegistry:
     def detect(self, root: Path) -> DetectionResult:
         del root
         return self.result
+
+
+class SyntheticSymlinkPath:
+    def is_symlink(self) -> bool:
+        return True
+
+
+class SyntheticJunctionPath:
+    def is_symlink(self) -> bool:
+        return False
+
+    def is_junction(self) -> bool:
+        return True
+
+
+class SyntheticReparsePointPath:
+    """Simule Python 3.11 : pas de Path.is_junction(), attribut Windows présent."""
+
+    def is_symlink(self) -> bool:
+        return False
+
+    def lstat(self) -> SimpleNamespace:
+        return SimpleNamespace(st_file_attributes=0x0400)
 
 
 class AdapterDetectionTests(unittest.TestCase):
@@ -150,19 +176,45 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertTrue(any("redirig" in warning.casefold() for warning in result.warnings))
             essentials_probe.assert_not_called()
 
+    def test_symlink_junction_and_generic_reparse_points_are_all_detected(self):
+        redirected_path_types = (
+            ("symlink", SyntheticSymlinkPath()),
+            ("junction", SyntheticJunctionPath()),
+            ("generic_reparse_point", SyntheticReparsePointPath()),
+        )
+        helpers = (
+            ("registry", registry_module._is_link_or_junction),
+            ("essentials", pokemon_essentials_module._is_link_or_junction),
+        )
+
+        for helper_name, helper in helpers:
+            for path_type, redirected_path in redirected_path_types:
+                with self.subTest(helper=helper_name, path_type=path_type):
+                    self.assertTrue(helper(redirected_path))
+
     def test_redirected_essentials_marker_blocks_detection_and_direct_extraction(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir) / "JeuTest"
-            self._write(root / "Game.exe")
-            self._write(root / "Game.ini")
-            self._write(root / "Data" / "System.rxdata")
-            self._write(root / "Data" / "Map001.rxdata")
-            self._write(root / "Data" / "messages_game.dat")
-            self._write(root / "PBS" / "pokemon.txt", b"Pokemon Essentials v21.1")
-            redirected = root / "PBS"
+            actual_root = Path(temp_dir) / "JeuTest"
+            self._write(actual_root / "Game.exe")
+            self._write(actual_root / "Game.ini")
+            self._write(actual_root / "Data" / "System.rxdata")
+            self._write(actual_root / "Data" / "Map001.rxdata")
+            self._write(actual_root / "Data" / "messages_game.dat")
+            self._write(actual_root / "PBS" / "pokemon.txt", b"Pokemon Essentials v21.1")
+
+            alias_parent = Path(temp_dir) / "CheminAlias"
+            alias_parent.mkdir()
+            root = alias_parent / ".." / actual_root.name
+            redirected_parent = actual_root.resolve()
+
+            self.assertNotEqual(root, actual_root)
+            self.assertEqual(root.resolve(), redirected_parent)
 
             def marks_pbs_as_redirected(path: Path) -> bool:
-                return path == redirected
+                return (
+                    path.name.casefold() == "pbs"
+                    and path.parent.resolve() == redirected_parent
+                )
 
             with patch(
                 "adapters.pokemon_essentials._is_link_or_junction",
