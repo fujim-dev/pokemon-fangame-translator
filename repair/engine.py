@@ -20,6 +20,7 @@ from .rollback import (
     timestamp_token,
 )
 from .safe_fixes import extract_protected, restore_simple_commands
+from safe_io import atomic_text_writer
 
 
 REPAIR_METADATA_FIELDS = [
@@ -30,16 +31,10 @@ REPAIR_METADATA_FIELDS = [
 
 
 def _write_project_csv(path: Path, fields: list[str], rows: list[dict[str, str]]) -> None:
-    temporary = path.with_suffix(path.suffix + ".repairtmp")
-    try:
-        with temporary.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
-            writer.writeheader()
-            writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
-        temporary.replace(path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    with atomic_text_writer(path, encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
+        writer.writeheader()
+        writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
 
 
 def _validate_applied_rows(

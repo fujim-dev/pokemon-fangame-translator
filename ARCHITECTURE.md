@@ -21,6 +21,7 @@ Pokemon_Fangame_Translator.py
 │   ├── language_coverage.py
 │   └── report_writer.py
 ├── flux_archive.py
+├── safe_io.py
 ├── structured_extractor.py
 │   └── ruby_marshal_reader.py
 ├── translation_studio.py
@@ -134,6 +135,8 @@ Forces :
 - écritures atomiques ;
 - validation après modification ;
 - préservation de l'original par copie.
+- revalidation de l'adaptateur Essentials au plan puis immédiatement avant la copie ;
+- refus des racines redirigées et des noms de sortie réservés déjà présents.
 
 Limite actuelle :
 
@@ -203,6 +206,9 @@ Déjà en place :
 - identifiants Flux fondés sur le conteneur, la source, le chemin structurel et l'empreinte brute ;
 - corrélation statique Audio/Graphics par inventaire, y compris les littéraux Ruby sans exécution ;
 - profil Flux volontairement privé de toute capacité de reconstruction.
+- autorisation commune du registre réappliquée aux appels directs d'extraction ;
+- écritures atomiques communes avec fichiers temporaires voisins et uniques ;
+- rollback du CSV si la validation ou la journalisation d'une restauration échoue.
 
 Encore partiel ou pas encore en place :
 

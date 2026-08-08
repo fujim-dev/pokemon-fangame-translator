@@ -294,11 +294,14 @@ class PokemonFluxAdapter:
         )
 
     def extract(self, root: Path, progress=None, logger=None) -> tuple[list[dict], list[str]]:
-        detection = self.probe(root)
-        if not detection.can(GameCapability.EXTRACT):
-            raise AdapterOperationBlocked(
-                "L'extraction Flux est réservée à une version reconnue exactement."
-            )
+        from .registry import authorize_adapter_operation
+
+        authorize_adapter_operation(
+            root,
+            expected_adapter_id=self.adapter_id,
+            capability=GameCapability.EXTRACT,
+            adapter=self,
+        )
         return extract_flux_texts(
             root,
             archive_reader=self.archive_reader,

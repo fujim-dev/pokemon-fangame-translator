@@ -15,6 +15,7 @@ from repair import (
     restore_csv_backup,
     save_repair_plan,
 )
+from repair.rollback import atomic_write_bytes
 
 
 FIELDS = [
@@ -230,6 +231,67 @@ class SafeRepairTests(unittest.TestCase):
             restored = csv_path.read_bytes()
 
         self.assertEqual(original, restored)
+
+    def test_restore_report_failure_rolls_back_to_the_pre_restore_state(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_restore_journal_") as temp_dir:
+            base = Path(temp_dir)
+            csv_path = base / "project.csv"
+            write_fixture(csv_path)
+            saved = save_repair_plan(
+                plan_csv_repairs(csv_path),
+                base / "reports" / "plan.json",
+            )
+            result = apply_repair_plan(
+                saved,
+                backup_dir=base / "backups",
+                report_dir=base / "reports",
+            )
+            repaired = csv_path.read_bytes()
+
+            with patch("repair.rollback.atomic_write_json", side_effect=OSError("synthetic")):
+                with self.assertRaisesRegex(RepairError, "journal.*rollback"):
+                    restore_csv_backup(
+                        csv_path,
+                        Path(result.backup_path),
+                        backup_dir=base / "backups",
+                        report_dir=base / "reports",
+                    )
+
+            after_failure = csv_path.read_bytes()
+
+        self.assertEqual(repaired, after_failure)
+
+    def test_unique_atomic_temporary_file_preserves_legacy_tmp_name(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_atomic_name_") as temp_dir:
+            base = Path(temp_dir)
+            destination = base / "project.csv"
+            legacy_temporary = base / "project.csv.tmp"
+            legacy_temporary.write_bytes(b"unrelated sentinel")
+
+            atomic_write_bytes(destination, b"new payload")
+
+            self.assertEqual(b"new payload", destination.read_bytes())
+            self.assertEqual(b"unrelated sentinel", legacy_temporary.read_bytes())
+
+    def test_repair_preserves_preexisting_legacy_repairtmp_file(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_repair_temp_name_") as temp_dir:
+            base = Path(temp_dir)
+            csv_path = base / "project.csv"
+            write_fixture(csv_path)
+            legacy_temporary = base / "project.csv.repairtmp"
+            legacy_temporary.write_bytes(b"unrelated sentinel")
+            saved = save_repair_plan(
+                plan_csv_repairs(csv_path),
+                base / "reports" / "plan.json",
+            )
+
+            apply_repair_plan(
+                saved,
+                backup_dir=base / "backups",
+                report_dir=base / "reports",
+            )
+
+            self.assertEqual(b"unrelated sentinel", legacy_temporary.read_bytes())
 
 
 if __name__ == "__main__":

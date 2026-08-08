@@ -41,6 +41,7 @@ from structured_extractor import (
     stable_id,
     text_value,
 )
+from safe_io import atomic_write_bytes, atomic_write_text
 
 RPG_CODE_RE = re.compile(
     r"(\\(?:[Pp][Nn]|[Ss][Hh]|[Ww][Uu]|[NnLlGgBbRr])"
@@ -56,6 +57,13 @@ SUPPORTED_TYPES = {"Dialogue", "Choix", "Banque de messages"}
 SAFE_STATUSES = {"Accepté", "Prêt", "Traduit", "Déjà traduit"}
 REVIEW_STATUSES = {"À vérifier", "À relire"}
 BLOCKED_STATUSES = {"Bloqué", "À traduire", "Ignoré", ""}
+ESSENTIALS_ADAPTER_ID = "pokemon_essentials"
+RESERVED_COPY_OUTPUTS = (
+    "PFT_RECONSTRUCTION_V1.0.txt",
+    "LIRE_AVANT_DE_JOUER.txt",
+    "LANCER_VERSION_FR.bat",
+    "RECONSTRUCTION_INCOMPLETE.txt",
+)
 
 
 @dataclass
@@ -83,6 +91,8 @@ class ReconstructionPlan:
     csv_path: str
     created_at: str
     mode: str
+    adapter_id: str = ""
+    adapter_version: str = ""
     project_rows: int = 0
     translated_rows: int = 0
     untranslated_rows: int = 0
@@ -271,6 +281,55 @@ def _is_same_or_within(path: Path, root: Path) -> bool:
         return False
 
 
+def _resolve_safe_game_root(game_root: Path) -> Path:
+    """Valide la racine choisie avant de perdre son identité lexicale.
+
+    ``Path.resolve()`` suit un lien ou une jonction. Le contrôle doit donc être
+    fait sur le chemin fourni par l'appelant, avant sa canonicalisation.
+    """
+    expanded = game_root.expanduser()
+    if _is_link_or_junction(expanded):
+        raise ReconstructionError(
+            "Le dossier du fangame ne peut pas être un lien symbolique ou une jonction."
+        )
+    resolved = expanded.resolve()
+    if not resolved.is_dir():
+        raise ReconstructionError("Le dossier du fangame est introuvable.")
+    return resolved
+
+
+def _require_essentials_reconstruction(game_root: Path):
+    """Réinterroge le registre avant toute opération de reconstruction.
+
+    Cette barrière protège également les appels directs au moteur, sans
+    dépendre de l'état des boutons de l'interface.
+    """
+    from adapters import AdapterOperationBlocked, GameCapability, authorize_adapter_operation
+
+    try:
+        return authorize_adapter_operation(
+            game_root,
+            expected_adapter_id=ESSENTIALS_ADAPTER_ID,
+            capability=GameCapability.RECONSTRUCT,
+            require_write_authorization=True,
+        )
+    except AdapterOperationBlocked as exc:
+        raise ReconstructionError(
+            "Reconstruction bloquée : l'adaptateur Pokémon Essentials n'est pas "
+            f"autorisé pour ce dossier ({exc})."
+        ) from exc
+
+
+def _assert_reserved_copy_outputs_absent(source_root: Path) -> None:
+    """Empêche les fichiers générés après validation d'écraser un homonyme."""
+    collisions = [name for name in RESERVED_COPY_OUTPUTS if (source_root / name).exists()]
+    if collisions:
+        raise ReconstructionError(
+            "Reconstruction bloquée : le fangame contient déjà un fichier réservé "
+            f"par l'application ({', '.join(collisions)})."
+        )
+
+
 def _assert_plan_sources_unchanged(plan: ReconstructionPlan, source_root: Path) -> None:
     """Refuse un plan incomplet ou devenu obsolète avant son application."""
     expected_files = {
@@ -354,20 +413,21 @@ def load_project_rows(csv_path: Path) -> list[dict[str, str]]:
 
 
 def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> ReconstructionPlan:
-    game_root = game_root.expanduser().resolve()
+    game_root = _resolve_safe_game_root(game_root)
     csv_path = csv_path.expanduser().resolve()
-    if not game_root.is_dir():
-        raise ReconstructionError("Le dossier du fangame est introuvable.")
     if not csv_path.is_file():
         raise ReconstructionError("Le projet de traduction est introuvable.")
     if mode not in {"accepted", "recommended", "all_reviewed"}:
         raise ReconstructionError(f"Mode de reconstruction inconnu : {mode}")
+    detection = _require_essentials_reconstruction(game_root)
 
     plan = ReconstructionPlan(
         game_root=str(game_root),
         csv_path=str(csv_path),
         created_at=datetime.now().isoformat(timespec="seconds"),
         mode=mode,
+        adapter_id=detection.adapter_id,
+        adapter_version=detection.recognized_version,
     )
 
     rows = load_project_rows(csv_path)
@@ -625,12 +685,10 @@ def _apply_pbs_items(path: Path, relative: str, items: list[PlanItem]) -> None:
         raise ReconstructionError(f"{len(missing)} champ(s) PBS introuvable(s)")
 
     rebuilt = "".join(lines)
-    temp = path.with_suffix(path.suffix + ".pfttmp")
     try:
-        temp.write_text(rebuilt, encoding=encoding, newline="")
+        atomic_write_text(path, rebuilt, encoding=encoding, newline="")
     except UnicodeEncodeError as exc:
         raise ReconstructionError(f"Caractère incompatible avec l'encodage {encoding}: {exc}")
-    temp.replace(path)
 
 
 def _assert_utf8_translation_bytes(value, context: str) -> None:
@@ -647,11 +705,8 @@ def _assert_utf8_translation_bytes(value, context: str) -> None:
 
 def _atomic_write_marshal(path: Path, root) -> None:
     payload = dumps(root)
-    temp = path.with_suffix(path.suffix + ".pfttmp")
-    temp.write_bytes(payload)
     # Relire avant le remplacement pour détecter immédiatement une écriture invalide.
-    load(temp)
-    temp.replace(path)
+    atomic_write_bytes(path, payload, validator=load)
 
 
 def _apply_file(target_root: Path, relative: str, items: list[PlanItem]) -> None:
@@ -821,7 +876,13 @@ def reconstruct_copy(
     report_dir: Path,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> ReconstructionResult:
-    source_root = Path(plan.game_root).resolve()
+    source_root = _resolve_safe_game_root(Path(plan.game_root))
+    detection = _require_essentials_reconstruction(source_root)
+    if plan.adapter_id != detection.adapter_id:
+        raise ReconstructionError(
+            "Le plan ne correspond plus à l'adaptateur détecté. Relancez la simulation."
+        )
+    _assert_reserved_copy_outputs_absent(source_root)
     target_root = target_root.expanduser().resolve()
     report_dir = report_dir.expanduser().resolve()
     if _is_same_or_within(report_dir, source_root):

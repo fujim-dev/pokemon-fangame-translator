@@ -23,6 +23,7 @@ from translation_studio import TranslationStudio
 from reconstruction_studio import ReconstructionStudio
 from adapters import DetectionResult, GameCapability, create_default_registry
 from analysis import report_text as deep_report_text, write_analysis_reports
+from safe_io import atomic_text_writer
 
 
 APP_TITLE = "Pokémon Fangame Translator v1.0.2 — Bêta publique"
@@ -145,13 +146,10 @@ def merge_project_rows(new_rows: list[dict[str, str]], existing_csv: Path | None
 
 
 def write_project_csv(path: Path, rows: list[dict[str, str]], fields: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    with temp.open("w", encoding="utf-8-sig", newline="") as handle:
+    with atomic_text_writer(path, encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
         writer.writeheader()
         writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
-    temp.replace(path)
 
 
 def _is_same_or_within(path: Path, root: Path) -> bool:

@@ -45,6 +45,21 @@ def write_project(path: Path, row: dict[str, str]) -> None:
     write_projects(path, [row])
 
 
+def prepare_essentials_game(game_root: Path) -> None:
+    """Ajoute les indices artificiels minimaux exigés par l'adaptateur."""
+    markers = {
+        "Game.exe": b"synthetic executable",
+        "Game.ini": b"[Game]\nLibrary=RGSS104E.dll\n",
+        "Data/System.rxdata": b"synthetic system",
+        "Data/messages_game.dat": b"synthetic messages",
+        "PBS/pokemon.txt": b"Pokemon Essentials v21.1",
+    }
+    for relative, payload in markers.items():
+        path = game_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+
 def pbs_row(relative: str, source: str = "Hello", translation: str = "Bonjour") -> dict[str, str]:
     return {
         "id_stable": stable_id("pbs", relative, "GLOBAL", "Name", 1),
@@ -76,6 +91,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
             base = Path(temp_dir)
             game_root = base / "game"
             (game_root / "PBS").mkdir(parents=True)
+            prepare_essentials_game(game_root)
             outside = base / "outside.txt"
             outside.write_text("Name = Hello\n", encoding="utf-8")
             relative = "PBS/../../outside.txt"
@@ -92,6 +108,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
             base = Path(temp_dir)
             game_root = base / "game"
             game_root.mkdir()
+            prepare_essentials_game(game_root)
             outside = base / "outside.txt"
             outside.write_text("Name = Hello\n", encoding="utf-8")
             relative = outside.as_posix()
@@ -110,6 +127,9 @@ class ReconstructionSafetyTests(unittest.TestCase):
             pbs_path = game_root / "PBS" / "fixture.txt"
             pbs_path.parent.mkdir(parents=True)
             pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            prepare_essentials_game(game_root)
+            legacy_temporary = pbs_path.with_suffix(pbs_path.suffix + ".pfttmp")
+            legacy_temporary.write_bytes(b"unrelated synthetic file")
             original = pbs_path.read_bytes()
 
             relative = "PBS/fixture.txt"
@@ -125,6 +145,10 @@ class ReconstructionSafetyTests(unittest.TestCase):
             self.assertTrue(result.original_unchanged)
             self.assertEqual(1, result.applied)
             self.assertIn("Bonjour", (target / relative).read_text(encoding="utf-8"))
+            self.assertEqual(
+                b"unrelated synthetic file",
+                (target / legacy_temporary.relative_to(game_root)).read_bytes(),
+            )
 
     def test_refuses_source_changed_after_simulation(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_stale_plan_") as temp_dir:
@@ -133,6 +157,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
             pbs_path = game_root / "PBS" / "fixture.txt"
             pbs_path.parent.mkdir(parents=True)
             pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            prepare_essentials_game(game_root)
 
             relative = "PBS/fixture.txt"
             csv_path = base / "project.csv"
@@ -154,6 +179,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
             pbs_path = game_root / "PBS" / "fixture.txt"
             pbs_path.parent.mkdir(parents=True)
             pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            prepare_essentials_game(game_root)
 
             relative = "PBS/fixture.txt"
             csv_path = base / "project.csv"
@@ -172,6 +198,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
             game_root = base / "game"
             pbs_dir = game_root / "PBS"
             pbs_dir.mkdir(parents=True)
+            prepare_essentials_game(game_root)
             (pbs_dir / "safe.txt").write_text("Name = Hello\n", encoding="utf-8")
             (pbs_dir / "blocked.txt").write_text("Name = Actual\n", encoding="utf-8")
 
@@ -204,6 +231,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
             pbs_path = game_root / "PBS" / "fixture.txt"
             pbs_path.parent.mkdir(parents=True)
             pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            prepare_essentials_game(game_root)
             outside = base / "outside"
             outside.mkdir()
             (outside / "private.txt").write_text("outside", encoding="utf-8")
@@ -231,6 +259,7 @@ class ReconstructionSafetyTests(unittest.TestCase):
             pbs_path = game_root / "PBS" / "fixture.txt"
             pbs_path.parent.mkdir(parents=True)
             pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            prepare_essentials_game(game_root)
             (game_root / "LinkedOutside").mkdir()
 
             relative = "PBS/fixture.txt"
@@ -247,6 +276,80 @@ class ReconstructionSafetyTests(unittest.TestCase):
                     reconstruct_copy(plan, target, base / "reports")
 
             self.assertFalse(target.exists())
+
+    def test_unknown_structure_cannot_build_a_reconstruction_plan(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_unknown_rebuild_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "unknown_game"
+            pbs_path = game_root / "PBS" / "fixture.txt"
+            pbs_path.parent.mkdir(parents=True)
+            pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            original = pbs_path.read_bytes()
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row("PBS/fixture.txt"))
+
+            with self.assertRaisesRegex(ReconstructionError, "adaptateur Pokémon Essentials"):
+                build_plan(game_root, csv_path)
+
+            self.assertEqual(original, pbs_path.read_bytes())
+
+    def test_adapter_is_revalidated_immediately_before_copy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_adapter_recheck_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            pbs_path = game_root / "PBS" / "fixture.txt"
+            pbs_path.parent.mkdir(parents=True)
+            pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            prepare_essentials_game(game_root)
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row("PBS/fixture.txt"))
+            plan = simulate_plan(build_plan(game_root, csv_path))
+
+            (game_root / "Game.exe").unlink()
+            target = base / "game_VERSION_FR"
+            reports = base / "reports"
+
+            with self.assertRaisesRegex(ReconstructionError, "adaptateur Pokémon Essentials"):
+                reconstruct_copy(plan, target, reports)
+
+            self.assertFalse(target.exists())
+            self.assertFalse(reports.exists())
+
+    def test_reserved_generated_file_is_never_overwritten_in_the_copy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_reserved_output_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            pbs_path = game_root / "PBS" / "fixture.txt"
+            pbs_path.parent.mkdir(parents=True)
+            pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+            prepare_essentials_game(game_root)
+            reserved = game_root / "LANCER_VERSION_FR.bat"
+            reserved.write_bytes(b"original synthetic launcher")
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row("PBS/fixture.txt"))
+            plan = simulate_plan(build_plan(game_root, csv_path))
+            target = base / "game_VERSION_FR"
+
+            with self.assertRaisesRegex(ReconstructionError, "fichier réservé"):
+                reconstruct_copy(plan, target, base / "reports")
+
+            self.assertEqual(b"original synthetic launcher", reserved.read_bytes())
+            self.assertFalse(target.exists())
+
+    def test_redirected_game_root_is_rejected_before_resolution(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_root_link_") as temp_dir:
+            base = Path(temp_dir)
+            game_root = base / "game"
+            prepare_essentials_game(game_root)
+            csv_path = base / "project.csv"
+            write_project(csv_path, pbs_row("PBS/fixture.txt"))
+
+            with patch(
+                "reconstruction_engine._is_link_or_junction",
+                side_effect=lambda path: Path(path) == game_root,
+            ):
+                with self.assertRaisesRegex(ReconstructionError, "lien symbolique|jonction"):
+                    build_plan(game_root, csv_path)
 
 
 if __name__ == "__main__":

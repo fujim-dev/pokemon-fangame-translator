@@ -49,11 +49,26 @@ def write_project(path: Path, relative: str = "PBS/fixture.txt") -> None:
         writer.writerow({field: row.get(field, "") for field in PROJECT_FIELDS})
 
 
+def prepare_essentials_game(game_root: Path) -> None:
+    markers = {
+        "Game.exe": b"synthetic executable",
+        "Game.ini": b"[Game]\nLibrary=RGSS104E.dll\n",
+        "Data/System.rxdata": b"synthetic system",
+        "Data/messages_game.dat": b"synthetic messages",
+        "PBS/pokemon.txt": b"Pokemon Essentials v21.1",
+    }
+    for relative, payload in markers.items():
+        path = game_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+
 def synthetic_plan(base: Path):
     game_root = base / "game"
     pbs_path = game_root / "PBS" / "fixture.txt"
     pbs_path.parent.mkdir(parents=True)
     pbs_path.write_text("Name = Hello\n", encoding="utf-8")
+    prepare_essentials_game(game_root)
     untouched = game_root / "Graphics" / "untouched.bin"
     untouched.parent.mkdir(parents=True)
     untouched.write_bytes(b"synthetic-untouched-file")

@@ -8,21 +8,11 @@ from pathlib import Path
 
 from .models import RepairError, RestorationResult
 from .planner import REQUIRED_FIELDS, sha256_bytes, sha256_file
+from safe_io import atomic_write_bytes
 
 
 def timestamp_token() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-
-
-def atomic_write_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    try:
-        temporary.write_bytes(payload)
-        temporary.replace(path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
@@ -88,28 +78,35 @@ def restore_csv_backup(
         allowed_root,
         "avant_restauration",
     )
+    report_path = report_dir.expanduser().resolve() / f"RAPPORT_RESTAURATION_{timestamp_token()}.json"
     try:
         restore_exact_backup(csv_resolved, backup_resolved)
         _validate_csv_structure(csv_resolved)
+        restored_hash = sha256_file(csv_resolved)
+        atomic_write_json(
+            report_path,
+            {
+                "version": "1.1",
+                "operation": "restauration_csv",
+                "statut": "reussie",
+                "csv": str(csv_resolved),
+                "sauvegarde_restauree": str(backup_resolved),
+                "sauvegarde_de_securite": str(safety_backup),
+                "sha256_restaure": restored_hash,
+                "confidentialite": "Aucun dialogue complet n'est enregistré.",
+            },
+        )
     except Exception as exc:
-        restore_exact_backup(csv_resolved, safety_backup)
-        raise RepairError("La restauration a échoué ; l'état précédent a été rétabli.") from exc
-
-    report_path = report_dir.expanduser().resolve() / f"RAPPORT_RESTAURATION_{timestamp_token()}.json"
-    restored_hash = sha256_file(csv_resolved)
-    atomic_write_json(
-        report_path,
-        {
-            "version": "1.1",
-            "operation": "restauration_csv",
-            "statut": "reussie",
-            "csv": str(csv_resolved),
-            "sauvegarde_restauree": str(backup_resolved),
-            "sauvegarde_de_securite": str(safety_backup),
-            "sha256_restaure": restored_hash,
-            "confidentialite": "Aucun dialogue complet n'est enregistré.",
-        },
-    )
+        try:
+            restore_exact_backup(csv_resolved, safety_backup)
+        except Exception as rollback_exc:
+            raise RepairError(
+                "La restauration et son rollback ont échoué. N'utilisez plus ce CSV ; "
+                f"la sauvegarde exacte se trouve ici : {safety_backup}"
+            ) from rollback_exc
+        raise RepairError(
+            "La restauration ou son journal a échoué ; rollback effectué."
+        ) from exc
     return RestorationResult(
         csv_path=str(csv_resolved),
         restored_backup_path=str(backup_resolved),

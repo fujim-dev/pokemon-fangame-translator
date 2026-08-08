@@ -29,6 +29,7 @@ from repair import (
     save_repair_plan,
     split_protected,
 )
+from safe_io import atomic_text_writer
 
 EXPECTED_FIELDS = [
     "id_stable", "type", "fichier", "carte_id", "carte_nom",
@@ -1618,14 +1619,11 @@ class TranslationStudio(tk.Toplevel):
         return self.save_csv()
 
     def _write_csv(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(path.suffix + ".tmp")
-        with temp.open("w", encoding="utf-8-sig", newline="") as handle:
+        with atomic_text_writer(path, encoding="utf-8-sig", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=self.fieldnames, delimiter=";")
             writer.writeheader()
             for row in self.rows:
                 writer.writerow({field: row.get(field, "") for field in self.fieldnames})
-        temp.replace(path)
 
     def show_flagged(self):
         self.sample_active = False

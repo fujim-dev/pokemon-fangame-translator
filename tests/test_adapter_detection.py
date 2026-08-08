@@ -33,6 +33,15 @@ class StaticAdapter:
         )
 
 
+class FixedRegistry:
+    def __init__(self, result: DetectionResult):
+        self.result = result
+
+    def detect(self, root: Path) -> DetectionResult:
+        del root
+        return self.result
+
+
 class AdapterDetectionTests(unittest.TestCase):
     @staticmethod
     def _write(path: Path, content: bytes = b"synthetic test data") -> None:
@@ -147,6 +156,29 @@ class AdapterDetectionTests(unittest.TestCase):
 
             self.assertEqual(result, expected)
             extractor.assert_called_once_with(root, progress=None, logger=None)
+
+    def test_direct_essentials_extraction_respects_an_ambiguous_registry_decision(self):
+        ambiguous = DetectionResult(
+            adapter_id="unknown",
+            display_name="Structure inconnue",
+            confidence=90,
+            capabilities=frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
+            warnings=("Détection ambiguë synthétique.",),
+            adapter_recognized=False,
+            write_actions_allowed=False,
+            ambiguous=True,
+        )
+        with (
+            patch(
+                "adapters.registry.create_default_registry",
+                return_value=FixedRegistry(ambiguous),
+            ),
+            patch("adapters.pokemon_essentials.extract_structured") as extractor,
+        ):
+            with self.assertRaisesRegex(AdapterOperationBlocked, "ambigu"):
+                PokemonEssentialsAdapter().extract(Path("synthetic"))
+
+        extractor.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .models import DeepAnalysisReport
+from safe_io import atomic_write_text
 
 
 DISCLAIMER = (
@@ -13,10 +14,7 @@ DISCLAIMER = (
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_text(path, content, encoding="utf-8")
 
 
 def _coverage_lines(report: DeepAnalysisReport) -> list[str]:

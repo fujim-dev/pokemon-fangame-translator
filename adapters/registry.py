@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .base import DetectionResult, GameAdapter, GameCapability
+from .base import AdapterOperationBlocked, DetectionResult, GameAdapter, GameCapability
 from .pokemon_essentials import PokemonEssentialsAdapter
 from .pokemon_flux import PokemonFluxAdapter
 from .unknown import UnknownAdapter
@@ -75,5 +75,37 @@ class AdapterRegistry:
         return UnknownAdapter()
 
 
-def create_default_registry() -> AdapterRegistry:
-    return AdapterRegistry((PokemonEssentialsAdapter(), PokemonFluxAdapter()))
+def create_default_registry(*, replacement: GameAdapter | None = None) -> AdapterRegistry:
+    adapters: list[GameAdapter] = [PokemonEssentialsAdapter(), PokemonFluxAdapter()]
+    if replacement is not None:
+        adapters = [
+            replacement if adapter.adapter_id == replacement.adapter_id else adapter
+            for adapter in adapters
+        ]
+    return AdapterRegistry(tuple(adapters))
+
+
+def authorize_adapter_operation(
+    root: Path,
+    *,
+    expected_adapter_id: str,
+    capability: GameCapability,
+    adapter: GameAdapter | None = None,
+    require_write_authorization: bool = False,
+) -> DetectionResult:
+    """Applique la décision multi-adaptateurs même lors d'un appel direct."""
+    detection = create_default_registry(replacement=adapter).detect(root)
+    allowed = (
+        detection.adapter_id == expected_adapter_id
+        and detection.adapter_recognized
+        and not detection.ambiguous
+        and detection.can(capability)
+        and (detection.write_actions_allowed or not require_write_authorization)
+    )
+    if not allowed:
+        detail = detection.warnings[0] if detection.warnings else "structure non reconnue"
+        raise AdapterOperationBlocked(
+            f"Opération {capability.value} bloquée pour l'adaptateur "
+            f"{expected_adapter_id} : {detail}"
+        )
+    return detection

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .models import RepairAction, RepairError, RepairPlan
 from .safe_fixes import extract_protected, restore_simple_commands
+from safe_io import atomic_write_text
 
 
 REQUIRED_FIELDS = {"id_stable", "texte_source", "traduction_fr", "statut"}
@@ -129,14 +130,7 @@ def _plan_payload(plan: RepairPlan) -> dict[str, object]:
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    try:
-        temporary.write_text(content, encoding="utf-8")
-        temporary.replace(path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    atomic_write_text(path, content, encoding="utf-8")
 
 
 def save_repair_plan(plan: RepairPlan, path: Path) -> RepairPlan:
