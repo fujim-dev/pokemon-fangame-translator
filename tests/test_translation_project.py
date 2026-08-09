@@ -10,6 +10,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 import safe_io
+from repair import (
+    RepairError,
+    apply_repair_plan,
+    apply_repair_plan_transactional,
+    plan_csv_repairs,
+    restore_csv_backup,
+    restore_csv_backup_transactional,
+    save_repair_plan,
+)
 from extraction_project import (
     BASELINE_CSV_NAME,
     EXTRACTION_MANIFEST_NAME,
@@ -84,14 +93,24 @@ def csv_payload(
     return handle.getvalue().encode("utf-8-sig")
 
 
-def prepare_verified_project(base: Path) -> tuple[Path, Path, bytes]:
+def prepare_verified_project(
+    base: Path,
+    *,
+    source: str = "Hello",
+    translation: str = "",
+) -> tuple[Path, Path, bytes]:
     game_root = base / "game"
     project_dir = base / "project"
     game_root.mkdir()
     project_dir.mkdir()
     source_manifest = "a" * 64
     source_sha256 = "b" * 64
-    initial_csv = csv_payload(source_manifest, source_sha256)
+    initial_csv = csv_payload(
+        source_manifest,
+        source_sha256,
+        source=source,
+        translation=translation,
+    )
     report = b"synthetic extraction report"
     csv_path = project_dir / PROJECT_CSV_NAME
     csv_path.write_bytes(initial_csv)
@@ -403,6 +422,285 @@ class TranslationProjectLifecycleTests(unittest.TestCase):
             self.assertGreaterEqual(calls, 3)
             self.assertEqual(previous, {path: path.read_bytes() for path in paths})
             session.check_current()
+            session.close()
+
+    def test_transactional_repair_publishes_csv_state_backup_and_journal_together(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_transactional_repair_") as temporary:
+            game_root, csv_path, initial = prepare_verified_project(
+                Path(temporary),
+                source=r"\c[1]Hello",
+                translation="Bonjour",
+            )
+            reports = csv_path.parent / "Rapports"
+            plan = save_repair_plan(
+                plan_csv_repairs(csv_path),
+                reports / "PLAN_REPARATIONS_TEST.json",
+            )
+
+            with TranslationProjectSession(
+                csv_path,
+                game_root=game_root,
+                expected_adapter_id="pokemon_essentials",
+            ) as session:
+                result = apply_repair_plan_transactional(session, plan)
+                session.check_current()
+                resume = session.read_resume_state()
+
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                row = next(csv.DictReader(handle, delimiter=";"))
+            state = json.loads(
+                (csv_path.parent / TRANSLATION_STATE_NAME).read_text(encoding="utf-8")
+            )
+            journal = json.loads(Path(result.journal_path).read_text(encoding="utf-8"))
+
+            self.assertEqual(r"\c[1]Bonjour", row["traduction_fr"])
+            self.assertEqual("À vérifier", row["statut"])
+            self.assertEqual(initial, Path(result.backup_path).read_bytes())
+            self.assertEqual(hashlib.sha256(csv_path.read_bytes()).hexdigest(), state["csv_sha256"])
+            self.assertFalse(resume["active"])
+            self.assertEqual(state["csv_sha256"], resume["csv_sha256"])
+            self.assertEqual("transaction_provenance_essentials", journal["mode"])
+            self.assertNotIn("Hello", Path(result.journal_path).read_text(encoding="utf-8"))
+
+    def test_legacy_direct_repair_and_restore_are_refused_for_essentials_project(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_direct_repair_guard_") as temporary:
+            game_root, csv_path, initial = prepare_verified_project(
+                Path(temporary),
+                source=r"\c[1]Hello",
+                translation="Bonjour",
+            )
+            del game_root
+            reports = csv_path.parent / "Rapports"
+            backups = csv_path.parent / "Sauvegardes"
+            plan = save_repair_plan(
+                plan_csv_repairs(csv_path),
+                reports / "PLAN_REPARATIONS_TEST.json",
+            )
+            backups.mkdir()
+            backup = backups / "avant_reparation_test.csv"
+            backup.write_bytes(initial)
+
+            with self.assertRaisesRegex(RepairError, "service transactionnel"):
+                apply_repair_plan(plan, backup_dir=backups, report_dir=reports)
+            with self.assertRaisesRegex(RepairError, "service transactionnel"):
+                restore_csv_backup(
+                    csv_path,
+                    backup,
+                    backup_dir=backups,
+                    report_dir=reports,
+                )
+
+            self.assertEqual(initial, csv_path.read_bytes())
+
+    def test_external_csv_change_after_repair_plan_is_preserved_and_refused(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_repair_external_change_") as temporary:
+            game_root, csv_path, _initial = prepare_verified_project(
+                Path(temporary),
+                source=r"\c[1]Hello",
+                translation="Bonjour",
+            )
+            plan = save_repair_plan(
+                plan_csv_repairs(csv_path),
+                csv_path.parent / "Rapports" / "PLAN_REPARATIONS_TEST.json",
+            )
+            session = TranslationProjectSession(
+                csv_path,
+                game_root=game_root,
+                expected_adapter_id="pokemon_essentials",
+            )
+            external = csv_payload(
+                "a" * 64,
+                "b" * 64,
+                source=r"\c[1]Hello",
+                translation="Modification externe",
+            )
+            csv_path.write_bytes(external)
+
+            with self.assertRaisesRegex(RepairError, "modifié|remplacé|changé"):
+                apply_repair_plan_transactional(session, plan)
+
+            self.assertEqual(external, csv_path.read_bytes())
+            self.assertFalse((csv_path.parent / TRANSLATION_STATE_NAME).exists())
+            self.assertFalse((csv_path.parent / "Sauvegardes").exists())
+            session.close()
+
+    def test_restore_refuses_backup_from_another_extraction(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_restore_wrong_extraction_") as temporary:
+            game_root, csv_path, initial = prepare_verified_project(Path(temporary))
+            backups = csv_path.parent / "Sauvegardes"
+            backups.mkdir()
+            wrong = backups / "avant_reparation_autre_extraction.csv"
+            wrong.write_bytes(
+                csv_payload(
+                    "a" * 64,
+                    "b" * 64,
+                    source="Another source",
+                    translation="Autre",
+                )
+            )
+
+            with TranslationProjectSession(
+                csv_path,
+                game_root=game_root,
+                expected_adapter_id="pokemon_essentials",
+            ) as session:
+                with self.assertRaisesRegex(RepairError, "autre extraction|sources"):
+                    restore_csv_backup_transactional(session, wrong)
+                session.check_current()
+
+            self.assertEqual(initial, csv_path.read_bytes())
+            self.assertFalse((csv_path.parent / TRANSLATION_STATE_NAME).exists())
+            self.assertFalse((csv_path.parent / "Rapports").exists())
+
+    def test_restore_refuses_redirected_backup_directory(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_restore_redirected_") as temporary:
+            base = Path(temporary)
+            game_root, csv_path, initial = prepare_verified_project(base)
+            redirected = csv_path.parent / "Sauvegardes"
+            redirected.mkdir()
+            backup = redirected / "avant_reparation_redirigee.csv"
+            backup.write_bytes(initial)
+
+            real_redirect_check = safe_io._is_link_or_junction
+
+            def marks_backup_directory_as_redirected(path: Path) -> bool:
+                return path == redirected or real_redirect_check(path)
+
+            with TranslationProjectSession(
+                csv_path,
+                game_root=game_root,
+                expected_adapter_id="pokemon_essentials",
+            ) as session:
+                with patch(
+                    "safe_io._is_link_or_junction",
+                    side_effect=marks_backup_directory_as_redirected,
+                ):
+                    with self.assertRaisesRegex(RepairError, "redirigée|instable"):
+                        restore_csv_backup_transactional(session, backup)
+                session.check_current()
+
+            self.assertEqual(initial, csv_path.read_bytes())
+
+    def test_transactional_restore_rebinds_state_and_keeps_safety_backup(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_transactional_restore_") as temporary:
+            game_root, csv_path, initial = prepare_verified_project(
+                Path(temporary),
+                source=r"\c[1]Hello",
+                translation="Bonjour",
+            )
+            plan = save_repair_plan(
+                plan_csv_repairs(csv_path),
+                csv_path.parent / "Rapports" / "PLAN_REPARATIONS_TEST.json",
+            )
+
+            with TranslationProjectSession(
+                csv_path,
+                game_root=game_root,
+                expected_adapter_id="pokemon_essentials",
+            ) as session:
+                repaired = apply_repair_plan_transactional(session, plan)
+                repaired_payload = csv_path.read_bytes()
+                restored = restore_csv_backup_transactional(
+                    session, Path(repaired.backup_path)
+                )
+                session.check_current()
+                resume = session.read_resume_state()
+
+            state = json.loads(
+                (csv_path.parent / TRANSLATION_STATE_NAME).read_text(encoding="utf-8")
+            )
+            self.assertEqual(initial, csv_path.read_bytes())
+            self.assertEqual(repaired_payload, Path(restored.safety_backup_path).read_bytes())
+            self.assertEqual(hashlib.sha256(initial).hexdigest(), state["csv_sha256"])
+            self.assertEqual(2, state["revision"])
+            self.assertFalse(resume["active"])
+            self.assertEqual(state["csv_sha256"], resume["csv_sha256"])
+
+    def test_backup_changed_during_restore_rolls_back_all_published_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_restore_guard_") as temporary:
+            game_root, csv_path, _initial = prepare_verified_project(
+                Path(temporary),
+                source=r"\c[1]Hello",
+                translation="Bonjour",
+            )
+            plan = save_repair_plan(
+                plan_csv_repairs(csv_path),
+                csv_path.parent / "Rapports" / "PLAN_REPARATIONS_TEST.json",
+            )
+            session = TranslationProjectSession(
+                csv_path,
+                game_root=game_root,
+                expected_adapter_id="pokemon_essentials",
+            )
+            repaired = apply_repair_plan_transactional(session, plan)
+            backup = Path(repaired.backup_path)
+            core_paths = (
+                csv_path,
+                csv_path.parent / TRANSLATION_STATE_NAME,
+                csv_path.parent / "etat_traduction.json",
+            )
+            before = {path: path.read_bytes() for path in core_paths}
+            reports_before = set((csv_path.parent / "Rapports").iterdir())
+            backups_before = set((csv_path.parent / "Sauvegardes").iterdir())
+            real_replace = safe_io._replace_file
+            calls = 0
+
+            def change_backup_during_commit(source: Path, destination: Path) -> None:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    backup.write_bytes(backup.read_bytes() + b"external")
+                real_replace(source, destination)
+
+            with patch("safe_io._replace_file", side_effect=change_backup_during_commit):
+                with self.assertRaisesRegex(RepairError, "état précédent|annulée"):
+                    restore_csv_backup_transactional(session, backup)
+
+            self.assertEqual(before, {path: path.read_bytes() for path in core_paths})
+            self.assertEqual(reports_before, set((csv_path.parent / "Rapports").iterdir()))
+            self.assertEqual(backups_before, set((csv_path.parent / "Sauvegardes").iterdir()))
+            session.check_current()
+            session.close()
+
+    def test_incomplete_transactional_repair_rollback_preserves_recovery_file(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_repair_recovery_") as temporary:
+            game_root, csv_path, initial = prepare_verified_project(
+                Path(temporary),
+                source=r"\c[1]Hello",
+                translation="Bonjour",
+            )
+            session = TranslationProjectSession(
+                csv_path,
+                game_root=game_root,
+                expected_adapter_id="pokemon_essentials",
+            )
+            session.save(
+                initial,
+                resume_state={"active": False, "total": 0, "completed": 0, "remaining": 0},
+            )
+            plan = save_repair_plan(
+                plan_csv_repairs(csv_path),
+                csv_path.parent / "Rapports" / "PLAN_REPARATIONS_TEST.json",
+            )
+            real_replace = safe_io._replace_file
+            calls = 0
+
+            def fail_publication_then_rollback(source: Path, destination: Path) -> None:
+                nonlocal calls
+                calls += 1
+                if calls in {2, 3}:
+                    raise OSError("synthetic publication/rollback failure")
+                real_replace(source, destination)
+
+            with patch("safe_io._replace_file", side_effect=fail_publication_then_rollback):
+                with self.assertRaisesRegex(
+                    RepairError, "rollback est incomplet|Détails de récupération"
+                ):
+                    apply_repair_plan_transactional(session, plan)
+
+            recovery_files = list(csv_path.parent.glob(".*.pft-bundle-old-*.tmp"))
+            self.assertTrue(recovery_files)
+            self.assertTrue(any(path.read_bytes() for path in recovery_files))
             session.close()
 
     def test_diagnostic_refresh_preserves_verified_identity_bytes(self) -> None:

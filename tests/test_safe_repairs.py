@@ -152,6 +152,21 @@ class SafeRepairTests(unittest.TestCase):
                     report_dir=base / "reports",
                 )
 
+    def test_existing_repair_plan_is_never_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_repair_plan_collision_") as temp_dir:
+            base = Path(temp_dir)
+            csv_path = base / "project.csv"
+            write_fixture(csv_path)
+            destination = base / "reports" / "plan.json"
+            destination.parent.mkdir()
+            sentinel = b"external plan"
+            destination.write_bytes(sentinel)
+
+            with self.assertRaisesRegex(RepairError, "écraser|existant"):
+                save_repair_plan(plan_csv_repairs(csv_path), destination)
+
+            self.assertEqual(sentinel, destination.read_bytes())
+
     def test_validation_failure_rolls_back_exact_original_bytes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_repair_rollback_") as temp_dir:
             base = Path(temp_dir)

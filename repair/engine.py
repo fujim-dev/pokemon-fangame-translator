@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import io
 from pathlib import Path
 from typing import Callable
 
@@ -9,9 +10,12 @@ from .models import RepairError, RepairPlan, RepairResult
 from .planner import (
     assert_saved_plan,
     read_project_csv,
+    read_project_csv_payload,
+    sha256_bytes,
     sha256_file,
     sha256_text,
 )
+from .project_guard import assert_legacy_direct_write_allowed
 from .rollback import (
     atomic_write_bytes,
     atomic_write_json,
@@ -20,7 +24,7 @@ from .rollback import (
     timestamp_token,
 )
 from .safe_fixes import extract_protected, restore_simple_commands
-from safe_io import atomic_text_writer
+from safe_io import read_stable_file
 
 
 REPAIR_METADATA_FIELDS = [
@@ -30,19 +34,20 @@ REPAIR_METADATA_FIELDS = [
 ]
 
 
-def _write_project_csv(path: Path, fields: list[str], rows: list[dict[str, str]]) -> None:
-    with atomic_text_writer(path, encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
-        writer.writeheader()
-        writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
+def _serialize_project_csv(fields: list[str], rows: list[dict[str, str]]) -> bytes:
+    handle = io.StringIO(newline="")
+    writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
+    writer.writeheader()
+    writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
+    return handle.getvalue().encode("utf-8-sig")
 
 
-def _validate_applied_rows(
-    path: Path,
+def _validate_applied_rows_payload(
+    payload: bytes,
     original_rows: list[dict[str, str]],
     plan: RepairPlan,
 ) -> None:
-    _fields, written_rows = read_project_csv(path)
+    _fields, written_rows = read_project_csv_payload(payload)
     if len(written_rows) != len(original_rows) or len(written_rows) != plan.row_count:
         raise RepairError("Le nombre de lignes a changé pendant la réparation.")
     safe_by_index = {action.row_index: action for action in plan.safe_actions}
@@ -69,6 +74,49 @@ def _validate_applied_rows(
             raise RepairError(f"La réparation relue diffère du plan : {action.row_id}.")
         if tuple(extract_protected(after.get("traduction_fr", ""))) != action.commands_expected:
             raise RepairError(f"Les commandes restent invalides : {action.row_id}.")
+
+
+def build_repair_candidate(plan: RepairPlan, csv_payload: bytes) -> bytes:
+    """Construit et valide le CSV réparé en mémoire, sans écrire sur le disque."""
+    if not plan.safe_actions:
+        raise RepairError("Le plan ne contient aucune réparation sûre à appliquer.")
+    if sha256_bytes(csv_payload) != plan.csv_sha256:
+        raise RepairError("Le CSV a changé depuis la création du plan. Relancez l'analyse.")
+    fields, original_rows = read_project_csv_payload(csv_payload)
+    if len(original_rows) != plan.row_count:
+        raise RepairError("Le CSV ne correspond plus au plan de réparation.")
+    for field in REPAIR_METADATA_FIELDS:
+        if field not in fields:
+            fields.append(field)
+    rows = [dict(row) for row in original_rows]
+
+    for action in sorted(plan.safe_actions, key=lambda item: item.row_index):
+        if not 0 <= action.row_index < len(rows):
+            raise RepairError("Une réparation vise une ligne inexistante.")
+        row = rows[action.row_index]
+        row_id = (row.get("id_stable") or f"ligne-{action.row_index + 1}").strip()
+        source = row.get("texte_source") or ""
+        translation = row.get("traduction_fr") or ""
+        if row_id != action.row_id:
+            raise RepairError("L'identifiant d'une ligne a changé depuis le plan.")
+        if sha256_text(source) != action.source_hash:
+            raise RepairError(f"La source a changé : {action.row_id}.")
+        if sha256_text(translation) != action.translation_hash_before:
+            raise RepairError(f"La traduction a changé : {action.row_id}.")
+        repaired, _technical_actions, success = restore_simple_commands(source, translation)
+        if not success or sha256_text(repaired) != action.translation_hash_after:
+            raise RepairError(f"La correction n'est plus déterministe : {action.row_id}.")
+        row["traduction_fr"] = repaired
+        row["statut"] = "À vérifier"
+        row["niveau_relecture"] = "verifier"
+        row["alertes_relecture"] = (
+            "Commandes techniques restaurées ; relecture humaine requise"
+        )
+        row["origine_traduction"] = "reparation_commandes_sure"
+
+    candidate = _serialize_project_csv(fields, rows)
+    _validate_applied_rows_payload(candidate, original_rows, plan)
+    return candidate
 
 
 def _failure_report(
@@ -101,22 +149,24 @@ def apply_repair_plan(
     report_dir: Path,
     post_write_validator: Callable[[Path], None] | None = None,
 ) -> RepairResult:
-    assert_saved_plan(plan)
-    if not plan.safe_actions:
-        raise RepairError("Le plan ne contient aucune réparation sûre à appliquer.")
     csv_path = Path(plan.csv_path).expanduser().resolve()
+    assert_legacy_direct_write_allowed(csv_path)
+    assert_saved_plan(plan)
     if sha256_file(csv_path) != plan.csv_sha256:
         raise RepairError("Le CSV a changé depuis la création du plan. Relancez l'analyse.")
 
-    fields, original_rows = read_project_csv(csv_path)
+    _fields, original_rows = read_project_csv(csv_path)
     if len(original_rows) != plan.row_count:
         raise RepairError("Le CSV ne correspond plus au plan de réparation.")
     if sha256_file(csv_path) != plan.csv_sha256:
         raise RepairError("Le CSV a changé pendant sa lecture. Relancez l'analyse.")
-    for field in REPAIR_METADATA_FIELDS:
-        if field not in fields:
-            fields.append(field)
-    rows = [dict(row) for row in original_rows]
+    try:
+        current_payload, current_state = read_stable_file(csv_path)
+    except OSError as exc:
+        raise RepairError("Le CSV ne peut pas être lu de manière stable.") from exc
+    if current_state.sha256 != plan.csv_sha256:
+        raise RepairError("Le CSV a changé avant la préparation de la réparation.")
+    candidate = build_repair_candidate(plan, current_payload)
     backup = create_exact_backup(
         csv_path,
         backup_dir,
@@ -126,30 +176,9 @@ def apply_repair_plan(
         raise RepairError("Le CSV a changé avant l'application. Aucune réparation n'a été appliquée.")
 
     try:
-        for action in sorted(plan.safe_actions, key=lambda item: item.row_index):
-            if not 0 <= action.row_index < len(rows):
-                raise RepairError("Une réparation vise une ligne inexistante.")
-            row = rows[action.row_index]
-            row_id = (row.get("id_stable") or f"ligne-{action.row_index + 1}").strip()
-            source = row.get("texte_source") or ""
-            translation = row.get("traduction_fr") or ""
-            if row_id != action.row_id:
-                raise RepairError("L'identifiant d'une ligne a changé depuis le plan.")
-            if sha256_text(source) != action.source_hash:
-                raise RepairError(f"La source a changé : {action.row_id}.")
-            if sha256_text(translation) != action.translation_hash_before:
-                raise RepairError(f"La traduction a changé : {action.row_id}.")
-            repaired, _technical_actions, success = restore_simple_commands(source, translation)
-            if not success or sha256_text(repaired) != action.translation_hash_after:
-                raise RepairError(f"La correction n'est plus déterministe : {action.row_id}.")
-            row["traduction_fr"] = repaired
-            row["statut"] = "À vérifier"
-            row["niveau_relecture"] = "verifier"
-            row["alertes_relecture"] = "Commandes techniques restaurées ; relecture humaine requise"
-            row["origine_traduction"] = "reparation_commandes_sure"
-
-        _write_project_csv(csv_path, fields, rows)
-        _validate_applied_rows(csv_path, original_rows, plan)
+        atomic_write_bytes(csv_path, candidate)
+        written_payload, _written_state = read_stable_file(csv_path)
+        _validate_applied_rows_payload(written_payload, original_rows, plan)
         if post_write_validator:
             post_write_validator(csv_path)
     except Exception as exc:

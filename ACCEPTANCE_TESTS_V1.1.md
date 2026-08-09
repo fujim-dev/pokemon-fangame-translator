@@ -243,6 +243,18 @@ Après un échec de validation, les fichiers de la copie retrouvent exactement l
 
 Le journal précise chaque action réalisée sans contenir les dialogues complets par défaut.
 
+### AC-507 — Réparation transactionnelle d'un projet Essentials
+
+Pour un projet Essentials à provenance vérifiée, le plan est lié à l'empreinte
+exacte du CSV et reste surveillé pendant l'application. Le CSV réparé ou restauré,
+son état révisionné, une reprise inactive, la sauvegarde exacte et le journal sont
+publiés sous le verrou de session dans un seul lot. Une modification externe du
+CSV, du plan ou de la sauvegarde annule l'opération. Une panne restaure tous les
+artefacts déjà remplacés ; si ce rollback échoue lui-même, les fichiers exacts de
+récupération sont conservés et le projet n'est plus annoncé comme utilisable.
+Les anciennes écritures directes refusent un projet Essentials rattaché et un
+projet sans provenance fiable doit être réextrait.
+
 ## 8. Adaptateur Flux expérimental
 
 ### AC-601 — Version reconnue

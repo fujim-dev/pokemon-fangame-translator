@@ -111,6 +111,13 @@ les identités de fichiers et publie le CSV, son état de provenance et la repri
 comme un lot avec rollback. Un projet ancien reste consultable en lecture seule,
 mais doit être réextrait avant sauvegarde, reprise ou reconstruction.
 
+La réparation et la restauration Essentials utilisent `repair/transactional.py` :
+le candidat est construit en mémoire, puis le CSV, l'état révisionné, la reprise
+inactive, la sauvegarde exacte et le journal sont publiés dans le même lot. Les
+anciennes fonctions d'écriture directe refusent tout CSV voisin d'une identité
+Essentials ; elles restent uniquement disponibles pour des CSV autonomes non
+rattachés aux nouvelles garanties.
+
 Risques :
 
 - module volumineux ;
@@ -281,6 +288,11 @@ Déjà en place :
 - réextraction refusée tant que le projet est ouvert dans le Studio ; une
   publication réussie régénère ensemble l'état de traduction et une reprise
   inactive afin qu'aucun état d'une extraction précédente ne soit réutilisé.
+- réparation/restauration Essentials sous le même verrou de session : plan et
+  sauvegarde source surveillés par empreinte et identité, candidat calculé en
+  mémoire, publication commune du CSV, de l'état, de la reprise, du point de
+  restauration et du journal ; un rollback incomplet conserve explicitement les
+  fichiers temporaires exacts nécessaires à la récupération.
 
 Encore partiel ou pas encore en place :
 
@@ -294,10 +306,6 @@ Encore partiel ou pas encore en place :
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 - limite de temps des sondes et des analyses statiques : une sonde qui se bloque
   sans lever d'exception n'est pas encore interrompue automatiquement.
-- réparation assistée historique du CSV non encore intégrée à la transaction de
-  session : elle reste volontairement bloquée pendant une session Essentials
-  vérifiée, jusqu'à ce que son plan et son rollback mettent aussi à jour l'état
-  de provenance.
 
 ## 4. Problèmes à éviter dans la v1.1
 
@@ -425,6 +433,8 @@ repair/
 ├── models.py
 ├── planner.py
 ├── engine.py
+├── transactional.py
+├── project_guard.py
 ├── safe_fixes.py
 └── rollback.py
 ```

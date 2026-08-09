@@ -20,12 +20,13 @@ from tkinter import filedialog, messagebox, ttk
 
 from repair import (
     PROTECTED_RE,
-    RepairError,
     apply_repair_plan,
+    apply_repair_plan_transactional,
     extract_protected,
     plan_csv_repairs,
     protected_command_diff,
     restore_csv_backup,
+    restore_csv_backup_transactional,
     restore_simple_commands,
     save_repair_plan,
     split_protected,
@@ -1615,12 +1616,13 @@ class TranslationStudio(tk.Toplevel):
         row["statut"] = reconciled_status(row.get("statut", ""), level)
 
     def repair_safe_problems(self):
-        if self.project_session is not None:
-            messagebox.showinfo(
-                "Réparation différée",
-                "La réparation assistée historique modifie directement le CSV. Elle reste "
-                "désactivée pendant une session de provenance afin de ne pas désynchroniser "
-                "les artefacts. Fermez le Studio et attendez son intégration transactionnelle.",
+        if not self._require_project_writable("Réparation"):
+            return
+        if self.offline_running:
+            messagebox.showwarning(
+                "Réparation indisponible",
+                "Terminez ou arrêtez d'abord le lot de traduction en cours. Le CSV et son "
+                "état de reprise doivent rester synchronisés.",
                 parent=self,
             )
             return
@@ -1680,14 +1682,26 @@ class TranslationStudio(tk.Toplevel):
             return
 
         try:
-            result = apply_repair_plan(
-                saved_plan,
-                backup_dir=self.backup_dir,
-                report_dir=self.reports_dir,
-            )
-        except RepairError as exc:
+            if self.project_session is not None:
+                result = apply_repair_plan_transactional(
+                    self.project_session,
+                    saved_plan,
+                )
+            else:
+                result = apply_repair_plan(
+                    saved_plan,
+                    backup_dir=self.backup_dir,
+                    report_dir=self.reports_dir,
+                )
+        except Exception as exc:
             messagebox.showerror("Réparation annulée", str(exc), parent=self)
-            self.load_csv(self.csv_path)
+            if self.project_session is not None:
+                try:
+                    self.project_session.check_current()
+                except TranslationProjectError as conflict:
+                    self._mark_project_conflict(str(conflict))
+            if not self.project_conflict:
+                self.load_csv(self.csv_path)
             return
 
         self.current_index = None
@@ -1711,11 +1725,12 @@ class TranslationStudio(tk.Toplevel):
         )
 
     def restore_previous_repair(self):
-        if self.project_session is not None:
-            messagebox.showinfo(
-                "Restauration différée",
-                "Cette restauration historique n'est pas encore reliée à l'état de provenance. "
-                "Elle reste bloquée pour éviter un CSV cohérent en apparence seulement.",
+        if not self._require_project_writable("Restauration"):
+            return
+        if self.offline_running:
+            messagebox.showwarning(
+                "Restauration indisponible",
+                "Terminez ou arrêtez d'abord le lot de traduction en cours.",
                 parent=self,
             )
             return
@@ -1746,14 +1761,25 @@ class TranslationStudio(tk.Toplevel):
         try:
             self._store_current_translation_for_repair()
             self._write_csv(self.csv_path)
-            result = restore_csv_backup(
-                self.csv_path,
-                backup,
-                backup_dir=self.backup_dir,
-                report_dir=self.reports_dir,
-            )
-        except RepairError as exc:
+            if self.project_session is not None:
+                result = restore_csv_backup_transactional(
+                    self.project_session,
+                    backup,
+                )
+            else:
+                result = restore_csv_backup(
+                    self.csv_path,
+                    backup,
+                    backup_dir=self.backup_dir,
+                    report_dir=self.reports_dir,
+                )
+        except Exception as exc:
             messagebox.showerror("Restauration impossible", str(exc), parent=self)
+            if self.project_session is not None:
+                try:
+                    self.project_session.check_current()
+                except TranslationProjectError as conflict:
+                    self._mark_project_conflict(str(conflict))
             return
         self.current_index = None
         self.load_csv(self.csv_path)

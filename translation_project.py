@@ -781,11 +781,36 @@ class TranslationProjectSession:
             extraction_id=snapshot.extraction_id,
         )
 
+    def _managed_related_path(self, path: Path, *, operation: str) -> Path:
+        """Limite les artefacts liés aux dossiers privés du projet courant."""
+        try:
+            resolved = path.expanduser().resolve()
+            relative = resolved.relative_to(self.project_dir)
+        except (OSError, ValueError) as exc:
+            raise TranslationProjectError(
+                f"{operation} refusée : un artefact sort du dossier du projet."
+            ) from exc
+        if len(relative.parts) != 2 or relative.parts[0] not in {
+            "Rapports",
+            "Sauvegardes",
+        }:
+            raise TranslationProjectError(
+                f"{operation} refusée : l'artefact n'appartient pas à Rapports ou Sauvegardes."
+            )
+        parent = self.project_dir / relative.parts[0]
+        if _is_redirected(parent) or _is_redirected(resolved):
+            raise TranslationProjectError(
+                f"{operation} refusée : un artefact est redirigé."
+            )
+        return resolved
+
     def save(
         self,
         csv_payload: bytes,
         *,
         resume_state: Mapping[str, object] | None = None,
+        synchronized_artifacts: Mapping[Path, bytes] | None = None,
+        guarded_artifacts: Mapping[Path, StableFileState | None] | None = None,
     ) -> None:
         with self._mutex:
             snapshot = self._require_writable()
@@ -826,6 +851,17 @@ class TranslationProjectSession:
                     else None
                 ),
             }
+            for requested_path, payload in (synchronized_artifacts or {}).items():
+                destination = self._managed_related_path(
+                    Path(requested_path), operation="Publication transactionnelle"
+                )
+                if destination in artifacts:
+                    raise TranslationProjectError(
+                        "Publication refusée : deux artefacts désignent la même destination."
+                    )
+                artifacts[destination] = bytes(payload)
+                expected_hashes[destination] = None
+                expected_signatures[destination] = None
             if resume_state is not None:
                 resume_payload = self._resume_bytes(resume_state, snapshot, csv_sha256)
                 artifacts[self.resume_state_path] = resume_payload
@@ -859,6 +895,16 @@ class TranslationProjectSession:
                 self.baseline_path: snapshot.baseline_state,
                 self.report_path: snapshot.report_state,
             }
+            for requested_path, expected in (guarded_artifacts or {}).items():
+                guarded_path = self._managed_related_path(
+                    Path(requested_path), operation="Surveillance transactionnelle"
+                )
+                previous = guarded.get(guarded_path)
+                if previous is not None and previous != expected:
+                    raise TranslationProjectError(
+                        "Publication refusée : deux contrôles contradictoires visent un artefact."
+                    )
+                guarded[guarded_path] = expected
             try:
                 atomic_write_bundle(
                     artifacts,
@@ -883,7 +929,8 @@ class TranslationProjectSession:
                     raise TranslationProjectError(
                         "La sauvegarde a échoué et son rollback est incomplet. "
                         "N'utilisez plus ce projet avant d'avoir restauré les fichiers de "
-                        "récupération conservés à côté des artefacts."
+                        "récupération conservés à côté des artefacts. "
+                        f"Détails de récupération : {exc}"
                     ) from exc
                 raise TranslationProjectError(
                     "La sauvegarde transactionnelle a été annulée ; l'état précédent a été conservé."

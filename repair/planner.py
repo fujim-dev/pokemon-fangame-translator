@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
+import os
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
 from .models import RepairAction, RepairError, RepairPlan
 from .safe_fixes import extract_protected, restore_simple_commands
-from safe_io import atomic_write_text
+from safe_io import StableFileState, atomic_write_bundle, read_stable_file
 
 
 REQUIRED_FIELDS = {"id_stable", "texte_source", "traduction_fr", "statut"}
@@ -25,12 +27,17 @@ def sha256_text(value: str) -> str:
 
 
 def sha256_file(path: Path) -> str:
-    return sha256_bytes(path.read_bytes())
-
-
-def read_project_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     try:
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        payload, _state = read_stable_file(path)
+    except OSError as exc:
+        raise RepairError("Lecture stable du projet impossible.") from exc
+    return sha256_bytes(payload)
+
+
+def read_project_csv_payload(payload: bytes) -> tuple[list[str], list[dict[str, str]]]:
+    try:
+        text = payload.decode("utf-8-sig")
+        with io.StringIO(text, newline="") as handle:
             reader = csv.DictReader(handle, delimiter=";")
             fields = list(reader.fieldnames or [])
             missing = sorted(REQUIRED_FIELDS - set(fields))
@@ -44,16 +51,22 @@ def read_project_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     return fields, rows
 
 
+def read_project_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    try:
+        payload, _state = read_stable_file(path)
+    except OSError as exc:
+        raise RepairError(f"Lecture du projet impossible : {type(exc).__name__}") from exc
+    return read_project_csv_payload(payload)
+
+
 def _action_id(index: int, row_id: str, source_hash: str, translation_hash: str) -> str:
     payload = f"{index}\x1f{row_id}\x1f{source_hash}\x1f{translation_hash}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
-def plan_csv_repairs(csv_path: Path) -> RepairPlan:
+def plan_csv_repairs_payload(csv_path: Path, payload: bytes) -> RepairPlan:
     resolved = csv_path.expanduser().resolve()
-    if not resolved.is_file():
-        raise RepairError("Le fichier CSV du projet est introuvable.")
-    _fields, rows = read_project_csv(resolved)
+    _fields, rows = read_project_csv_payload(payload)
     actions: list[RepairAction] = []
 
     for index, row in enumerate(rows):
@@ -94,7 +107,7 @@ def plan_csv_repairs(csv_path: Path) -> RepairPlan:
             )
         )
 
-    csv_hash = sha256_file(resolved)
+    csv_hash = sha256_bytes(payload)
     plan_seed = json.dumps(
         {
             "csv_sha256": csv_hash,
@@ -113,6 +126,24 @@ def plan_csv_repairs(csv_path: Path) -> RepairPlan:
     )
 
 
+def plan_csv_repairs(csv_path: Path) -> RepairPlan:
+    resolved = csv_path.expanduser().resolve()
+    if not resolved.is_file():
+        raise RepairError("Le fichier CSV du projet est introuvable.")
+    try:
+        payload, state = read_stable_file(resolved)
+    except OSError as exc:
+        raise RepairError("Le fichier CSV du projet ne peut pas être lu de manière stable.") from exc
+    plan = plan_csv_repairs_payload(resolved, payload)
+    try:
+        _payload_again, state_again = read_stable_file(resolved)
+    except OSError as exc:
+        raise RepairError("Le CSV a disparu pendant la préparation du plan.") from exc
+    if state_again != state:
+        raise RepairError("Le CSV a changé pendant la préparation du plan. Relancez l'analyse.")
+    return plan
+
+
 def _plan_payload(plan: RepairPlan) -> dict[str, object]:
     return {
         "version": "1.1",
@@ -129,28 +160,34 @@ def _plan_payload(plan: RepairPlan) -> dict[str, object]:
     }
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
-    atomic_write_text(path, content, encoding="utf-8")
-
-
 def save_repair_plan(plan: RepairPlan, path: Path) -> RepairPlan:
-    destination = path.expanduser().resolve()
-    if destination == Path(plan.csv_path).resolve():
+    destination = Path(os.path.abspath(str(path.expanduser())))
+    if os.path.normcase(str(destination)) == os.path.normcase(
+        str(Path(plan.csv_path).resolve())
+    ):
         raise RepairError("Le plan de réparation ne peut pas remplacer le CSV.")
     saved = replace(plan, saved_path=str(destination))
-    _atomic_write_text(
-        destination,
-        json.dumps(_plan_payload(saved), ensure_ascii=False, indent=2),
-    )
+    payload = json.dumps(_plan_payload(saved), ensure_ascii=False, indent=2).encode("utf-8")
+    try:
+        atomic_write_bundle(
+            {destination: payload},
+            expected_existing_sha256={destination: None},
+            expected_existing_signatures={destination: None},
+        )
+    except (OSError, ValueError) as exc:
+        raise RepairError(
+            "Le plan n'a pas pu être publié sans écraser un artefact existant."
+        ) from exc
     return saved
 
 
-def assert_saved_plan(plan: RepairPlan) -> None:
+def assert_saved_plan(plan: RepairPlan) -> StableFileState:
     if not plan.saved_path:
         raise RepairError("Le plan doit être enregistré avant toute application.")
     path = Path(plan.saved_path)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw_payload, plan_state = read_stable_file(path)
+        payload = json.loads(raw_payload.decode("utf-8-sig"))
     except Exception as exc:
         raise RepairError("Le plan enregistré est introuvable ou illisible.") from exc
     if (
@@ -165,3 +202,4 @@ def assert_saved_plan(plan: RepairPlan) -> None:
     )
     if payload.get("actions") != expected_actions:
         raise RepairError("Les réparations du plan enregistré ont changé.")
+    return plan_state
