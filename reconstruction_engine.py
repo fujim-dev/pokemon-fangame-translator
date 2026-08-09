@@ -44,7 +44,7 @@ from structured_extractor import (
     stable_id,
     text_value,
 )
-from safe_io import atomic_write_bytes, atomic_write_text
+from safe_io import atomic_write_bytes, atomic_write_text, read_stable_bytes
 from translation_project import TranslationProjectError, open_verified_project
 
 RPG_CODE_RE = re.compile(
@@ -62,6 +62,9 @@ SAFE_STATUSES = {"Accepté", "Prêt", "Traduit", "Déjà traduit"}
 REVIEW_STATUSES = {"À vérifier", "À relire"}
 BLOCKED_STATUSES = {"Bloqué", "À traduire", "Ignoré", ""}
 ESSENTIALS_ADAPTER_ID = "pokemon_essentials"
+V21_1_VALIDATION_SCOPE = "essentials_v21_1_message_bank_candidate_v1"
+V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
+V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 RESERVED_COPY_OUTPUTS = (
     "PFT_RECONSTRUCTION_V1.0.txt",
     "LIRE_AVANT_DE_JOUER.txt",
@@ -97,6 +100,8 @@ class ReconstructionPlan:
     mode: str
     adapter_id: str = ""
     adapter_version: str = ""
+    adapter_profile: str = ""
+    validation_scope: str = ""
     csv_sha256: str = ""
     project_identity_sha256: str = ""
     project_provenance_token: str = ""
@@ -327,6 +332,97 @@ def _require_essentials_reconstruction(game_root: Path):
         ) from exc
 
 
+def _require_v21_1_validation(game_root: Path):
+    """Autorise uniquement la porte privée et bornée du round-trip v21.1.
+
+    Cette fonction n'accorde jamais la capacité ``RECONSTRUCT`` au profil. Elle
+    réutilise la détection multi-adaptateurs, exige le profil exact confirmé et
+    refuse de fonctionner si ce profil n'est plus strictement en lecture seule
+    dans l'interface publique.
+    """
+    from adapters import AdapterOperationBlocked, GameCapability, authorize_adapter_operation
+
+    try:
+        detection = authorize_adapter_operation(
+            game_root,
+            expected_adapter_id=ESSENTIALS_ADAPTER_ID,
+            capability=GameCapability.EXTRACT,
+        )
+    except AdapterOperationBlocked as exc:
+        raise ReconstructionError(
+            "Validation v21.1 bloquée : la détection Essentials n'est pas concluante "
+            f"pour cette copie ({exc})."
+        ) from exc
+    if (
+        detection.structural_profile != V21_1_VALIDATION_PROFILE
+        or detection.declared_version != "21.1"
+        or not detection.extraction_compatible
+        or detection.game_write_compatible
+        or detection.reconstruction_validated
+        or detection.can(GameCapability.RECONSTRUCT)
+    ):
+        raise ReconstructionError(
+            "Validation v21.1 bloquée : seul le profil v21.1 confirmé et encore "
+            "volontairement privé de reconstruction peut utiliser cette porte interne."
+        )
+    return detection
+
+
+def _validate_v21_1_validation_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> PlanItem:
+    """Refuse tout plan plus large que l'unique preuve synthétique autorisée."""
+    if plan.validation_scope != V21_1_VALIDATION_SCOPE:
+        raise ReconstructionError(
+            "Le plan ne porte pas la portée de validation v21.1 attendue."
+        )
+    if (
+        plan.adapter_id != detection.adapter_id
+        or plan.adapter_version != detection.recognized_version
+        or plan.adapter_profile != detection.structural_profile
+        or plan.mode != "accepted"
+    ):
+        raise ReconstructionError(
+            "Le plan de validation v21.1 ne correspond plus au profil détecté."
+        )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    applicable = [item for item in plan.items if item.decision == "applicable"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation v21.1 exige une seule occurrence acceptée et applicable."
+        )
+    selected = applicable[0]
+    if accepted[0].id_stable != selected.id_stable:
+        raise ReconstructionError(
+            "La seule occurrence acceptée n'est pas l'occurrence applicable du plan."
+        )
+    if (
+        selected.type != "Banque de messages"
+        or selected.fichier.replace("\\", "/").casefold()
+        != V21_1_VALIDATION_FILE.casefold()
+    ):
+        raise ReconstructionError(
+            "La validation v21.1 est limitée à une seule banque de messages dans "
+            "Data/messages_game.dat ; événements communs, Point, PBS et cartes restent exclus."
+        )
+    if not selected.translation or extract_protected(selected.source) != extract_protected(
+        selected.translation
+    ):
+        raise ReconstructionError(
+            "La traduction de validation v21.1 ne conserve pas exactement les commandes."
+        )
+    if any(item.decision == "blocked" for item in plan.items):
+        raise ReconstructionError(
+            "Le plan de validation v21.1 contient une occurrence bloquée."
+        )
+    if set(plan.source_hashes) != {V21_1_VALIDATION_FILE}:
+        raise ReconstructionError(
+            "Le plan de validation v21.1 cible un inventaire de fichiers inattendu."
+        )
+    return selected
+
+
 def _assert_reserved_copy_outputs_absent(source_root: Path) -> None:
     """Empêche les fichiers générés après validation d'écraser un homonyme."""
     collisions = [name for name in RESERVED_COPY_OUTPUTS if (source_root / name).exists()]
@@ -423,6 +519,9 @@ def _build_plan_verified_body(
     game_root: Path,
     csv_path: Path,
     mode: str = "recommended",
+    *,
+    preauthorized_detection=None,
+    validation_scope: str = "",
 ) -> ReconstructionPlan:
     game_root = _resolve_safe_game_root(game_root)
     csv_input = csv_path.expanduser()
@@ -435,7 +534,7 @@ def _build_plan_verified_body(
         raise ReconstructionError("Le projet de traduction est introuvable.")
     if mode not in {"accepted", "recommended", "all_reviewed"}:
         raise ReconstructionError(f"Mode de reconstruction inconnu : {mode}")
-    detection = _require_essentials_reconstruction(game_root)
+    detection = preauthorized_detection or _require_essentials_reconstruction(game_root)
     try:
         identity = read_project_identity(
             csv_path,
@@ -445,6 +544,11 @@ def _build_plan_verified_body(
         )
     except ProjectIdentityError as exc:
         raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
+    if validation_scope and identity.adapter_profile != detection.structural_profile:
+        raise ReconstructionError(
+            "Projet de traduction refusé : le profil Essentials de l'identité ne "
+            "correspond pas au profil détecté."
+        )
     if identity.source_manifest_sha256:
         try:
             current_inventory = build_extraction_inventory(game_root)
@@ -465,6 +569,8 @@ def _build_plan_verified_body(
         mode=mode,
         adapter_id=detection.adapter_id,
         adapter_version=detection.recognized_version,
+        adapter_profile=detection.structural_profile,
+        validation_scope=validation_scope,
         csv_sha256=sha256_file(csv_path),
         project_identity_sha256=identity.sha256,
     )
@@ -550,6 +656,48 @@ def build_plan(game_root: Path, csv_path: Path, mode: str = "recommended") -> Re
         raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
     try:
         plan = _build_plan_verified_body(safe_root, csv_input, mode)
+        guard.check_current()
+        assert guard.snapshot is not None
+        plan.project_provenance_token = guard.snapshot.provenance_token()
+        return plan
+    finally:
+        guard.close()
+
+
+def build_v21_1_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit le candidat privé v21.1 sans débloquer la reconstruction UI.
+
+    La portée est volontairement figée à une seule occurrence acceptée de
+    ``Data/messages_game.dat``. Cette porte sert à démontrer le round-trip sur
+    copie ; elle n'est pas une déclaration de compatibilité générale.
+    """
+    safe_root = _resolve_safe_game_root(game_root)
+    detection = _require_v21_1_validation(safe_root)
+    csv_input = csv_path.expanduser()
+    if _is_link_or_junction(csv_input) or _is_link_or_junction(csv_input.parent):
+        raise ReconstructionError(
+            "Le CSV de validation ou son dossier ne peut pas être un lien ou une jonction."
+        )
+    try:
+        guard = open_verified_project(
+            csv_input,
+            game_root=safe_root,
+            expected_adapter_id=ESSENTIALS_ADAPTER_ID,
+        )
+    except TranslationProjectError as exc:
+        raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
+    try:
+        plan = _build_plan_verified_body(
+            safe_root,
+            csv_input,
+            "accepted",
+            preauthorized_detection=detection,
+            validation_scope=V21_1_VALIDATION_SCOPE,
+        )
+        _validate_v21_1_validation_scope(plan, detection)
         guard.check_current()
         assert guard.snapshot is not None
         plan.project_provenance_token = guard.snapshot.provenance_token()
@@ -806,6 +954,22 @@ def _apply_file(target_root: Path, relative: str, items: list[PlanItem]) -> None
     raise ReconstructionError("Format de fichier non pris en charge")
 
 
+def _expected_v21_1_message_bank_payload(
+    source_root: Path,
+    item: PlanItem,
+) -> bytes:
+    """Construit en mémoire l'unique fichier exact autorisé par la validation."""
+    path = _resolve_contained_path(source_root, V21_1_VALIDATION_FILE)
+    root = load(path)
+    if not isinstance(root, (list, dict)):
+        raise ReconstructionError("Banque v21.1 Array ou Hash attendue")
+    _apply_bank_items(root, V21_1_VALIDATION_FILE, [item])
+    payload = dumps(root)
+    if not payload.startswith(b"\x04\x08"):
+        raise ReconstructionError("Candidat Marshal v21.1 invalide")
+    return payload
+
+
 def _validate_file(target_root: Path, relative: str, items: list[PlanItem]) -> list[str]:
     path = _resolve_group_path(target_root, relative, items)
     expected = {item.id_stable: item.translation for item in items}
@@ -830,6 +994,12 @@ def _validate_file(target_root: Path, relative: str, items: list[PlanItem]) -> l
 def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
     """Vérifie chaque ligne contre les données originales sans rien écrire."""
     game_root = Path(plan.game_root)
+    validation_detection = None
+    if plan.validation_scope:
+        if plan.validation_scope != V21_1_VALIDATION_SCOPE:
+            raise ReconstructionError("Portée de validation privée inconnue.")
+        validation_detection = _require_v21_1_validation(game_root)
+        _validate_v21_1_validation_scope(plan, validation_detection)
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
     for item in plan.items:
         if item.decision == "applicable":
@@ -893,6 +1063,8 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                 if item.decision == "applicable":
                     item.decision = "blocked"
                     item.reason = f"Simulation : {exc}"
+    if validation_detection is not None:
+        _validate_v21_1_validation_scope(plan, validation_detection)
     return plan
 
 
@@ -984,7 +1156,14 @@ def _reconstruct_copy_verified_body(
     progress: Callable[[int, int, str], None] | None = None,
 ) -> ReconstructionResult:
     source_root = _resolve_safe_game_root(Path(plan.game_root))
-    detection = _require_essentials_reconstruction(source_root)
+    validation_item: PlanItem | None = None
+    if plan.validation_scope:
+        if plan.validation_scope != V21_1_VALIDATION_SCOPE:
+            raise ReconstructionError("Portée de validation privée inconnue.")
+        detection = _require_v21_1_validation(source_root)
+        validation_item = _validate_v21_1_validation_scope(plan, detection)
+    else:
+        detection = _require_essentials_reconstruction(source_root)
     if plan.adapter_id != detection.adapter_id:
         raise ReconstructionError(
             "Le plan ne correspond plus à l'adaptateur détecté. Relancez la simulation."
@@ -1003,6 +1182,10 @@ def _reconstruct_copy_verified_body(
         )
     except ProjectIdentityError as exc:
         raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
+    if validation_item is not None and identity.adapter_profile != detection.structural_profile:
+        raise ReconstructionError(
+            "Projet de validation refusé : le profil Essentials de l'identité a changé."
+        )
     if (
         not plan.project_identity_sha256
         or identity.sha256 != plan.project_identity_sha256
@@ -1026,6 +1209,11 @@ def _reconstruct_copy_verified_body(
     # Le fangame peut avoir été mis à jour ou déplacé après la simulation. Le
     # plan doit encore correspondre exactement aux fichiers qu'il va utiliser.
     _assert_plan_sources_unchanged(plan, source_root)
+    expected_validation_payload = (
+        _expected_v21_1_message_bank_payload(source_root, validation_item)
+        if validation_item is not None
+        else None
+    )
     if progress:
         progress(0, 1, "Calcul de l'empreinte du fangame original…")
     source_before = _integrity_snapshot(source_root, "le fangame original")
@@ -1050,6 +1238,15 @@ def _reconstruct_copy_verified_body(
             if errors:
                 validation_errors.extend(errors)
                 raise ReconstructionError(errors[0])
+            if expected_validation_payload is not None:
+                rebuilt = read_stable_bytes(
+                    _resolve_contained_path(target_root, V21_1_VALIDATION_FILE)
+                )
+                if rebuilt != expected_validation_payload:
+                    raise ReconstructionError(
+                        "La banque v21.1 reconstruite diffère du candidat exact calculé "
+                        "en mémoire ; la copie est refusée."
+                    )
             modified_files.append(relative)
             applied += len(items)
         # Une seconde vérification détecte toute modification des fichiers
@@ -1090,6 +1287,8 @@ def _reconstruct_copy_verified_body(
         "copie_francaise": str(target_root),
         "csv": plan.csv_path,
         "mode": plan.mode,
+        "profil_adaptateur": plan.adapter_profile,
+        "portee_validation": plan.validation_scope,
         "original_inchange": original_unchanged,
         "fichiers_modifies": modified_files,
         "hachages_originaux": plan.source_hashes,

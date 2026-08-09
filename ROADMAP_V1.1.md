@@ -84,7 +84,14 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
 - une version contradictoire, v20, future ou insuffisamment confirmée bloque
   extraction, traduction et reconstruction ;
 - le profil v21.1 confirmé peut produire une extraction et un projet CSV, mais
-  la reconstruction reste volontairement absente jusqu'au parcours réel dédié.
+  la reconstruction publique reste volontairement absente ;
+- le parcours réel dédié a validé une première portée bornée : 30 402 occurrences
+  cohérentes entre extraction et analyse, cycle Studio/reprise, une occurrence de
+  `messages_game.dat` reconstruite dans une copie intégralement contrôlée, puis
+  démarrage concluant de `Game.exe` ;
+- cette validation n'active aucune capacité supplémentaire. Les cartes, événements
+  communs, sous-champs `Point`, PBS modernes et formes de banques non couvertes
+  exigent encore leurs propres preuves synthétiques et réelles.
 
 ## Phase 2 — Interface pilotée par capacités
 

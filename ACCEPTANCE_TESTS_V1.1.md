@@ -128,6 +128,18 @@ PBS modernes pris en charge conservent commandes, casse, encodage, BOM, CRLF,
 commentaires et ordre ; les sous-champs non reconstructibles restent explicitement
 distingués. Le profil et la méthode de version font partie de la provenance.
 
+### AC-115 — Candidat v21.1 borné sans activation générale
+
+Le profil v21.1 reste privé de `RECONSTRUCT`. Une porte interne de validation ne
+peut construire qu'un plan `accepted` contenant exactement une occurrence de
+banque dans `Data/messages_game.dat`. Elle revalide le profil, le manifeste, le
+CSV, l'identité, l'inventaire et les empreintes avant simulation puis avant copie.
+Le Marshal produit doit être identique au candidat complet calculé en mémoire ;
+les entrées non ciblées, leurs métadonnées et tous les fichiers hors plan restent
+inchangés. Plusieurs occurrences, une carte, un PBS, un événement commun ou un
+sous-champ `Point` sont refusés. Cette validation privée ne rend pas la
+reconstruction v21.1 disponible dans l'interface.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

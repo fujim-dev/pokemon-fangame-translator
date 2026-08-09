@@ -321,6 +321,16 @@ Déjà en place :
 - le profil Essentials et la méthode de version sont liés aux lignes CSV et au
   manifeste privé. Une identité de projet qui annonce un autre profil que son
   manifeste est refusée.
+- une porte interne de validation v21.1 permet désormais un candidat strictement
+  borné à une seule occurrence acceptée de `Data/messages_game.dat`. Le plan est
+  lié au profil, à la provenance et à l'empreinte de la banque ; le fichier
+  reconstruit doit être identique, octet par octet, au candidat calculé en mémoire,
+  et aucun autre fichier du jeu ne peut changer ;
+- cette porte a réussi un aller-retour privé sur la référence standard v21.1 :
+  30 402 occurrences extraites, reprise du Studio vérifiée, banque réextraite à
+  l'occurrence exacte, copie intégralement comparée et démarrage de `Game.exe`
+  conclu avec fermeture propre. Aucun contenu de cette référence n'est conservé
+  dans le dépôt.
 
 Encore partiel ou pas encore en place :
 
@@ -334,6 +344,9 @@ Encore partiel ou pas encore en place :
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 - limite de temps des analyses statiques approfondies autres que les sondes :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
+- validation de réinjection v21.1 pour les cartes, événements communs, sous-champs
+  `Point`, PBS modernes et davantage de formes de banques. La capacité publique
+  `RECONSTRUCT` reste absente malgré le premier candidat borné concluant.
 
 ## 4. Problèmes à éviter dans la v1.1
 
@@ -400,8 +413,11 @@ La détection Essentials ne vaut plus autorisation générale. Le résultat dist
 la famille, la version déclarée, la méthode de détection et le profil structurel,
 puis expose séparément les compatibilités d'analyse, d'extraction, de projet de
 traduction, d'écriture dans le jeu et de reconstruction validée. Pour v21.1,
-`RECONSTRUCT` reste absent jusqu'à un aller-retour réel sur copie de travail suivi
-d'un démarrage concluant du jeu.
+`RECONSTRUCT` reste absent malgré un premier aller-retour réel concluant limité à
+une banque de messages. Cette preuve ne couvre ni les cartes, ni les événements
+communs, ni les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus
+représentatif et les réinjecteurs correspondants restent nécessaires avant toute
+autorisation générale.
 
 #### `pokemon_flux.py`
 

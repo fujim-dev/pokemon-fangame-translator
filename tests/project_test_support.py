@@ -17,7 +17,14 @@ from structured_extractor import build_extraction_inventory
 from translation_project import RESUME_STATE_NAME, TRANSLATION_STATE_NAME
 
 
-def finalize_verified_essentials_project(game_root: Path, csv_path: Path) -> None:
+def finalize_verified_essentials_project(
+    game_root: Path,
+    csv_path: Path,
+    *,
+    adapter_profile: str = "",
+    declared_version: str = "",
+    version_detection_method: str = "",
+) -> None:
     """Ajoute une provenance complète à une fixture synthétique de reconstruction."""
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle, delimiter=";", strict=True)
@@ -72,6 +79,10 @@ def finalize_verified_essentials_project(game_root: Path, csv_path: Path) -> Non
         "csv_sha256": csv_sha256,
         "report_sha256": hashlib.sha256(report_payload).hexdigest(),
     }
+    if adapter_profile:
+        manifest["essentials_profile"] = adapter_profile
+        manifest["declared_version"] = declared_version
+        manifest["version_detection_method"] = version_detection_method
     manifest_payload = json.dumps(manifest, sort_keys=True).encode("utf-8")
     manifest_path.write_bytes(manifest_payload)
     (project_dir / PROJECT_METADATA_NAME).write_bytes(
@@ -79,6 +90,7 @@ def finalize_verified_essentials_project(game_root: Path, csv_path: Path) -> Non
             game_root,
             adapter_id="pokemon_essentials",
             adapter_version="21.1",
+            adapter_profile=adapter_profile,
             source_manifest_sha256=inventory.source_manifest_sha256,
             extraction_manifest_name=manifest_path.name,
             extraction_manifest_sha256=hashlib.sha256(manifest_payload).hexdigest(),

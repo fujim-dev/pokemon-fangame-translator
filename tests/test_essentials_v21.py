@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import tempfile
 import unittest
@@ -18,16 +20,27 @@ from adapters import (
     create_default_registry,
 )
 from extraction_project import EXTRACTION_MANIFEST_NAME, build_extraction_manifest_bytes
+from analysis.integrity import compare_snapshots, snapshot_tree
 from project_identity import (
     PROJECT_METADATA_NAME,
     ProjectIdentityError,
     build_project_identity_bytes,
     read_project_identity,
 )
-from reconstruction_engine import PlanItem, _apply_pbs_items
-from ruby_marshal_reader import RubyObject, RubyString
+from reconstruction_engine import (
+    V21_1_VALIDATION_SCOPE,
+    PlanItem,
+    ReconstructionError,
+    _apply_pbs_items,
+    build_plan,
+    build_v21_1_validation_plan,
+    reconstruct_copy,
+    simulate_plan,
+)
+from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from structured_extractor import extract_message_bank, extract_pbs
+from project_test_support import finalize_verified_essentials_project
 
 
 def ruby_text(value: str) -> RubyString:
@@ -49,6 +62,7 @@ def prepare_v21_game(
     ini_version: str | None = None,
     mkxp_version: str | None = None,
     empty_plugin_bank: bool = False,
+    nested_message_bank: bool = False,
     dangerous_marker: Path | None = None,
 ) -> None:
     ini_version = ini_version or script_version
@@ -72,9 +86,23 @@ def prepare_v21_game(
     (data / "System.rxdata").write_bytes(b"synthetic system marker")
     (data / "Map001.rxdata").write_bytes(dumps(RubyObject("RPG::Map", {"@events": {}})))
     (data / "MapInfos.rxdata").write_bytes(dumps({}))
-    (data / "messages_game.dat").write_bytes(
-        dumps({ruby_text("Synthetic bank text"): ruby_text("Synthetic bank text")})
-    )
+    if nested_message_bank:
+        bank = [
+            {
+                ruby_text("Synthetic bank text for validation"): ruby_text(
+                    "Synthetic bank text for validation"
+                ),
+            },
+            {
+                ruby_text("Second untouched synthetic bank text"): RubyString(
+                    b"Second untouched synthetic bank text",
+                    {"E": True, "synthetic_metadata": ruby_text("preserved")},
+                ),
+            },
+        ]
+    else:
+        bank = {ruby_text("Synthetic bank text"): ruby_text("Synthetic bank text")}
+    (data / "messages_game.dat").write_bytes(dumps(bank))
     (data / "messages_core.dat").write_bytes(dumps({}))
     dangerous = (
         f"File.write({str(dangerous_marker)!r}, 'executed')\n"
@@ -98,6 +126,24 @@ def prepare_v21_game(
     pbs = root / "PBS" / "pokemon.txt"
     pbs.parent.mkdir()
     pbs.write_text("[TEST]\nName = Syntheticmon\n", encoding="utf-8")
+
+
+def write_extracted_project_csv(path: Path, rows: list[dict]) -> None:
+    fields = list(rows[0])
+    for field in (
+        "niveau_relecture",
+        "alertes_relecture",
+        "groupe_doublon",
+        "origine_traduction",
+    ):
+        if field not in fields:
+            fields.append(field)
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields, delimiter=";")
+    writer.writeheader()
+    writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(output.getvalue().encode("utf-8-sig"))
 
 
 class EssentialsV21ProfileTests(unittest.TestCase):
@@ -329,6 +375,168 @@ class EssentialsV21ProfileTests(unittest.TestCase):
                 original.replace(b"Original ending.", b"Translated ending."),
                 path.read_bytes(),
             )
+
+    def test_v21_private_validation_roundtrip_is_limited_to_one_message_bank_row(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_v21_candidate_") as temporary:
+            base = Path(temporary)
+            root = base / "game"
+            project = base / "project"
+            target = base / "candidate"
+            reports = base / "reports"
+            prepare_v21_game(root, nested_message_bank=True)
+            source_before = snapshot_tree(root)
+
+            extraction = PokemonEssentialsAdapter().extract_with_provenance(root)
+            rows = [dict(row) for row in extraction.rows]
+            selected = next(
+                row
+                for row in rows
+                if row["type"] == "Banque de messages"
+                and row["fichier"] == "Data/messages_game.dat"
+                and not row["traduction_fr"]
+            )
+            selected["traduction_fr"] = selected["texte_source"] + " [TEST PFT v21.1]"
+            selected["statut"] = "Accepté"
+            selected["origine_traduction"] = "validation_synthetique_v21_1"
+            csv_path = project / "textes_structures.csv"
+            write_extracted_project_csv(csv_path, rows)
+            finalize_verified_essentials_project(
+                root,
+                csv_path,
+                adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+                declared_version="21.1",
+                version_detection_method=(
+                    "Game.ini:Game.Title + mkxp.json:windowTitle + "
+                    "Scripts.rxdata:Settings/Essentials::VERSION"
+                ),
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "Reconstruction bloquée"):
+                build_plan(root, csv_path, mode="accepted")
+
+            plan = build_v21_1_validation_plan(root, csv_path)
+            self.assertEqual(V21_1_VALIDATION_SCOPE, plan.validation_scope)
+            self.assertEqual(ESSENTIALS_V21_1_READONLY_PROFILE, plan.adapter_profile)
+            self.assertEqual(1, plan.counts().get("applicable", 0))
+            self.assertEqual("Banque de messages", next(
+                item.type for item in plan.items if item.decision == "applicable"
+            ))
+
+            simulate_plan(plan)
+            self.assertEqual(1, plan.counts().get("applicable", 0))
+            result = reconstruct_copy(plan, target, reports)
+
+            self.assertEqual(["Data/messages_game.dat"], result.modified_files)
+            self.assertTrue(result.original_unchanged)
+            self.assertTrue(result.integrity_valid)
+            source_after = snapshot_tree(root)
+            self.assertTrue(compare_snapshots(source_before, source_after).passed)
+
+            before_rows = {
+                row["id_stable"]: row["traduction_fr"]
+                for row in extract_message_bank(
+                    root / "Data" / "messages_game.dat",
+                    "Data/messages_game.dat",
+                )
+            }
+            after_rows = {
+                row["id_stable"]: row["traduction_fr"]
+                for row in extract_message_bank(
+                    target / "Data" / "messages_game.dat",
+                    "Data/messages_game.dat",
+                )
+            }
+            self.assertEqual(
+                selected["traduction_fr"],
+                after_rows[selected["id_stable"]],
+            )
+            self.assertEqual(
+                {key: value for key, value in before_rows.items() if key != selected["id_stable"]},
+                {key: value for key, value in after_rows.items() if key != selected["id_stable"]},
+            )
+            original_bank = load(root / "Data" / "messages_game.dat")
+            candidate_bank = load(target / "Data" / "messages_game.dat")
+            self.assertEqual(2, len(original_bank))
+            self.assertEqual(2, len(candidate_bank))
+            original_untouched = next(iter(original_bank[1].values()))
+            candidate_untouched = next(iter(candidate_bank[1].values()))
+            self.assertEqual(dumps(original_untouched), dumps(candidate_untouched))
+
+            candidate = snapshot_tree(target)
+            comparison = compare_snapshots(
+                source_before,
+                candidate,
+                allowed_changed={"Data/messages_game.dat"},
+            )
+            self.assertFalse(comparison.missing_files)
+            self.assertFalse(comparison.changed_files)
+            self.assertFalse(comparison.emptied_files)
+            self.assertEqual(
+                {
+                    "LANCER_VERSION_FR.bat",
+                    "LIRE_AVANT_DE_JOUER.txt",
+                    "PFT_RECONSTRUCTION_V1.0.txt",
+                },
+                set(comparison.unexpected_files),
+            )
+
+    def test_v21_private_validation_rejects_point_common_event_and_multiple_rows(self) -> None:
+        refused_types = (
+            "PBS v21.1 — Point.Name",
+            "Événement commun — Dialogue",
+        )
+        for refused_type in refused_types:
+            with self.subTest(refused_type=refused_type), tempfile.TemporaryDirectory(
+                prefix="pft_test_v21_scope_"
+            ) as temporary:
+                base = Path(temporary)
+                root = base / "game"
+                project = base / "project"
+                prepare_v21_game(root, nested_message_bank=True)
+                extraction = PokemonEssentialsAdapter().extract_with_provenance(root)
+                rows = [dict(row) for row in extraction.rows]
+                selected = next(row for row in rows if row["type"] == "Banque de messages")
+                selected["type"] = refused_type
+                selected["traduction_fr"] = selected["texte_source"] + " [TEST]"
+                selected["statut"] = "Accepté"
+                csv_path = project / "textes_structures.csv"
+                write_extracted_project_csv(csv_path, rows)
+                finalize_verified_essentials_project(
+                    root,
+                    csv_path,
+                    adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+                    declared_version="21.1",
+                )
+
+                with self.assertRaisesRegex(
+                    ReconstructionError,
+                    "validation v21.1|banque de messages",
+                ):
+                    build_v21_1_validation_plan(root, csv_path)
+
+        with tempfile.TemporaryDirectory(prefix="pft_test_v21_scope_multi_") as temporary:
+            base = Path(temporary)
+            root = base / "game"
+            project = base / "project"
+            prepare_v21_game(root, nested_message_bank=True)
+            extraction = PokemonEssentialsAdapter().extract_with_provenance(root)
+            rows = [dict(row) for row in extraction.rows]
+            bank_rows = [row for row in rows if row["type"] == "Banque de messages"]
+            self.assertGreaterEqual(len(bank_rows), 2)
+            for row in bank_rows[:2]:
+                row["traduction_fr"] = row["texte_source"] + " [TEST]"
+                row["statut"] = "Accepté"
+            csv_path = project / "textes_structures.csv"
+            write_extracted_project_csv(csv_path, rows)
+            finalize_verified_essentials_project(
+                root,
+                csv_path,
+                adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+                declared_version="21.1",
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "une seule occurrence"):
+                build_v21_1_validation_plan(root, csv_path)
 
     def test_v21_extraction_provenance_is_bound_to_profile(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_v21_provenance_") as temporary:
