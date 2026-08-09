@@ -23,6 +23,7 @@ python_files = [
     "adapters/base.py",
     "adapters/pokemon_essentials.py",
     "adapters/pokemon_flux.py",
+    "adapters/probe_isolation.py",
     "adapters/registry.py",
     "adapters/unknown.py",
     "analysis/__init__.py",

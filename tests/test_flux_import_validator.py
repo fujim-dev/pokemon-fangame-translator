@@ -75,6 +75,10 @@ def known_hasher(path: Path) -> str:
     raise AssertionError(path)
 
 
+def unknown_hasher(_path: Path) -> str:
+    return "0" * 64
+
+
 def make_flux_root(base: Path) -> Path:
     root = base / "Synthetic Flux"
     (root / "Data").mkdir(parents=True)
@@ -202,7 +206,7 @@ class FluxImportValidatorTests(unittest.TestCase):
             write_csv(csv_path, rows)
             unknown_adapter = PokemonFluxAdapter(
                 FakeArchiveReader(),
-                file_hasher=lambda _path: "0" * 64,
+                file_hasher=unknown_hasher,
             )
 
             with self.assertRaisesRegex(FluxImportValidationError, "non homologuée"):
@@ -227,7 +231,11 @@ class FluxImportValidatorTests(unittest.TestCase):
             root, adapter, rows, csv_path = prepared_project(base)
             write_csv(csv_path, rows)
 
-            with patch.object(adapter, "extract", return_value=([rows[0], rows[0]], [])):
+            with patch.object(
+                PokemonFluxAdapter,
+                "extract",
+                return_value=([rows[0], rows[0]], []),
+            ):
                 with self.assertRaisesRegex(FluxImportValidationError, "dupliqués"):
                     validate_flux_import(root, csv_path, adapter=adapter)
 
@@ -240,7 +248,7 @@ class FluxImportValidatorTests(unittest.TestCase):
             write_csv(csv_path, rows)
 
             with patch.object(
-                adapter,
+                PokemonFluxAdapter,
                 "extract",
                 return_value=(rows, ["structure synthétique incertaine"]),
             ):
@@ -291,7 +299,7 @@ class FluxImportPlanTests(unittest.TestCase):
             write_csv(csv_path, rows)
 
             with patch.object(
-                adapter,
+                PokemonFluxAdapter,
                 "extract",
                 return_value=(rows, ["avertissement synthétique"]),
             ):

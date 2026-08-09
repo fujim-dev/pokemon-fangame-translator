@@ -7,12 +7,15 @@ import csv
 import hashlib
 import io
 import json
+import multiprocessing
 import os
 import platform
+import queue
 import sys
 import re
 import shutil
 import tempfile
+import threading
 import zipfile
 import tkinter as tk
 from dataclasses import dataclass
@@ -22,7 +25,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from translation_studio import ProjectDataError, TranslationStudio
 from reconstruction_studio import ReconstructionStudio
-from adapters import DetectionResult, GameCapability, create_default_registry
+from adapters import DetectionResult, GameCapability, UnknownAdapter, create_default_registry
 from analysis import report_text as deep_report_text, write_analysis_reports
 from extraction_project import (
     BASELINE_CSV_NAME,
@@ -457,6 +460,12 @@ class FangameTranslatorApp(tk.Tk):
         self.translation_csv_path: Path | None = None
         self.project_dir: Path | None = None
         self.translation_windows = []
+        self._detection_queue: queue.Queue = queue.Queue()
+        self._detection_thread: threading.Thread | None = None
+        self._detection_cancel_event: threading.Event | None = None
+        self._detection_generation = 0
+        self._detection_in_progress = False
+        self._closing = False
 
         self.colors = {
             "bg": "#0b0f14",
@@ -488,6 +497,7 @@ class FangameTranslatorApp(tk.Tk):
         self._configure_styles()
         self._build_menu()
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._close_application)
 
     def _configure_styles(self):
         style = ttk.Style(self)
@@ -541,7 +551,7 @@ class FangameTranslatorApp(tk.Tk):
         file_menu.add_command(label="Exporter le rapport", command=self.export_report)
         file_menu.add_command(label="Exporter un diagnostic public", command=self.export_public_diagnostic)
         file_menu.add_separator()
-        file_menu.add_command(label="Quitter", command=self.destroy)
+        file_menu.add_command(label="Quitter", command=self._close_application)
 
         help_menu = tk.Menu(
             menu, tearoff=0,
@@ -1082,6 +1092,7 @@ class FangameTranslatorApp(tk.Tk):
         if not chosen:
             return
 
+        self._cancel_detection(wait=True)
         self.game_dir = Path(chosen)
         try:
             project = self._activate_project(self.game_dir)
@@ -1172,12 +1183,109 @@ class FangameTranslatorApp(tk.Tk):
             return "inconnue (structure PBS détectée)"
         return "inconnue"
 
+    def _cancel_detection(self, *, wait: bool = False) -> None:
+        self._detection_generation += 1
+        cancel_event = self._detection_cancel_event
+        if cancel_event is not None:
+            cancel_event.set()
+        self.adapter_registry.cancel_active()
+        thread = self._detection_thread
+        if wait and thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
+        self._detection_in_progress = False
+        self._detection_thread = None
+        self._detection_cancel_event = None
+
+    def _close_application(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        self._cancel_detection(wait=True)
+        self.destroy()
+
+    @staticmethod
+    def _unexpected_detection_result(error_type: str) -> DetectionResult:
+        base = UnknownAdapter().probe(Path("."))
+        return DetectionResult(
+            adapter_id=base.adapter_id,
+            display_name=base.display_name,
+            confidence=0,
+            capabilities=base.capabilities,
+            warnings=(
+                "Détection isolée interrompue sans conclusion "
+                f"({error_type}). Actions d'écriture bloquées.",
+                *base.warnings,
+            ),
+            adapter_recognized=False,
+            write_actions_allowed=False,
+        )
+
+    def _run_detection_worker(
+        self,
+        root: Path,
+        generation: int,
+        cancel_event: threading.Event,
+    ) -> None:
+        try:
+            detection = self.adapter_registry.detect(root, cancel_event=cancel_event)
+        except BaseException as exc:
+            detection = self._unexpected_detection_result(type(exc).__name__)
+        self._detection_queue.put((generation, root, detection))
+
+    def _poll_detection_result(self, generation: int, root: Path) -> None:
+        if self._closing or generation != self._detection_generation:
+            return
+        selected: DetectionResult | None = None
+        try:
+            while True:
+                queued_generation, queued_root, queued_result = self._detection_queue.get_nowait()
+                if queued_generation == generation and queued_root == root:
+                    selected = queued_result
+        except queue.Empty:
+            pass
+        if selected is None:
+            thread = self._detection_thread
+            if thread is not None and thread.is_alive():
+                self.after(50, self._poll_detection_result, generation, root)
+                return
+            selected = self._unexpected_detection_result("DetectionCoordinatorExit")
+        self._detection_in_progress = False
+        self._detection_thread = None
+        self._detection_cancel_event = None
+        self._complete_diagnostic(root, selected)
+
     def run_diagnostic(self):
-        if not self.game_dir:
+        if not self.game_dir or self._detection_in_progress or self._closing:
             return
 
         root = self.game_dir
-        detection = self.adapter_registry.detect(root)
+        self._detection_generation += 1
+        generation = self._detection_generation
+        cancel_event = threading.Event()
+        self._detection_cancel_event = cancel_event
+        self._detection_in_progress = True
+        self.detection_result = None
+        self.last_diagnostic = None
+        self.progress["value"] = 0
+        self.progress_percent.set("0%")
+        self.status_var.set("Détection isolée des adaptateurs en cours…")
+        self.project_status.set("Détection en cours")
+        self._clear_views()
+        self.analyze_btn.set_enabled(False)
+        self._refresh_action_buttons()
+        self._log("Début du diagnostic isolé. Aucun fichier ne sera modifié.")
+        self._detection_thread = threading.Thread(
+            target=self._run_detection_worker,
+            args=(root, generation, cancel_event),
+            name="PFTDetectionCoordinator",
+            daemon=True,
+        )
+        self._detection_thread.start()
+        self.after(50, self._poll_detection_result, generation, root)
+
+    def _complete_diagnostic(self, root: Path, detection: DetectionResult) -> None:
+        if self._closing or self.game_dir != root:
+            return
         self.detection_result = detection
         self.progress["value"] = 0
         self.progress_percent.set("0%")
@@ -1337,6 +1445,7 @@ class FangameTranslatorApp(tk.Tk):
 
         self._render_diagnostic(diagnostic)
         self._write_automatic_report(diagnostic)
+        self.analyze_btn.set_enabled(True)
         self._refresh_action_buttons()
         self._log(self.status_var.get())
 
@@ -2175,4 +2284,5 @@ créateurs des fangames. Aucun jeu ni fichier de jeu n'est fourni.
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     FangameTranslatorApp().mainloop()

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import multiprocessing
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,9 +17,11 @@ from adapters import (
     DetectionResult,
     GameCapability,
     PokemonEssentialsAdapter,
+    PokemonFluxAdapter,
     UnknownAdapter,
     create_default_registry,
 )
+from adapters.probe_isolation import IsolatedProbeRunner, ProbeBatchResult, ProbeFailure
 from structured_extractor import StructuredExtractionResult
 
 
@@ -44,6 +49,108 @@ class FailingAdapter:
     def probe(self, root: Path) -> DetectionResult:
         del root
         raise OSError("chemin privé volontairement absent du message public")
+
+
+class DelayedAdapter(StaticAdapter):
+    def __init__(
+        self,
+        adapter_id: str,
+        confidence: int,
+        delay_seconds: float,
+        *,
+        late_marker: str = "",
+        late_error: bool = False,
+    ):
+        super().__init__(adapter_id, confidence)
+        self.delay_seconds = delay_seconds
+        self.late_marker = late_marker
+        self.late_error = late_error
+
+    def probe(self, root: Path) -> DetectionResult:
+        time.sleep(self.delay_seconds)
+        if self.late_marker:
+            Path(self.late_marker).write_text("late", encoding="utf-8")
+        if self.late_error:
+            raise RuntimeError("late synthetic confidential error")
+        return super().probe(root)
+
+
+class NeverReturningAdapter:
+    adapter_id = "never_returning"
+    display_name = "Sonde synthetique bloquee"
+
+    def probe(self, root: Path) -> DetectionResult:
+        del root
+        while True:
+            time.sleep(0.05)
+
+
+def write_delayed_marker(marker: str, delay_seconds: float) -> None:
+    time.sleep(delay_seconds)
+    Path(marker).write_text("descendant encore actif", encoding="utf-8")
+
+
+class DescendantSpawningAdapter(NeverReturningAdapter):
+    adapter_id = "descendant_spawning"
+    display_name = "Sonde synthetique avec descendant"
+
+    def __init__(self, marker: str, delay_seconds: float):
+        self.marker = marker
+        self.delay_seconds = delay_seconds
+
+    def probe(self, root: Path) -> DetectionResult:
+        del root
+        child = multiprocessing.get_context("spawn").Process(
+            target=write_delayed_marker,
+            args=(self.marker, self.delay_seconds),
+            name="PFTProbeDescendant",
+        )
+        child.start()
+        while True:
+            time.sleep(0.05)
+
+
+class UnserializableAdapter(StaticAdapter):
+    def __init__(self):
+        super().__init__("unserializable", 99)
+        self.unserializable_callback = lambda: None
+
+
+class InlineProbeRunner:
+    """Execution locale reservee aux tests unitaires d'un patch de chemin."""
+
+    def run(self, adapters, root: Path) -> ProbeBatchResult:
+        results = []
+        failures = []
+        for adapter in adapters:
+            try:
+                results.append(adapter.probe(root))
+            except Exception as exc:
+                failures.append(
+                    ProbeFailure(
+                        adapter_id=adapter.adapter_id,
+                        display_name=adapter.display_name,
+                        error_type=type(exc).__name__,
+                    )
+                )
+        return ProbeBatchResult(tuple(results), tuple(failures))
+
+    def cancel_all(self) -> None:
+        return None
+
+    @property
+    def active_count(self) -> int:
+        return 0
+
+
+def inline_default_registry(*, replacement=None) -> AdapterRegistry:
+    adapters = [PokemonEssentialsAdapter(), PokemonFluxAdapter()]
+    if replacement is not None:
+        adapters = [
+            replacement if adapter.adapter_id == replacement.adapter_id else adapter
+            for adapter in adapters
+        ]
+    return AdapterRegistry(tuple(adapters), probe_runner=InlineProbeRunner())
 
 
 class FixedRegistry:
@@ -166,7 +273,7 @@ class AdapterDetectionTests(unittest.TestCase):
                 patch("adapters.registry._is_link_or_junction", return_value=True),
                 patch.object(PokemonEssentialsAdapter, "probe") as essentials_probe,
             ):
-                result = create_default_registry().detect(root)
+                result = inline_default_registry().detect(root)
 
             self.assertEqual(result.adapter_id, "unknown")
             self.assertFalse(result.write_actions_allowed)
@@ -221,7 +328,7 @@ class AdapterDetectionTests(unittest.TestCase):
                 "adapters.pokemon_essentials._is_link_or_junction",
                 side_effect=marks_pbs_as_redirected,
             ):
-                result = create_default_registry().detect(root)
+                result = inline_default_registry().detect(root)
 
             self.assertEqual(result.adapter_id, "unknown")
             self.assertFalse(result.write_actions_allowed)
@@ -232,6 +339,10 @@ class AdapterDetectionTests(unittest.TestCase):
                 patch(
                     "adapters.pokemon_essentials._is_link_or_junction",
                     side_effect=marks_pbs_as_redirected,
+                ),
+                patch(
+                    "adapters.registry.create_default_registry",
+                    side_effect=inline_default_registry,
                 ),
                 patch(
                     "adapters.pokemon_essentials.extract_structured_verified"
@@ -270,6 +381,235 @@ class AdapterDetectionTests(unittest.TestCase):
         self.assertIn("Détection incomplète", warning)
         self.assertIn("OSError", warning)
         self.assertNotIn("chemin privé", warning)
+
+    def test_probe_finishing_just_before_deadline_is_accepted(self):
+        runner = IsolatedProbeRunner(
+            timeout_seconds=0.35,
+            startup_timeout_seconds=10.0,
+        )
+        registry = AdapterRegistry(
+            (DelayedAdapter("adapter_rapide", 95, 0.20),),
+            probe_runner=runner,
+        )
+
+        result = registry.detect(Path("."))
+
+        self.assertEqual("adapter_rapide", result.adapter_id)
+        self.assertTrue(result.write_actions_allowed)
+        self.assertEqual(0, runner.active_count)
+
+    def test_probe_finishing_after_deadline_is_killed_and_never_published(self):
+        with tempfile.TemporaryDirectory(prefix="pft_test_probe_late_") as temporary:
+            marker = Path(temporary) / "late-result-used.txt"
+            runner = IsolatedProbeRunner(
+                timeout_seconds=0.15,
+                startup_timeout_seconds=10.0,
+            )
+            registry = AdapterRegistry(
+                (
+                    DelayedAdapter(
+                        "adapter_tardif",
+                        99,
+                        0.45,
+                        late_marker=str(marker),
+                    ),
+                ),
+                probe_runner=runner,
+            )
+
+            result = registry.detect(Path("."))
+            announced = (
+                result.adapter_id,
+                result.capabilities,
+                result.write_actions_allowed,
+                result.warnings,
+            )
+            time.sleep(0.5)
+
+            self.assertFalse(marker.exists())
+
+        self.assertEqual("unknown", result.adapter_id)
+        self.assertFalse(result.write_actions_allowed)
+        self.assertTrue(any("expir" in warning.casefold() for warning in result.warnings))
+        self.assertEqual(
+            announced,
+            (
+                result.adapter_id,
+                result.capabilities,
+                result.write_actions_allowed,
+                result.warnings,
+            ),
+        )
+        self.assertEqual(0, runner.active_count)
+
+    def test_never_returning_probe_is_stopped_without_residual_process(self):
+        runner = IsolatedProbeRunner(
+            timeout_seconds=0.15,
+            startup_timeout_seconds=10.0,
+        )
+        registry = AdapterRegistry(
+            (NeverReturningAdapter(),),
+            probe_runner=runner,
+        )
+
+        started = time.monotonic()
+        result = registry.detect(Path("."))
+        elapsed = time.monotonic() - started
+
+        self.assertEqual("unknown", result.adapter_id)
+        self.assertLess(elapsed, 5.0)
+        self.assertEqual(0, runner.active_count)
+        self.assertFalse(
+            any(
+                child.name == "PFTAdapterProbe" and child.is_alive()
+                for child in multiprocessing.active_children()
+            )
+        )
+
+    def test_precancelled_detection_never_starts_a_probe(self):
+        with tempfile.TemporaryDirectory(prefix="pft_test_probe_precancel_") as temporary:
+            marker = Path(temporary) / "probe-started.txt"
+            cancel_event = threading.Event()
+            cancel_event.set()
+            runner = IsolatedProbeRunner(
+                timeout_seconds=10.0,
+                startup_timeout_seconds=10.0,
+            )
+            registry = AdapterRegistry(
+                (
+                    DelayedAdapter(
+                        "adapter_annule",
+                        99,
+                        0.0,
+                        late_marker=str(marker),
+                    ),
+                ),
+                probe_runner=runner,
+            )
+
+            result = registry.detect(Path("."), cancel_event=cancel_event)
+
+            self.assertFalse(marker.exists())
+        self.assertEqual("unknown", result.adapter_id)
+        self.assertTrue(any("annul" in warning.casefold() for warning in result.warnings))
+        self.assertEqual(0, runner.active_count)
+
+    def test_timeout_kills_processes_spawned_by_the_probe(self):
+        with tempfile.TemporaryDirectory(prefix="pft_test_probe_tree_") as temporary:
+            marker = Path(temporary) / "descendant-survived.txt"
+            runner = IsolatedProbeRunner(
+                timeout_seconds=0.15,
+                startup_timeout_seconds=10.0,
+            )
+            registry = AdapterRegistry(
+                (DescendantSpawningAdapter(str(marker), 0.60),),
+                probe_runner=runner,
+            )
+
+            result = registry.detect(Path("."))
+            time.sleep(0.75)
+
+            self.assertFalse(marker.exists())
+        self.assertEqual("unknown", result.adapter_id)
+        self.assertEqual(0, runner.active_count)
+
+    def test_unserializable_probe_is_refused_before_starting_a_process(self):
+        runner = IsolatedProbeRunner(
+            timeout_seconds=10.0,
+            startup_timeout_seconds=10.0,
+        )
+        registry = AdapterRegistry(
+            (UnserializableAdapter(),),
+            probe_runner=runner,
+        )
+
+        result = registry.detect(Path("."))
+
+        self.assertEqual("unknown", result.adapter_id)
+        self.assertFalse(result.write_actions_allowed)
+        self.assertEqual(0, runner.active_count)
+        self.assertFalse(
+            any(
+                child.name == "PFTAdapterProbe" and child.is_alive()
+                for child in multiprocessing.active_children()
+            )
+        )
+
+    def test_exception_raised_after_expiration_is_contained(self):
+        with tempfile.TemporaryDirectory(prefix="pft_test_probe_late_error_") as temporary:
+            marker = Path(temporary) / "late-error.txt"
+            runner = IsolatedProbeRunner(
+                timeout_seconds=0.15,
+                startup_timeout_seconds=10.0,
+            )
+            registry = AdapterRegistry(
+                (
+                    DelayedAdapter(
+                        "adapter_erreur_tardive",
+                        99,
+                        0.45,
+                        late_marker=str(marker),
+                        late_error=True,
+                    ),
+                ),
+                probe_runner=runner,
+            )
+
+            result = registry.detect(Path("."))
+            time.sleep(0.5)
+
+            self.assertFalse(marker.exists())
+
+        self.assertEqual("unknown", result.adapter_id)
+        self.assertNotIn("confidential", " ".join(result.warnings).casefold())
+        self.assertEqual(0, runner.active_count)
+
+    def test_one_expired_probe_invalidates_another_successful_adapter(self):
+        runner = IsolatedProbeRunner(
+            timeout_seconds=0.15,
+            startup_timeout_seconds=10.0,
+        )
+        registry = AdapterRegistry(
+            (StaticAdapter("adapter_valide", 99), NeverReturningAdapter()),
+            probe_runner=runner,
+        )
+
+        result = registry.detect(Path("."))
+
+        self.assertEqual("unknown", result.adapter_id)
+        self.assertFalse(result.write_actions_allowed)
+        self.assertNotEqual("adapter_valide", result.adapter_id)
+        self.assertEqual(0, runner.active_count)
+
+    def test_application_cancellation_stops_active_probe_and_coordinator(self):
+        runner = IsolatedProbeRunner(
+            timeout_seconds=10.0,
+            startup_timeout_seconds=10.0,
+        )
+        registry = AdapterRegistry(
+            (NeverReturningAdapter(),),
+            probe_runner=runner,
+        )
+        result_holder = []
+        coordinator = threading.Thread(
+            target=lambda: result_holder.append(registry.detect(Path("."))),
+            name="PFTSyntheticDetectionCoordinator",
+        )
+        coordinator.start()
+        deadline = time.monotonic() + 10.0
+        while runner.active_count == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        registry.cancel_active()
+        coordinator.join(timeout=5.0)
+
+        self.assertFalse(coordinator.is_alive())
+        self.assertEqual(1, len(result_holder))
+        self.assertEqual("unknown", result_holder[0].adapter_id)
+        self.assertTrue(
+            any("annul" in warning.casefold() for warning in result_holder[0].warnings)
+        )
+        self.assertEqual(0, runner.active_count)
 
     def test_unknown_adapter_refuses_extraction_even_if_called_directly(self):
         with self.assertRaises(AdapterOperationBlocked):

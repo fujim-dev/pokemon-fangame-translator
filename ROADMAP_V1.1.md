@@ -67,6 +67,17 @@ Traduction et reconstruction désactivées
 
 Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les formats inconnus sont bloqués.
 
+### Stabilisation acquise
+
+- les sondes sont exécutées dans un processus isolé, avec une limite de
+  30 secondes par adaptateur et une limite distincte pour le démarrage ;
+- une seule sonde expirée ou défaillante invalide toute la décision : aucun
+  autre moteur n'est choisi par défaut et les écritures restent bloquées ;
+- le worker et ses descendants sont arrêtés à l'expiration, au changement de
+  dossier ou à la fermeture de l'application ;
+- le thread Tkinter ne bloque plus pendant les sondes et ignore tout résultat
+  appartenant à un diagnostic annulé ou remplacé.
+
 ## Phase 2 — Interface pilotée par capacités
 
 ### Objectifs

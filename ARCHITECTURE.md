@@ -65,6 +65,16 @@ Risque architectural restant :
 - ce fichier concentre encore l'interface, les rapports et une partie de la logique de projet ;
 - l'ajout direct de cas Flux dans `run_diagnostic()` rendrait le module difficile à maintenir.
 
+Le diagnostic ne lance plus les sondes dans le thread Tkinter. Le service
+`adapters/probe_isolation.py` exécute chaque lot dans un processus `spawn` et
+applique une limite de 30 secondes par adaptateur. Une expiration, une
+annulation ou un worker invalide annule le lot entier et retourne
+`UnknownAdapter` en lecture seule. Sous Windows, un Job Object
+`KILL_ON_JOB_CLOSE` contient le worker et ses descendants ; sous POSIX, le même
+rôle est assuré par un groupe de processus. Un changement de dossier ou la
+fermeture invalide aussi la génération du diagnostic, afin qu'un résultat tardif
+ne puisse jamais être réinjecté dans l'interface.
+
 ### `structured_extractor.py`
 
 Responsabilités :

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from .base import AdapterOperationBlocked, DetectionResult, GameAdapter, GameCapability
 from .pokemon_essentials import PokemonEssentialsAdapter
 from .pokemon_flux import PokemonFluxAdapter
+from .probe_isolation import IsolatedProbeRunner
 from .unknown import UnknownAdapter
 
 
@@ -27,10 +29,12 @@ class AdapterRegistry:
         *,
         confidence_threshold: int = 60,
         ambiguity_margin: int = 8,
+        probe_runner=None,
     ):
         self.adapters = adapters
         self.confidence_threshold = confidence_threshold
         self.ambiguity_margin = ambiguity_margin
+        self.probe_runner = probe_runner or IsolatedProbeRunner()
 
     def _unknown_from(
         self,
@@ -70,7 +74,12 @@ class AdapterRegistry:
             ambiguous=ambiguous,
         )
 
-    def detect(self, root: Path) -> DetectionResult:
+    def detect(
+        self,
+        root: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> DetectionResult:
         root_input = root.expanduser()
         if not root_input.is_dir():
             return self._unknown_from(
@@ -85,18 +94,40 @@ class AdapterRegistry:
                     "actions d'écriture bloquées."
                 ),
             )
-        results: list[DetectionResult] = []
-        probe_failures: list[str] = []
-        for adapter in self.adapters:
-            try:
-                results.append(adapter.probe(root))
-            except Exception as exc:
-                probe_failures.append(
-                    f"{adapter.display_name} ({type(exc).__name__})"
-                )
+        if cancel_event is None:
+            outcome = self.probe_runner.run(self.adapters, root)
+        else:
+            outcome = self.probe_runner.run(
+                self.adapters,
+                root,
+                cancel_event=cancel_event,
+            )
+        results = list(outcome.results)
+        probe_failures = [
+            f"{failure.display_name} ({failure.error_type})"
+            for failure in outcome.failures
+        ]
         results.sort(key=lambda result: result.confidence, reverse=True)
+        if outcome.cancelled:
+            candidate = results[0] if results else None
+            return self._unknown_from(
+                candidate,
+                warning=(
+                    "Détection annulée avant sa conclusion : diagnostic en lecture seule, "
+                    "actions d'écriture bloquées."
+                ),
+            )
         if probe_failures:
             candidate = results[0] if results else None
+            if any(failure.timed_out for failure in outcome.failures):
+                return self._unknown_from(
+                    candidate,
+                    warning=(
+                        "Détection incomplète : une ou plusieurs sondes d'adaptateur "
+                        "ont expiré ou échoué "
+                        f"({', '.join(probe_failures)}). Actions d'écriture bloquées."
+                    ),
+                )
             return self._unknown_from(
                 candidate,
                 warning=(
@@ -121,6 +152,14 @@ class AdapterRegistry:
             ):
                 return self._unknown_from(top, ambiguous=True)
         return top
+
+    def cancel_active(self) -> None:
+        """Annule et détruit tous les workers de sonde encore actifs."""
+        self.probe_runner.cancel_all()
+
+    @property
+    def active_probe_count(self) -> int:
+        return int(getattr(self.probe_runner, "active_count", 0))
 
     def adapter_for(self, result: DetectionResult) -> GameAdapter:
         if result.adapter_id == UnknownAdapter.adapter_id or not result.adapter_recognized:

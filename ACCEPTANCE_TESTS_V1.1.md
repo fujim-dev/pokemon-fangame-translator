@@ -98,6 +98,15 @@ publiés comme un lot : une panne tardive restaure les versions précédentes. U
 modification concurrente annule la publication et un CSV provenant d'un autre
 inventaire est refusé avant reconstruction.
 
+### AC-112 — Délai maximal et isolation des sondes
+
+Chaque sonde s'exécute hors du processus Tkinter avec un délai maximal borné.
+Une sonde expirée, annulée, morte ou invalide force le résultat global vers
+`UnknownAdapter`, même si un autre adaptateur avait réussi. Le worker et ses
+descendants sont terminés ; aucun résultat ou effet tardif ne peut modifier les
+capacités déjà annoncées. Une fermeture ou un changement de dossier annule le
+diagnostic actif sans laisser de processus de sonde résiduel.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

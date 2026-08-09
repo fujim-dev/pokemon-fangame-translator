@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from adapters import DetectionResult, GameCapability, UnknownAdapter
 from Pokemon_Fangame_Translator import FangameTranslatorApp
@@ -45,6 +46,29 @@ class AdapterUiCapabilityTests(unittest.TestCase):
         app.file_menu = FakeMenu()
         app.translation_csv_path = None
         return app
+
+    def test_application_close_cancels_detection_before_destroying_tk(self) -> None:
+        app = self._app_without_tk()
+        app._closing = False
+        app._cancel_detection = Mock()
+        app.destroy = Mock()
+
+        app._close_application()
+        app._close_application()
+
+        app._cancel_detection.assert_called_once_with(wait=True)
+        app.destroy.assert_called_once_with()
+        self.assertTrue(app._closing)
+
+    def test_result_from_an_invalidated_detection_generation_is_ignored(self) -> None:
+        app = self._app_without_tk()
+        app._closing = False
+        app._detection_generation = 2
+        app._complete_diagnostic = Mock()
+
+        app._poll_detection_result(1, Path("obsolete"))
+
+        app._complete_diagnostic.assert_not_called()
 
     def test_unknown_profile_hides_incompatible_actions(self) -> None:
         app = self._app_without_tk()

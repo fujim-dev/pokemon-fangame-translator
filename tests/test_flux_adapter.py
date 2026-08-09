@@ -64,6 +64,14 @@ class FakeArchiveReader:
         self.graphics_inventory = graphics_inventory
         self.inspected: list[Path] = []
 
+    def __getstate__(self):
+        # La fonction d'extraction appartient au test d'analyse/extraction, pas
+        # à probe(). Le worker spawn reçoit uniquement l'état de détection.
+        state = dict(self.__dict__)
+        state["extractor"] = None
+        state["inspected"] = []
+        return state
+
     def inspect(self, archive_path: Path) -> FluxArchiveInventory:
         self.inspected.append(archive_path)
         if archive_path.name == "Assets_0.fpk" and self.graphics_inventory is not None:
@@ -107,6 +115,10 @@ def known_hasher(path: Path) -> str:
     raise AssertionError(path)
 
 
+def unknown_hasher(_path: Path) -> str:
+    return "0" * 64
+
+
 class FluxAdapterTests(unittest.TestCase):
     def test_known_flux_release_is_detected_but_all_write_paths_stay_locked(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_flux_detect_") as temp_dir:
@@ -140,7 +152,7 @@ class FluxAdapterTests(unittest.TestCase):
     def test_unknown_flux_release_keeps_specialized_read_only_adapter(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_flux_unknown_") as temp_dir:
             root = make_flux_root(Path(temp_dir))
-            adapter = PokemonFluxAdapter(FakeArchiveReader(), file_hasher=lambda _path: "0" * 64)
+            adapter = PokemonFluxAdapter(FakeArchiveReader(), file_hasher=unknown_hasher)
             registry = AdapterRegistry((PokemonEssentialsAdapter(), adapter))
 
             result = registry.detect(root)
