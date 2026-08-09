@@ -58,6 +58,8 @@ IMMUTABLE_ROW_FIELDS = (
     "rpg_command_indent",
     "rpg_parameter_index",
     "rpg_continuation_end",
+    "rpg_choice_branch_command",
+    "rpg_choice_branch_parameter_index",
     "profil_essentials",
     "version_essentials_declaree",
     "methode_version_essentials",

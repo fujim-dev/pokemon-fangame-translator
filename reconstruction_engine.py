@@ -63,8 +63,20 @@ REVIEW_STATUSES = {"À vérifier", "À relire"}
 BLOCKED_STATUSES = {"Bloqué", "À traduire", "Ignoré", ""}
 ESSENTIALS_ADAPTER_ID = "pokemon_essentials"
 V21_1_VALIDATION_SCOPE = "essentials_v21_1_message_bank_candidate_v1"
+V21_1_BANK_CORPUS_VALIDATION_SCOPE = "essentials_v21_1_message_bank_corpus_candidate_v1"
+V21_1_MAP_VALIDATION_SCOPE = "essentials_v21_1_map_dialogue_choice_candidate_v1"
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
+V21_1_BANK_CORPUS_FILES = frozenset(
+    {"Data/messages_core.dat", "Data/messages_game.dat"}
+)
+V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
+    {
+        V21_1_VALIDATION_SCOPE,
+        V21_1_BANK_CORPUS_VALIDATION_SCOPE,
+        V21_1_MAP_VALIDATION_SCOPE,
+    }
+)
 RESERVED_COPY_OUTPUTS = (
     "PFT_RECONSTRUCTION_V1.0.txt",
     "LIRE_AVANT_DE_JOUER.txt",
@@ -88,6 +100,12 @@ class PlanItem:
     page: str = ""
     command: str = ""
     sub_index: str = ""
+    rpg_command_code: str = ""
+    rpg_command_indent: str = ""
+    rpg_parameter_index: str = ""
+    rpg_continuation_end: str = ""
+    rpg_choice_branch_command: str = ""
+    rpg_choice_branch_parameter_index: str = ""
     decision: str = "pending"  # applicable, skipped, blocked
     reason: str = ""
 
@@ -423,6 +441,192 @@ def _validate_v21_1_validation_scope(
     return selected
 
 
+def _validate_v21_1_scope_header(
+    plan: ReconstructionPlan,
+    detection,
+    expected_scope: str,
+) -> list[PlanItem]:
+    if plan.validation_scope != expected_scope:
+        raise ReconstructionError(
+            "Le plan ne porte pas la portée de validation v21.1 attendue."
+        )
+    if (
+        plan.adapter_id != detection.adapter_id
+        or plan.adapter_version != detection.recognized_version
+        or plan.adapter_profile != detection.structural_profile
+        or plan.mode != "accepted"
+    ):
+        raise ReconstructionError(
+            "Le plan de validation v21.1 ne correspond plus au profil détecté."
+        )
+    if any(item.decision == "blocked" for item in plan.items):
+        raise ReconstructionError(
+            "Le plan de validation v21.1 contient une occurrence bloquée."
+        )
+    return [item for item in plan.items if item.decision == "applicable"]
+
+
+def _validate_v21_1_bank_corpus_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne le corpus réel aux trois formes de banques v21.1 observées."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_BANK_CORPUS_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 3 or len(applicable) != 3:
+        raise ReconstructionError(
+            "Le corpus de banques v21.1 exige exactement trois occurrences acceptées."
+        )
+    if {item.id_stable for item in accepted} != {
+        item.id_stable for item in applicable
+    }:
+        raise ReconstructionError(
+            "Les occurrences acceptées ne correspondent pas exactement au corpus applicable."
+        )
+    if any(item.type != "Banque de messages" for item in applicable):
+        raise ReconstructionError(
+            "Le corpus v21.1 est limité aux banques de messages ; cartes, PBS et "
+            "événements communs restent exclus."
+        )
+    by_shape: Counter[tuple[str, str]] = Counter()
+    for item in applicable:
+        normalized = item.fichier.replace("\\", "/")
+        location = item.event_name.strip()
+        if normalized.casefold() == "data/messages_core.dat":
+            shape = "direct" if re.fullmatch(r"\d+/entry/\d+", location) else "unknown"
+            by_shape[("core", shape)] += 1
+        elif normalized.casefold() == "data/messages_game.dat":
+            if re.fullmatch(r"\d+/entry/\d+", location):
+                shape = "direct"
+            elif re.fullmatch(r"\d+/\d+/entry/\d+", location):
+                shape = "nested"
+            else:
+                shape = "unknown"
+            by_shape[("game", shape)] += 1
+        else:
+            raise ReconstructionError(
+                "Le corpus de banques v21.1 cible un fichier inattendu."
+            )
+        if not item.translation or extract_protected(item.source) != extract_protected(
+            item.translation
+        ):
+            raise ReconstructionError(
+                "Une traduction du corpus v21.1 ne conserve pas exactement les commandes."
+            )
+    expected_shapes = Counter(
+        {("core", "direct"): 1, ("game", "direct"): 1, ("game", "nested"): 1}
+    )
+    if by_shape != expected_shapes:
+        raise ReconstructionError(
+            "Le corpus de banques v21.1 doit couvrir exactement les formes core directe, "
+            "game directe et game imbriquée."
+        )
+    if {path.casefold() for path in plan.source_hashes} != {
+        path.casefold() for path in V21_1_BANK_CORPUS_FILES
+    }:
+        raise ReconstructionError(
+            "Le corpus de banques v21.1 cible un inventaire de fichiers inattendu."
+        )
+    return applicable
+
+
+def _validate_v21_1_map_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve carte à un dialogue et un choix d'une même page."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_MAP_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 2 or len(applicable) != 2:
+        raise ReconstructionError(
+            "La validation de carte v21.1 exige exactement un dialogue et un choix acceptés."
+        )
+    if {item.id_stable for item in accepted} != {
+        item.id_stable for item in applicable
+    } or Counter(item.type for item in applicable) != Counter(
+        {"Dialogue": 1, "Choix": 1}
+    ):
+        raise ReconstructionError(
+            "La validation de carte v21.1 exige exactement le dialogue et le choix applicables."
+        )
+    shared_locations = {
+        (
+            item.fichier.replace("\\", "/").casefold(),
+            item.map_id,
+            item.event_id,
+            item.page,
+        )
+        for item in applicable
+    }
+    if len(shared_locations) != 1:
+        raise ReconstructionError(
+            "Le dialogue et le choix v21.1 doivent appartenir à la même page de carte."
+        )
+    relative = applicable[0].fichier.replace("\\", "/")
+    map_match = re.fullmatch(r"Data/Map(\d{3,4})\.rxdata", relative, re.IGNORECASE)
+    if not map_match:
+        raise ReconstructionError("La validation v21.1 exige une carte MapXXX.rxdata.")
+    if _integer(applicable[0].map_id, "Identifiant de carte") != int(map_match.group(1)):
+        raise ReconstructionError(
+            "L'identifiant de carte v21.1 ne correspond pas au fichier MapXXX.rxdata."
+        )
+    if {path.casefold() for path in plan.source_hashes} != {relative.casefold()}:
+        raise ReconstructionError(
+            "Le plan de carte v21.1 cible un inventaire de fichiers inattendu."
+        )
+    dialogue = next(item for item in applicable if item.type == "Dialogue")
+    choice = next(item for item in applicable if item.type == "Choix")
+    if (
+        _integer(dialogue.rpg_command_code, "Code RPG du dialogue") != 101
+        or _integer(dialogue.rpg_parameter_index, "Paramètre RPG du dialogue") != 0
+        or _integer(dialogue.rpg_continuation_end, "Fin du dialogue")
+        < _integer(dialogue.command, "Commande du dialogue")
+    ):
+        raise ReconstructionError("Métadonnées 101/401 du dialogue v21.1 invalides.")
+    if (
+        _integer(choice.rpg_command_code, "Code RPG du choix") != 102
+        or _integer(choice.rpg_parameter_index, "Paramètre RPG du choix") != 0
+        or _integer(choice.rpg_continuation_end, "Fin du choix")
+        != _integer(choice.command, "Commande du choix")
+        or _integer(choice.rpg_choice_branch_parameter_index, "Paramètre 402") != 1
+        or _integer(choice.rpg_choice_branch_command, "Branche 402")
+        <= _integer(choice.command, "Commande du choix")
+    ):
+        raise ReconstructionError(
+            "Métadonnées 102/402 du choix v21.1 absentes ou ambiguës."
+        )
+    for item in applicable:
+        _ = _integer(item.rpg_command_indent, "Indentation RPG")
+        if not item.translation or extract_protected(item.source) != extract_protected(
+            item.translation
+        ):
+            raise ReconstructionError(
+                "Une traduction de carte v21.1 ne conserve pas exactement les commandes."
+            )
+    return applicable
+
+
+def _validate_v21_1_private_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    if plan.validation_scope == V21_1_VALIDATION_SCOPE:
+        return [_validate_v21_1_validation_scope(plan, detection)]
+    if plan.validation_scope == V21_1_BANK_CORPUS_VALIDATION_SCOPE:
+        return _validate_v21_1_bank_corpus_scope(plan, detection)
+    if plan.validation_scope == V21_1_MAP_VALIDATION_SCOPE:
+        return _validate_v21_1_map_scope(plan, detection)
+    raise ReconstructionError("Portée de validation privée inconnue.")
+
+
 def _assert_reserved_copy_outputs_absent(source_root: Path) -> None:
     """Empêche les fichiers générés après validation d'écraser un homonyme."""
     collisions = [name for name in RESERVED_COPY_OUTPUTS if (source_root / name).exists()]
@@ -607,6 +811,14 @@ def _build_plan_verified_body(
             page=row.get("page", ""),
             command=row.get("commande", ""),
             sub_index=row.get("sous_index", ""),
+            rpg_command_code=row.get("rpg_command_code", ""),
+            rpg_command_indent=row.get("rpg_command_indent", ""),
+            rpg_parameter_index=row.get("rpg_parameter_index", ""),
+            rpg_continuation_end=row.get("rpg_continuation_end", ""),
+            rpg_choice_branch_command=row.get("rpg_choice_branch_command", ""),
+            rpg_choice_branch_parameter_index=row.get(
+                "rpg_choice_branch_parameter_index", ""
+            ),
         )
 
         if not _supported_row_type(item.type):
@@ -674,6 +886,44 @@ def build_v21_1_validation_plan(
     ``Data/messages_game.dat``. Cette porte sert à démontrer le round-trip sur
     copie ; elle n'est pas une déclaration de compatibilité générale.
     """
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_bank_corpus_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit le corpus privé des trois formes de banques v21.1 observées."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_BANK_CORPUS_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_map_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un dialogue et d'un choix de carte v21.1."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_MAP_VALIDATION_SCOPE,
+    )
+
+
+def _build_v21_1_private_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+    validation_scope: str,
+) -> ReconstructionPlan:
+    if validation_scope not in V21_1_PRIVATE_VALIDATION_SCOPES:
+        raise ReconstructionError("Portée de validation privée inconnue.")
     safe_root = _resolve_safe_game_root(game_root)
     detection = _require_v21_1_validation(safe_root)
     csv_input = csv_path.expanduser()
@@ -695,9 +945,9 @@ def build_v21_1_validation_plan(
             csv_input,
             "accepted",
             preauthorized_detection=detection,
-            validation_scope=V21_1_VALIDATION_SCOPE,
+            validation_scope=validation_scope,
         )
-        _validate_v21_1_validation_scope(plan, detection)
+        _validate_v21_1_private_scope(plan, detection)
         guard.check_current()
         assert guard.snapshot is not None
         plan.project_provenance_token = guard.snapshot.provenance_token()
@@ -757,8 +1007,35 @@ def _locate_map_message(root: RubyObject, item: PlanItem):
     return commands, command_index
 
 
+def _locate_v21_map_message(root: RubyObject, item: PlanItem):
+    """Exige les classes RPG standard avant la preuve privée v21.1."""
+    if root.class_name != "RPG::Map":
+        raise ReconstructionError("Carte RPG::Map v21.1 attendue")
+    event_id = _integer(item.event_id, "Événement")
+    page_number = _integer(item.page, "Page")
+    command_index = _integer(item.command, "Commande")
+    events = root.ivars.get("@events", {})
+    event = events.get(event_id) if isinstance(events, dict) else None
+    if (
+        not isinstance(event, RubyObject)
+        or event.class_name != "RPG::Event"
+        or event.ivars.get("@id") != event_id
+    ):
+        raise ReconstructionError("Événement RPG::Event v21.1 introuvable")
+    pages = event.ivars.get("@pages", [])
+    if not isinstance(pages, list) or not (1 <= page_number <= len(pages)):
+        raise ReconstructionError("Page v21.1 introuvable")
+    page = pages[page_number - 1]
+    if not isinstance(page, RubyObject) or page.class_name != "RPG::Event::Page":
+        raise ReconstructionError("Page RPG::Event::Page v21.1 attendue")
+    commands = page.ivars.get("@list", [])
+    if not isinstance(commands, list) or not (0 <= command_index < len(commands)):
+        raise ReconstructionError("Commande v21.1 introuvable")
+    return commands, command_index
+
+
 def _apply_map_item(root: RubyObject, item: PlanItem) -> None:
-    commands, index = _locate_map_message(root, item)
+    commands, index = _locate_v21_map_message(root, item)
     command = commands[index]
     if not isinstance(command, RubyObject):
         raise ReconstructionError("Commande RPG invalide")
@@ -815,6 +1092,174 @@ def _apply_map_item(root: RubyObject, item: PlanItem) -> None:
         return
 
     raise ReconstructionError(f"Type de carte non pris en charge : {item.type}")
+
+
+def _strict_v21_dialogue_commands(
+    root: RubyObject,
+    item: PlanItem,
+) -> list[RubyObject]:
+    commands, index = _locate_map_message(root, item)
+    command = commands[index]
+    expected_indent = _integer(item.rpg_command_indent, "Indentation RPG")
+    if (
+        not isinstance(command, RubyObject)
+        or command.class_name != "RPG::EventCommand"
+        or command.ivars.get("@code") != 101
+        or command.ivars.get("@indent") != expected_indent
+        or _integer(item.rpg_command_code, "Code RPG") != 101
+        or _integer(item.rpg_parameter_index, "Paramètre RPG") != 0
+    ):
+        raise ReconstructionError("Structure 101 du dialogue v21.1 incohérente")
+    actual_commands = [command]
+    cursor = index + 1
+    while cursor < len(commands):
+        continuation = commands[cursor]
+        if (
+            not isinstance(continuation, RubyObject)
+            or continuation.class_name != "RPG::EventCommand"
+            or continuation.ivars.get("@code") != 401
+        ):
+            break
+        if continuation.ivars.get("@indent") != expected_indent:
+            raise ReconstructionError("Indentation 401 du dialogue v21.1 incohérente")
+        actual_commands.append(continuation)
+        cursor += 1
+    if _integer(item.rpg_continuation_end, "Fin 401") != cursor - 1:
+        raise ReconstructionError("Limites 101/401 du dialogue v21.1 incohérentes")
+    pieces: list[str] = []
+    for event_command in actual_commands:
+        parameters = event_command.ivars.get("@parameters", [])
+        if not isinstance(parameters, list) or not parameters:
+            raise ReconstructionError("Paramètre 101/401 du dialogue v21.1 invalide")
+        pieces.append(text_value(parameters[0]))
+    if "\\n".join(pieces).strip() != item.source.strip():
+        raise ReconstructionError("Le dialogue v21.1 original ne correspond plus au projet")
+    if len(item.translation.split("\\n")) != len(actual_commands):
+        raise ReconstructionError(
+            "Le dialogue v21.1 ne conserve pas le nombre exact de commandes 101/401"
+        )
+    return actual_commands
+
+
+def _strict_v21_choice_commands(
+    root: RubyObject,
+    item: PlanItem,
+) -> tuple[RubyObject, RubyObject, int]:
+    commands, index = _locate_v21_map_message(root, item)
+    command = commands[index]
+    expected_indent = _integer(item.rpg_command_indent, "Indentation RPG")
+    choice_index = _integer(item.sub_index, "Index de choix")
+    if (
+        not isinstance(command, RubyObject)
+        or command.class_name != "RPG::EventCommand"
+        or command.ivars.get("@code") != 102
+        or command.ivars.get("@indent") != expected_indent
+        or _integer(item.rpg_command_code, "Code RPG") != 102
+        or _integer(item.rpg_parameter_index, "Paramètre RPG") != 0
+        or _integer(item.rpg_continuation_end, "Fin du choix") != index
+    ):
+        raise ReconstructionError("Structure 102 du choix v21.1 incohérente")
+    parameters = command.ivars.get("@parameters", [])
+    if (
+        not isinstance(parameters, list)
+        or not parameters
+        or not isinstance(parameters[0], list)
+        or not (0 <= choice_index < len(parameters[0]))
+        or text_value(parameters[0][choice_index]).strip() != item.source.strip()
+    ):
+        raise ReconstructionError("Texte 102 du choix v21.1 incohérent")
+
+    branch_index = _integer(item.rpg_choice_branch_command, "Branche 402")
+    branch_parameter_index = _integer(
+        item.rpg_choice_branch_parameter_index,
+        "Paramètre de branche 402",
+    )
+    if not (index < branch_index < len(commands)) or branch_parameter_index != 1:
+        raise ReconstructionError("Branche 402 du choix v21.1 absente ou ambiguë")
+    branch = commands[branch_index]
+    branch_parameters = (
+        branch.ivars.get("@parameters", []) if isinstance(branch, RubyObject) else []
+    )
+    if (
+        not isinstance(branch, RubyObject)
+        or branch.class_name != "RPG::EventCommand"
+        or branch.ivars.get("@code") != 402
+        or branch.ivars.get("@indent") != expected_indent
+        or not isinstance(branch_parameters, list)
+        or len(branch_parameters) <= branch_parameter_index
+        or branch_parameters[0] != choice_index
+        or text_value(branch_parameters[branch_parameter_index]).strip()
+        != item.source.strip()
+    ):
+        raise ReconstructionError("Branche 402 du choix v21.1 incohérente")
+
+    matching_branches: list[int] = []
+    for candidate_index in range(index + 1, len(commands)):
+        candidate = commands[candidate_index]
+        if not isinstance(candidate, RubyObject):
+            continue
+        if candidate.class_name != "RPG::EventCommand":
+            raise ReconstructionError("Commande de branche v21.1 non standard")
+        candidate_code = candidate.ivars.get("@code")
+        candidate_indent = candidate.ivars.get("@indent")
+        if candidate_code == 404 and candidate_indent == expected_indent:
+            break
+        if candidate_code != 402 or candidate_indent != expected_indent:
+            continue
+        candidate_parameters = candidate.ivars.get("@parameters", [])
+        if (
+            isinstance(candidate_parameters, list)
+            and len(candidate_parameters) >= 2
+            and candidate_parameters[0] == choice_index
+            and text_value(candidate_parameters[1]).strip() == item.source.strip()
+        ):
+            matching_branches.append(candidate_index)
+    if matching_branches != [branch_index]:
+        raise ReconstructionError("Branche 402 du choix v21.1 absente ou ambiguë")
+    return command, branch, choice_index
+
+
+def _apply_v21_1_map_items(root: RubyObject, items: list[PlanItem]) -> None:
+    """Modifie uniquement les paramètres textuels vérifiés du corpus carte."""
+    dialogue = next((item for item in items if item.type == "Dialogue"), None)
+    choice = next((item for item in items if item.type == "Choix"), None)
+    if dialogue is None or choice is None or len(items) != 2:
+        raise ReconstructionError("Corpus de carte v21.1 incomplet")
+
+    dialogue_commands = _strict_v21_dialogue_commands(root, dialogue)
+    choice_command, branch_command, choice_index = _strict_v21_choice_commands(
+        root,
+        choice,
+    )
+    for event_command, translated_piece in zip(
+        dialogue_commands,
+        dialogue.translation.split("\\n"),
+    ):
+        parameters = event_command.ivars["@parameters"]
+        parameters[0] = _ruby_string_set(parameters[0], translated_piece)
+        _assert_utf8_translation_bytes(
+            parameters[0],
+            f"{dialogue.fichier} — dialogue v21.1 {dialogue.id_stable}",
+        )
+
+    choice_parameters = choice_command.ivars["@parameters"]
+    branch_parameters = branch_command.ivars["@parameters"]
+    choice_parameters[0][choice_index] = _ruby_string_set(
+        choice_parameters[0][choice_index],
+        choice.translation,
+    )
+    branch_parameters[1] = _ruby_string_set(
+        branch_parameters[1],
+        choice.translation,
+    )
+    _assert_utf8_translation_bytes(
+        choice_parameters[0][choice_index],
+        f"{choice.fichier} — choix 102 v21.1 {choice.id_stable}",
+    )
+    _assert_utf8_translation_bytes(
+        branch_parameters[1],
+        f"{choice.fichier} — branche 402 v21.1 {choice.id_stable}",
+    )
 
 
 def _walk_message_bank_refs(value, path=()):
@@ -933,14 +1378,23 @@ def _atomic_write_marshal(path: Path, root) -> None:
     atomic_write_bytes(path, payload, validator=load)
 
 
-def _apply_file(target_root: Path, relative: str, items: list[PlanItem]) -> None:
+def _apply_file(
+    target_root: Path,
+    relative: str,
+    items: list[PlanItem],
+    *,
+    validation_scope: str = "",
+) -> None:
     path = _resolve_group_path(target_root, relative, items)
     if relative.lower().endswith(".rxdata"):
         root = load(path)
         if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
             raise ReconstructionError("Seules les cartes RPG::Map sont modifiées en v1.0.2")
-        for item in items:
-            _apply_map_item(root, item)
+        if validation_scope == V21_1_MAP_VALIDATION_SCOPE:
+            _apply_v21_1_map_items(root, items)
+        else:
+            for item in items:
+                _apply_map_item(root, item)
         _atomic_write_marshal(path, root)
         return
     if relative.lower().endswith(".dat"):
@@ -970,6 +1424,40 @@ def _expected_v21_1_message_bank_payload(
     return payload
 
 
+def _expected_v21_1_private_payloads(
+    source_root: Path,
+    plan: ReconstructionPlan,
+    validation_items: list[PlanItem],
+) -> dict[str, bytes]:
+    """Calcule chaque fichier privé attendu sans écrire sur disque."""
+    by_file: dict[str, list[PlanItem]] = defaultdict(list)
+    for item in validation_items:
+        by_file[item.fichier].append(item)
+    expected: dict[str, bytes] = {}
+    for relative, items in by_file.items():
+        path = _resolve_contained_path(source_root, relative)
+        root = load(path)
+        if relative.lower().endswith(".rxdata"):
+            if (
+                plan.validation_scope != V21_1_MAP_VALIDATION_SCOPE
+                or not isinstance(root, RubyObject)
+                or root.class_name != "RPG::Map"
+            ):
+                raise ReconstructionError("Carte RPG::Map v21.1 attendue")
+            _apply_v21_1_map_items(root, items)
+        elif relative.lower().endswith(".dat"):
+            if not isinstance(root, (list, dict)):
+                raise ReconstructionError("Banque v21.1 Array ou Hash attendue")
+            _apply_bank_items(root, relative, items)
+        else:
+            raise ReconstructionError("Format privé v21.1 inattendu")
+        payload = dumps(root)
+        if not payload.startswith(b"\x04\x08"):
+            raise ReconstructionError("Candidat Marshal v21.1 invalide")
+        expected[relative] = payload
+    return expected
+
+
 def _validate_file(target_root: Path, relative: str, items: list[PlanItem]) -> list[str]:
     path = _resolve_group_path(target_root, relative, items)
     expected = {item.id_stable: item.translation for item in items}
@@ -996,10 +1484,10 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
     game_root = Path(plan.game_root)
     validation_detection = None
     if plan.validation_scope:
-        if plan.validation_scope != V21_1_VALIDATION_SCOPE:
+        if plan.validation_scope not in V21_1_PRIVATE_VALIDATION_SCOPES:
             raise ReconstructionError("Portée de validation privée inconnue.")
         validation_detection = _require_v21_1_validation(game_root)
-        _validate_v21_1_validation_scope(plan, validation_detection)
+        _validate_v21_1_private_scope(plan, validation_detection)
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
     for item in plan.items:
         if item.decision == "applicable":
@@ -1012,6 +1500,9 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                 root = load(path)
                 if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
                     raise ReconstructionError("Carte RPG::Map attendue")
+                if plan.validation_scope == V21_1_MAP_VALIDATION_SCOPE:
+                    _apply_v21_1_map_items(root, items)
+                    continue
                 for item in items:
                     # Vérification sur une copie fraîche à chaque item non nécessaire : la fonction
                     # ne modifie qu'après toutes ses validations de ligne.
@@ -1064,7 +1555,7 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                     item.decision = "blocked"
                     item.reason = f"Simulation : {exc}"
     if validation_detection is not None:
-        _validate_v21_1_validation_scope(plan, validation_detection)
+        _validate_v21_1_private_scope(plan, validation_detection)
     return plan
 
 
@@ -1156,12 +1647,12 @@ def _reconstruct_copy_verified_body(
     progress: Callable[[int, int, str], None] | None = None,
 ) -> ReconstructionResult:
     source_root = _resolve_safe_game_root(Path(plan.game_root))
-    validation_item: PlanItem | None = None
+    validation_items: list[PlanItem] = []
     if plan.validation_scope:
-        if plan.validation_scope != V21_1_VALIDATION_SCOPE:
+        if plan.validation_scope not in V21_1_PRIVATE_VALIDATION_SCOPES:
             raise ReconstructionError("Portée de validation privée inconnue.")
         detection = _require_v21_1_validation(source_root)
-        validation_item = _validate_v21_1_validation_scope(plan, detection)
+        validation_items = _validate_v21_1_private_scope(plan, detection)
     else:
         detection = _require_essentials_reconstruction(source_root)
     if plan.adapter_id != detection.adapter_id:
@@ -1182,7 +1673,7 @@ def _reconstruct_copy_verified_body(
         )
     except ProjectIdentityError as exc:
         raise ReconstructionError(f"Projet de traduction refusé : {exc}") from exc
-    if validation_item is not None and identity.adapter_profile != detection.structural_profile:
+    if validation_items and identity.adapter_profile != detection.structural_profile:
         raise ReconstructionError(
             "Projet de validation refusé : le profil Essentials de l'identité a changé."
         )
@@ -1209,10 +1700,10 @@ def _reconstruct_copy_verified_body(
     # Le fangame peut avoir été mis à jour ou déplacé après la simulation. Le
     # plan doit encore correspondre exactement aux fichiers qu'il va utiliser.
     _assert_plan_sources_unchanged(plan, source_root)
-    expected_validation_payload = (
-        _expected_v21_1_message_bank_payload(source_root, validation_item)
-        if validation_item is not None
-        else None
+    expected_validation_payloads = (
+        _expected_v21_1_private_payloads(source_root, plan, validation_items)
+        if validation_items
+        else {}
     )
     if progress:
         progress(0, 1, "Calcul de l'empreinte du fangame original…")
@@ -1233,18 +1724,26 @@ def _reconstruct_copy_verified_body(
         for file_index, (relative, items) in enumerate(sorted(by_file.items()), start=1):
             if progress:
                 progress(file_index, total_files, f"Réinjection : {relative}")
-            _apply_file(target_root, relative, items)
+            if plan.validation_scope:
+                _apply_file(
+                    target_root,
+                    relative,
+                    items,
+                    validation_scope=plan.validation_scope,
+                )
+            else:
+                _apply_file(target_root, relative, items)
             errors = _validate_file(target_root, relative, items)
             if errors:
                 validation_errors.extend(errors)
                 raise ReconstructionError(errors[0])
-            if expected_validation_payload is not None:
+            if relative in expected_validation_payloads:
                 rebuilt = read_stable_bytes(
-                    _resolve_contained_path(target_root, V21_1_VALIDATION_FILE)
+                    _resolve_contained_path(target_root, relative)
                 )
-                if rebuilt != expected_validation_payload:
+                if rebuilt != expected_validation_payloads[relative]:
                     raise ReconstructionError(
-                        "La banque v21.1 reconstruite diffère du candidat exact calculé "
+                        "Le fichier v21.1 reconstruit diffère du candidat exact calculé "
                         "en mémoire ; la copie est refusée."
                     )
             modified_files.append(relative)

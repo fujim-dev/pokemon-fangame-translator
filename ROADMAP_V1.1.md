@@ -92,6 +92,15 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
 - cette validation n'active aucune capacité supplémentaire. Les cartes, événements
   communs, sous-champs `Point`, PBS modernes et formes de banques non couvertes
   exigent encore leurs propres preuves synthétiques et réelles.
+- un lot suivant a validé séparément les trois formes de banques observées dans
+  `messages_core.dat`/`messages_game.dat`, puis une carte bornée à un dialogue
+  101/401 et un choix 102/402. Les deux candidats ont été réextraits à 30 402
+  occurrences et comparés intégralement. Une vérification humaine en jeu a
+  confirmé l'affichage du dialogue, l'affichage du choix et le fonctionnement
+  normal du menu ; `RECONSTRUCT` demeure absent.
+- les dialogues dont un contrôle `\n` interne empêche de prouver les limites
+  exactes entre commandes 101/401 restent refusés par la porte privée, en
+  attendant une métadonnée de segmentation non ambiguë.
 
 ## Phase 2 — Interface pilotée par capacités
 

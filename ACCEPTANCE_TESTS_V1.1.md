@@ -140,6 +140,28 @@ inchangés. Plusieurs occurrences, une carte, un PBS, un événement commun ou u
 sous-champ `Point` sont refusés. Cette validation privée ne rend pas la
 reconstruction v21.1 disponible dans l'interface.
 
+### AC-116 — Corpus de banques et carte v21.1 toujours privés
+
+Deux portées internes distinctes peuvent élargir la preuve sans accorder
+`RECONSTRUCT`. La première exige exactement trois occurrences acceptées couvrant
+une banque core directe, une banque game directe et une banque game imbriquée,
+et cible exactement `messages_core.dat` et `messages_game.dat`. La seconde exige
+exactement un dialogue et un choix acceptés sur la même page d'une carte
+`MapXXX.rxdata`. Elle vérifie les classes RPG, les identifiants, index, codes,
+indentations et paramètres, puis remplace le libellé du choix dans la commande 102
+et dans son unique branche 402 correspondante. Une branche 402 absente,
+dupliquée ou incohérente, ou des limites 101/401 impossibles à déduire sans
+ambiguïté, bloque le candidat. Chaque fichier reconstruit doit être identique
+au payload complet calculé en mémoire et tous les fichiers hors plan restent
+inchangés. Ces preuves privées ne modifient jamais les capacités publiques du
+profil v21.1.
+
+Validation manuelle privée associée à AC-116 : le candidat v21.1 a été lancé et
+l'affichage du dialogue 101/401 ainsi que celui du choix 102/402 ont été confirmés
+dans le jeu ; le menu de choix est resté fonctionnel. Ce contrôle humain, sans
+fichier ni contenu du jeu conservé dans le dépôt, ne généralise pas la portée du
+réinjecteur et n'active pas `RECONSTRUCT`.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

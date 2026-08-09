@@ -331,6 +331,23 @@ Déjà en place :
   l'occurrence exacte, copie intégralement comparée et démarrage de `Game.exe`
   conclu avec fermeture propre. Aucun contenu de cette référence n'est conservé
   dans le dépôt.
+- deux portées internes supplémentaires couvrent maintenant, sans exposer
+  `RECONSTRUCT`, les trois formes de banques réellement observées (core directe,
+  game directe et game imbriquée), puis exactement un dialogue 101/401 et un
+  choix 102 avec sa branche 402 de la même page de carte ;
+- l'extraction enregistre l'index exact de la branche 402 et son paramètre de
+  libellé. Une branche absente, dupliquée ou incohérente reste extractible en
+  lecture seule mais bloque le candidat. Les classes RPG, identifiants de carte,
+  pages, commandes, indentations et paramètres hors texte sont revérifiés avant
+  la mutation ;
+- un second parcours privé réel a validé trois occurrences de banques dans deux
+  fichiers et une carte contenant un dialogue 101/401 ainsi qu'un choix 102/402.
+  Chaque candidat a conservé les 30 402 occurrences, modifié uniquement les
+  fichiers planifiés et laissé la référence comme la copie de travail inchangées ;
+- une validation visuelle humaine dans le moteur v21.1 a confirmé que le choix
+  102/402 reconstruit s'affiche et que le menu reste fonctionnel, ainsi que
+  l'affichage du dialogue 101/401 reconstruit. Cette preuve reste strictement
+  bornée à ces occurrences et n'accorde toujours pas `RECONSTRUCT` au profil.
 
 Encore partiel ou pas encore en place :
 
@@ -344,9 +361,11 @@ Encore partiel ou pas encore en place :
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 - limite de temps des analyses statiques approfondies autres que les sondes :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
-- validation de réinjection v21.1 pour les cartes, événements communs, sous-champs
-  `Point`, PBS modernes et davantage de formes de banques. La capacité publique
-  `RECONSTRUCT` reste absente malgré le premier candidat borné concluant.
+- validation de réinjection v21.1 pour les événements communs, sous-champs
+  `Point`, PBS modernes, dialogues dont les contrôles `\n` internes rendent les
+  limites 101/401 ambiguës, et un corpus encore plus large de cartes/banques. La
+  capacité publique `RECONSTRUCT` reste absente malgré les candidats bornés
+  concluants.
 
 ## 4. Problèmes à éviter dans la v1.1
 
@@ -414,9 +433,11 @@ la famille, la version déclarée, la méthode de détection et le profil struct
 puis expose séparément les compatibilités d'analyse, d'extraction, de projet de
 traduction, d'écriture dans le jeu et de reconstruction validée. Pour v21.1,
 `RECONSTRUCT` reste absent malgré un premier aller-retour réel concluant limité à
-une banque de messages. Cette preuve ne couvre ni les cartes, ni les événements
-communs, ni les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus
-représentatif et les réinjecteurs correspondants restent nécessaires avant toute
+une banque de messages. Des preuves internes supplémentaires couvrent désormais
+les trois formes de banques observées et une page de carte bornée à un dialogue
+101/401 et un choix 102/402. Elles ne couvrent ni les événements communs, ni les
+sous-champs `Point`, ni l'ensemble des PBS modernes, ni les limites de dialogue
+ambiguës ; un corpus représentatif plus large reste nécessaire avant toute
 autorisation générale.
 
 #### `pokemon_flux.py`

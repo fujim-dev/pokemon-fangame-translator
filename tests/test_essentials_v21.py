@@ -28,18 +28,22 @@ from project_identity import (
     read_project_identity,
 )
 from reconstruction_engine import (
+    V21_1_BANK_CORPUS_VALIDATION_SCOPE,
+    V21_1_MAP_VALIDATION_SCOPE,
     V21_1_VALIDATION_SCOPE,
     PlanItem,
     ReconstructionError,
     _apply_pbs_items,
     build_plan,
+    build_v21_1_bank_corpus_validation_plan,
+    build_v21_1_map_validation_plan,
     build_v21_1_validation_plan,
     reconstruct_copy,
     simulate_plan,
 )
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
-from structured_extractor import extract_message_bank, extract_pbs
+from structured_extractor import extract_map, extract_message_bank, extract_pbs
 from project_test_support import finalize_verified_essentials_project
 
 
@@ -51,8 +55,57 @@ def compressed_script(value: str) -> RubyString:
     return RubyString(zlib.compress(value.encode("utf-8")))
 
 
-def event_command(code: int, parameters: list) -> RubyObject:
-    return RubyObject("RPG::EventCommand", {"@code": code, "@parameters": parameters})
+def event_command(code: int, parameters: list, *, indent: int = 0) -> RubyObject:
+    return RubyObject(
+        "RPG::EventCommand",
+        {"@code": code, "@indent": indent, "@parameters": parameters},
+    )
+
+
+def validation_map(
+    *,
+    ambiguous_choice_branch: bool = False,
+    internal_line_control: bool = False,
+) -> RubyObject:
+    first_choice = ruby_text("First synthetic choice")
+    second_choice = ruby_text("Second synthetic choice")
+    first_branch_text = ruby_text("First synthetic choice")
+    commands = [
+        event_command(
+            101,
+            [
+                ruby_text(
+                    "Synthetic\\ninternal map dialogue."
+                    if internal_line_control
+                    else "Synthetic map dialogue."
+                )
+            ],
+        ),
+        event_command(401, [ruby_text("Second synthetic line.")]),
+        event_command(102, [[first_choice, second_choice], 0]),
+        event_command(402, [0, first_branch_text]),
+        event_command(101, [ruby_text("First branch body")], indent=1),
+        event_command(402, [1, ruby_text("Second synthetic choice")]),
+        event_command(101, [ruby_text("Second branch body")], indent=1),
+    ]
+    if ambiguous_choice_branch:
+        commands.append(event_command(402, [0, ruby_text("First synthetic choice")]))
+    commands.extend([event_command(404, []), event_command(0, [])])
+    page = RubyObject(
+        "RPG::Event::Page",
+        {"@trigger": 3, "@list": commands},
+    )
+    event = RubyObject(
+        "RPG::Event",
+        {
+            "@id": 1,
+            "@name": ruby_text("Synthetic intro event"),
+            "@x": 9,
+            "@y": 7,
+            "@pages": [page],
+        },
+    )
+    return RubyObject("RPG::Map", {"@events": {1: event}})
 
 
 def prepare_v21_game(
@@ -63,6 +116,10 @@ def prepare_v21_game(
     mkxp_version: str | None = None,
     empty_plugin_bank: bool = False,
     nested_message_bank: bool = False,
+    bank_corpus: bool = False,
+    map_validation: bool = False,
+    ambiguous_choice_branch: bool = False,
+    internal_line_control: bool = False,
     dangerous_marker: Path | None = None,
 ) -> None:
     ini_version = ini_version or script_version
@@ -84,9 +141,53 @@ def prepare_v21_game(
         encoding="utf-8",
     )
     (data / "System.rxdata").write_bytes(b"synthetic system marker")
-    (data / "Map001.rxdata").write_bytes(dumps(RubyObject("RPG::Map", {"@events": {}})))
-    (data / "MapInfos.rxdata").write_bytes(dumps({}))
-    if nested_message_bank:
+    game_map = (
+        validation_map(
+            ambiguous_choice_branch=ambiguous_choice_branch,
+            internal_line_control=internal_line_control,
+        )
+        if map_validation
+        else RubyObject("RPG::Map", {"@events": {}})
+    )
+    (data / "Map001.rxdata").write_bytes(dumps(game_map))
+    map_infos = {
+        1: RubyObject("RPG::MapInfo", {"@name": ruby_text("Synthetic intro")})
+    }
+    (data / "MapInfos.rxdata").write_bytes(dumps(map_infos))
+    core_bank = {}
+    if bank_corpus:
+        bank = [
+            [
+                {
+                    ruby_text("Nested synthetic game bank text"): ruby_text(
+                        "Nested synthetic game bank text"
+                    ),
+                    ruby_text("Untouched nested game bank text"): ruby_text(
+                        "Untouched nested game bank text"
+                    ),
+                }
+            ],
+            {
+                ruby_text("Direct synthetic game bank text"): ruby_text(
+                    "Direct synthetic game bank text"
+                ),
+                ruby_text("Untouched direct game bank text"): ruby_text(
+                    "Untouched direct game bank text"
+                ),
+            },
+        ]
+        core_bank = [
+            {},
+            {
+                ruby_text("Direct synthetic core bank text"): ruby_text(
+                    "Direct synthetic core bank text"
+                ),
+                ruby_text("Untouched direct core bank text"): ruby_text(
+                    "Untouched direct core bank text"
+                ),
+            },
+        ]
+    elif nested_message_bank:
         bank = [
             {
                 ruby_text("Synthetic bank text for validation"): ruby_text(
@@ -103,7 +204,7 @@ def prepare_v21_game(
     else:
         bank = {ruby_text("Synthetic bank text"): ruby_text("Synthetic bank text")}
     (data / "messages_game.dat").write_bytes(dumps(bank))
-    (data / "messages_core.dat").write_bytes(dumps({}))
+    (data / "messages_core.dat").write_bytes(dumps(core_bank))
     dangerous = (
         f"File.write({str(dangerous_marker)!r}, 'executed')\n"
         if dangerous_marker is not None
@@ -345,6 +446,265 @@ class EssentialsV21ProfileTests(unittest.TestCase):
         self.assertEqual(2, len({row["evenement_nom"] for row in rows}))
         translated = next(row for row in rows if row["traduction_fr"])
         self.assertEqual("Traduction synthétique", translated["traduction_fr"])
+
+    def test_v21_map_extraction_records_exact_102_402_relationship(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_v21_map_metadata_") as temporary:
+            root = Path(temporary) / "game"
+            prepare_v21_game(root, map_validation=True)
+
+            rows = extract_map(
+                root / "Data" / "Map001.rxdata",
+                "Data/Map001.rxdata",
+                "Synthetic intro",
+                strict=True,
+            )
+
+        dialogue = next(row for row in rows if row["type"] == "Dialogue")
+        first_choice = next(
+            row
+            for row in rows
+            if row["type"] == "Choix" and row["sous_index"] == 0
+        )
+        second_choice = next(
+            row
+            for row in rows
+            if row["type"] == "Choix" and row["sous_index"] == 1
+        )
+        self.assertEqual(1, dialogue["rpg_continuation_end"])
+        self.assertEqual((3, 1), (
+            first_choice["rpg_choice_branch_command"],
+            first_choice["rpg_choice_branch_parameter_index"],
+        ))
+        self.assertEqual((5, 1), (
+            second_choice["rpg_choice_branch_command"],
+            second_choice["rpg_choice_branch_parameter_index"],
+        ))
+
+    def test_v21_bank_corpus_roundtrip_covers_real_observed_shapes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_v21_bank_corpus_") as temporary:
+            base = Path(temporary)
+            root = base / "game"
+            project = base / "project"
+            target = base / "candidate"
+            prepare_v21_game(root, bank_corpus=True)
+            source_before = snapshot_tree(root)
+
+            extraction = PokemonEssentialsAdapter().extract_with_provenance(root)
+            rows = [dict(row) for row in extraction.rows]
+            selected_sources = {
+                "Nested synthetic game bank text",
+                "Direct synthetic game bank text",
+                "Direct synthetic core bank text",
+            }
+            selected = [
+                row
+                for row in rows
+                if row["type"] == "Banque de messages"
+                and row["texte_source"] in selected_sources
+            ]
+            self.assertEqual(3, len(selected))
+            for index, row in enumerate(selected, start=1):
+                row["traduction_fr"] = row["texte_source"] + f" [BANK {index}]"
+                row["statut"] = "Accepté"
+            csv_path = project / "textes_structures.csv"
+            write_extracted_project_csv(csv_path, rows)
+            finalize_verified_essentials_project(
+                root,
+                csv_path,
+                adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+                declared_version="21.1",
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "Reconstruction bloquée"):
+                build_plan(root, csv_path, mode="accepted")
+            plan = build_v21_1_bank_corpus_validation_plan(root, csv_path)
+            self.assertEqual(V21_1_BANK_CORPUS_VALIDATION_SCOPE, plan.validation_scope)
+            self.assertEqual(3, plan.counts().get("applicable", 0))
+            simulate_plan(plan)
+            result = reconstruct_copy(plan, target, base / "reports")
+
+            self.assertEqual(
+                ["Data/messages_core.dat", "Data/messages_game.dat"],
+                result.modified_files,
+            )
+            self.assertTrue(result.original_unchanged)
+            self.assertTrue(result.integrity_valid)
+            self.assertTrue(compare_snapshots(source_before, snapshot_tree(root)).passed)
+            before_rows = {}
+            after_rows = {}
+            for relative in ("Data/messages_core.dat", "Data/messages_game.dat"):
+                before_rows.update({
+                    row["id_stable"]: row["traduction_fr"]
+                    for row in extract_message_bank(root / relative, relative)
+                })
+                after_rows.update({
+                    row["id_stable"]: row["traduction_fr"]
+                    for row in extract_message_bank(target / relative, relative)
+                })
+            selected_ids = {row["id_stable"] for row in selected}
+            for row in selected:
+                self.assertEqual(row["traduction_fr"], after_rows[row["id_stable"]])
+            self.assertEqual(
+                {key: value for key, value in before_rows.items() if key not in selected_ids},
+                {key: value for key, value in after_rows.items() if key not in selected_ids},
+            )
+
+    def test_v21_map_dialogue_choice_roundtrip_updates_matching_402_only(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_v21_map_candidate_") as temporary:
+            base = Path(temporary)
+            root = base / "game"
+            project = base / "project"
+            target = base / "candidate"
+            prepare_v21_game(root, map_validation=True)
+            source_before = snapshot_tree(root)
+
+            extraction = PokemonEssentialsAdapter().extract_with_provenance(root)
+            rows = [dict(row) for row in extraction.rows]
+            dialogue = next(
+                row
+                for row in rows
+                if row["type"] == "Dialogue"
+                and row["fichier"] == "Data/Map001.rxdata"
+                and row["commande"] == 0
+            )
+            choice = next(
+                row
+                for row in rows
+                if row["type"] == "Choix"
+                and row["fichier"] == "Data/Map001.rxdata"
+                and row["sous_index"] == 0
+            )
+            dialogue["traduction_fr"] = dialogue["texte_source"] + " [TEST MAP]"
+            choice["traduction_fr"] = choice["texte_source"] + " [TEST CHOICE]"
+            for row in (dialogue, choice):
+                row["statut"] = "Accepté"
+            csv_path = project / "textes_structures.csv"
+            write_extracted_project_csv(csv_path, rows)
+            finalize_verified_essentials_project(
+                root,
+                csv_path,
+                adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+                declared_version="21.1",
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "Reconstruction bloquée"):
+                build_plan(root, csv_path, mode="accepted")
+            plan = build_v21_1_map_validation_plan(root, csv_path)
+            self.assertEqual(V21_1_MAP_VALIDATION_SCOPE, plan.validation_scope)
+            self.assertEqual(2, plan.counts().get("applicable", 0))
+            simulate_plan(plan)
+            result = reconstruct_copy(plan, target, base / "reports")
+
+            self.assertEqual(["Data/Map001.rxdata"], result.modified_files)
+            self.assertTrue(result.original_unchanged)
+            self.assertTrue(result.integrity_valid)
+            self.assertTrue(compare_snapshots(source_before, snapshot_tree(root)).passed)
+            original_map = load(root / "Data" / "Map001.rxdata")
+            candidate_map = load(target / "Data" / "Map001.rxdata")
+            original_commands = original_map.ivars["@events"][1].ivars["@pages"][0].ivars["@list"]
+            candidate_commands = candidate_map.ivars["@events"][1].ivars["@pages"][0].ivars["@list"]
+            self.assertEqual(
+                [(cmd.ivars["@code"], cmd.ivars["@indent"]) for cmd in original_commands],
+                [(cmd.ivars["@code"], cmd.ivars["@indent"]) for cmd in candidate_commands],
+            )
+            self.assertEqual(
+                dialogue["traduction_fr"].split("\\n")[1],
+                candidate_commands[1].ivars["@parameters"][0].text(),
+            )
+            self.assertEqual(
+                choice["traduction_fr"],
+                candidate_commands[2].ivars["@parameters"][0][0].text(),
+            )
+            self.assertEqual(
+                choice["traduction_fr"],
+                candidate_commands[3].ivars["@parameters"][1].text(),
+            )
+            self.assertEqual(
+                dumps(original_commands[2].ivars["@parameters"][0][1]),
+                dumps(candidate_commands[2].ivars["@parameters"][0][1]),
+            )
+            self.assertEqual(
+                dumps(original_commands[5]),
+                dumps(candidate_commands[5]),
+            )
+            reextracted = {
+                row["id_stable"]: row["texte_source"]
+                for row in extract_map(
+                    target / "Data" / "Map001.rxdata",
+                    "Data/Map001.rxdata",
+                    "Synthetic intro",
+                    strict=True,
+                )
+            }
+            self.assertEqual(dialogue["traduction_fr"], reextracted[dialogue["id_stable"]])
+            self.assertEqual(choice["traduction_fr"], reextracted[choice["id_stable"]])
+
+    def test_v21_map_candidate_refuses_ambiguous_402_branch(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_v21_map_ambiguous_") as temporary:
+            base = Path(temporary)
+            root = base / "game"
+            project = base / "project"
+            prepare_v21_game(
+                root,
+                map_validation=True,
+                ambiguous_choice_branch=True,
+            )
+            rows = [
+                dict(row)
+                for row in PokemonEssentialsAdapter().extract_with_provenance(root).rows
+            ]
+            dialogue = next(row for row in rows if row["type"] == "Dialogue")
+            choice = next(row for row in rows if row["type"] == "Choix")
+            self.assertEqual("", choice["rpg_choice_branch_command"])
+            dialogue["traduction_fr"] = dialogue["texte_source"] + " [TEST]"
+            choice["traduction_fr"] = choice["texte_source"] + " [TEST]"
+            for row in (dialogue, choice):
+                row["statut"] = "Accepté"
+            csv_path = project / "textes_structures.csv"
+            write_extracted_project_csv(csv_path, rows)
+            finalize_verified_essentials_project(
+                root,
+                csv_path,
+                adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+                declared_version="21.1",
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "402|Branche"):
+                build_v21_1_map_validation_plan(root, csv_path)
+
+    def test_v21_map_candidate_refuses_ambiguous_internal_line_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_v21_map_lines_") as temporary:
+            base = Path(temporary)
+            root = base / "game"
+            project = base / "project"
+            prepare_v21_game(
+                root,
+                map_validation=True,
+                internal_line_control=True,
+            )
+            rows = [
+                dict(row)
+                for row in PokemonEssentialsAdapter().extract_with_provenance(root).rows
+            ]
+            dialogue = next(row for row in rows if row["type"] == "Dialogue")
+            choice = next(row for row in rows if row["type"] == "Choix")
+            dialogue["traduction_fr"] = dialogue["texte_source"] + " [TEST]"
+            choice["traduction_fr"] = choice["texte_source"] + " [TEST]"
+            for row in (dialogue, choice):
+                row["statut"] = "Accepté"
+            csv_path = project / "textes_structures.csv"
+            write_extracted_project_csv(csv_path, rows)
+            finalize_verified_essentials_project(
+                root,
+                csv_path,
+                adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+                declared_version="21.1",
+            )
+
+            plan = build_v21_1_map_validation_plan(root, csv_path)
+            with self.assertRaisesRegex(ReconstructionError, "bloquée"):
+                simulate_plan(plan)
+            self.assertFalse((base / "candidate").exists())
 
     def test_supported_modern_pbs_field_rewrite_preserves_bom_crlf_comments_and_order(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_v21_pbs_format_") as temporary:

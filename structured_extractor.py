@@ -434,6 +434,44 @@ def map_id_from_path(path: Path) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _choice_branch_metadata(
+    commands: list,
+    command_index: int,
+    choice_index: int,
+    source: str,
+    indent,
+) -> tuple[int | str, int | str]:
+    """Localise l'unique libellé 402 correspondant à un choix 102.
+
+    RPG Maker XP duplique le libellé d'un choix dans la commande de branche
+    402. L'extraction reste possible si une structure personnalisée ne suit
+    pas cette convention, mais la métadonnée demeure vide : une future
+    réinjection stricte pourra alors refuser le cas au lieu de l'inventer.
+    """
+    matches: list[int] = []
+    for branch_index in range(command_index + 1, len(commands)):
+        branch = commands[branch_index]
+        if not isinstance(branch, RubyObject):
+            continue
+        branch_code = branch.ivars.get("@code")
+        branch_indent = branch.ivars.get("@indent")
+        if branch_code == 404 and branch_indent == indent:
+            break
+        if branch_code != 402 or branch_indent != indent:
+            continue
+        parameters = branch.ivars.get("@parameters", [])
+        if (
+            isinstance(parameters, list)
+            and len(parameters) >= 2
+            and parameters[0] == choice_index
+            and text_value(parameters[1]).strip() == source
+        ):
+            matches.append(branch_index)
+    if len(matches) != 1:
+        return "", ""
+    return matches[0], 1
+
+
 def extract_map(
     path: Path,
     relative: str,
@@ -522,6 +560,13 @@ def extract_map(
                         for choice_index, choice in enumerate(choices):
                             choice_text = text_value(choice).strip()
                             if looks_visible(choice_text):
+                                branch_command, branch_parameter = _choice_branch_metadata(
+                                    commands,
+                                    index,
+                                    choice_index,
+                                    choice_text,
+                                    command.ivars.get("@indent", ""),
+                                )
                                 rows.append({
                                     "id_stable": stable_id("map", map_id, event_id, page_index, index, "choice", choice_index),
                                     "type": "Choix",
@@ -537,6 +582,8 @@ def extract_map(
                                     "rpg_command_indent": command.ivars.get("@indent", ""),
                                     "rpg_parameter_index": 0,
                                     "rpg_continuation_end": index,
+                                    "rpg_choice_branch_command": branch_command,
+                                    "rpg_choice_branch_parameter_index": branch_parameter,
                                     "texte_source": choice_text,
                                     "traduction_fr": "",
                                     "codes_proteges": codes(choice_text),
@@ -920,6 +967,8 @@ def _extract_snapshot(
                 "rpg_command_indent",
                 "rpg_parameter_index",
                 "rpg_continuation_end",
+                "rpg_choice_branch_command",
+                "rpg_choice_branch_parameter_index",
                 "pbs_encoding",
                 "pbs_bom",
                 "pbs_newline",
@@ -991,7 +1040,8 @@ FIELDNAMES = [
     "id_stable", "type", "fichier", "carte_id", "carte_nom",
     "evenement_id", "evenement_nom", "page", "commande", "sous_index",
     "rpg_command_code", "rpg_command_indent", "rpg_parameter_index",
-    "rpg_continuation_end",
+    "rpg_continuation_end", "rpg_choice_branch_command",
+    "rpg_choice_branch_parameter_index",
     "texte_source", "traduction_fr", "codes_proteges", "statut",
     "pbs_encoding", "pbs_bom", "pbs_newline", "pbs_field_index",
     "pbs_value_sha256", "adaptateur", "source_sha256",
