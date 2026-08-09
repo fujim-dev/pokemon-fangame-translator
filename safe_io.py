@@ -34,6 +34,11 @@ def _is_link_or_junction(path: Path) -> bool:
         return False
 
 
+def is_link_or_junction(path: Path) -> bool:
+    """Expose le contrôle commun sans résoudre ni suivre le chemin demandé."""
+    return _is_link_or_junction(path)
+
+
 def _prepare_destination(path: Path) -> Path:
     destination = path.expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)

@@ -552,6 +552,28 @@ class TranslationProjectLifecycleTests(unittest.TestCase):
             self.assertFalse((csv_path.parent / TRANSLATION_STATE_NAME).exists())
             self.assertFalse((csv_path.parent / "Rapports").exists())
 
+    def test_transactional_restore_refuses_backup_outside_project(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_restore_outside_project_") as temporary:
+            base = Path(temporary)
+            game_root, csv_path, initial = prepare_verified_project(base)
+            outside = base / "outside"
+            outside.mkdir()
+            external_backup = outside / "avant_reparation_externe.csv"
+            external_backup.write_bytes(initial)
+            (csv_path.parent / "Sauvegardes").mkdir()
+
+            with TranslationProjectSession(
+                csv_path,
+                game_root=game_root,
+                expected_adapter_id="pokemon_essentials",
+            ) as session:
+                with self.assertRaisesRegex(RepairError, "n'appartient pas au projet"):
+                    restore_csv_backup_transactional(session, external_backup)
+                session.check_current()
+
+            self.assertEqual(initial, csv_path.read_bytes())
+            self.assertFalse((csv_path.parent / TRANSLATION_STATE_NAME).exists())
+
     def test_restore_refuses_redirected_backup_directory(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_restore_redirected_") as temporary:
             base = Path(temporary)

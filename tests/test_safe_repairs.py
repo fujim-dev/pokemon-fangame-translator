@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,7 +16,7 @@ from repair import (
     restore_csv_backup,
     save_repair_plan,
 )
-from repair.rollback import atomic_write_bytes
+from repair.rollback import atomic_write_bytes, validate_backup_location
 
 
 FIELDS = [
@@ -70,6 +71,24 @@ def sha256(path: Path) -> str:
 
 
 class SafeRepairTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Alias 8.3 spécifique à Windows")
+    def test_windows_short_and_long_aliases_are_the_same_authorized_directory(self) -> None:
+        short_root = Path(r"C:\PROGRA~1")
+        if not short_root.is_dir():
+            self.skipTest("Les noms courts Windows sont désactivés sur ce volume.")
+        long_root = short_root.resolve(strict=True)
+        self.assertNotEqual(os.path.normcase(str(short_root)), os.path.normcase(str(long_root)))
+
+        requested, allowed = validate_backup_location(
+            long_root / "synthetic-backup.csv",
+            short_root,
+            outside_message="outside",
+            redirected_message="redirected",
+        )
+
+        self.assertEqual(long_root, requested.parent.resolve(strict=True))
+        self.assertEqual(long_root, allowed.resolve(strict=True))
+
     def test_plan_separates_safe_and_ambiguous_repairs_without_dialogues(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_repair_plan_") as temp_dir:
             base = Path(temp_dir)
@@ -223,6 +242,29 @@ class SafeRepairTests(unittest.TestCase):
 
         self.assertEqual(original, restored)
         self.assertEqual(repaired, safety_backup)
+
+    def test_restore_refuses_backup_outside_authorized_directory(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_restore_outside_") as temp_dir:
+            base = Path(temp_dir)
+            csv_path = base / "project.csv"
+            write_fixture(csv_path)
+            original = csv_path.read_bytes()
+            authorized = base / "backups"
+            authorized.mkdir()
+            outside = base / "outside"
+            outside.mkdir()
+            external_backup = outside / "avant_reparation_externe.csv"
+            external_backup.write_bytes(original)
+
+            with self.assertRaisesRegex(RepairError, "n'appartient"):
+                restore_csv_backup(
+                    csv_path,
+                    external_backup,
+                    backup_dir=authorized,
+                    report_dir=base / "reports",
+                )
+
+            self.assertEqual(original, csv_path.read_bytes())
 
     def test_journal_failure_also_rolls_back(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_repair_journal_") as temp_dir:

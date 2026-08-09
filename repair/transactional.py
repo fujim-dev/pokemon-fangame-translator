@@ -17,7 +17,7 @@ from translation_project import (
 from .engine import build_repair_candidate
 from .models import RepairError, RepairPlan, RepairResult, RestorationResult
 from .planner import assert_saved_plan, sha256_bytes
-from .rollback import timestamp_token
+from .rollback import timestamp_token, validate_backup_location
 
 
 def _same_path(left: Path, right: Path) -> bool:
@@ -138,10 +138,12 @@ def restore_csv_backup_transactional(
 ) -> RestorationResult:
     """Restaure un point du même projet sans désynchroniser sa provenance."""
     snapshot = _session_snapshot(session)
-    allowed_root = session.project_dir / "Sauvegardes"
-    requested = Path(os.path.abspath(str(backup_path.expanduser())))
-    if os.path.normcase(str(requested.parent)) != os.path.normcase(str(allowed_root)):
-        raise RepairError("La sauvegarde choisie n'appartient pas au projet courant.")
+    requested, allowed_root = validate_backup_location(
+        backup_path,
+        session.project_dir / "Sauvegardes",
+        outside_message="La sauvegarde choisie n'appartient pas au projet courant.",
+        redirected_message="La sauvegarde choisie est absente, redirigée ou instable.",
+    )
     if not requested.name.startswith("avant_"):
         raise RepairError("La sauvegarde choisie n'est pas un point de restauration reconnu.")
     try:

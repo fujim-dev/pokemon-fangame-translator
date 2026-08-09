@@ -11,7 +11,7 @@ from pathlib import Path
 from .models import RepairError, RestorationResult
 from .planner import REQUIRED_FIELDS, sha256_bytes, sha256_file
 from .project_guard import assert_legacy_direct_write_allowed
-from safe_io import atomic_write_bytes, read_stable_file
+from safe_io import atomic_write_bytes, is_link_or_junction, read_stable_file
 
 
 def timestamp_token() -> str:
@@ -72,6 +72,41 @@ def _validate_csv_structure(path: Path) -> None:
         raise RepairError("La sauvegarde choisie est illisible.") from exc
 
 
+def validate_backup_location(
+    backup_path: Path,
+    allowed_root: Path,
+    *,
+    outside_message: str,
+    redirected_message: str,
+) -> tuple[Path, Path]:
+    """Valide l'appartenance malgré les alias Windows, sans suivre une redirection.
+
+    ``abspath`` conserve notamment les formes 8.3 comme ``RUNNER~1`` alors que
+    ``Path.resolve`` les développe. Les chemins demandés sont d'abord contrôlés
+    tels quels pour refuser liens, jonctions et reparse points, puis leurs
+    dossiers réels sont comparés afin que deux alias du même dossier soient
+    reconnus comme identiques.
+    """
+    requested = Path(os.path.abspath(str(backup_path.expanduser())))
+    allowed = Path(os.path.abspath(str(allowed_root.expanduser())))
+    if (
+        is_link_or_junction(allowed)
+        or is_link_or_junction(requested.parent)
+        or is_link_or_junction(requested)
+    ):
+        raise RepairError(redirected_message)
+    try:
+        canonical_allowed = allowed.resolve(strict=True)
+        canonical_parent = requested.parent.resolve(strict=True)
+    except OSError as exc:
+        raise RepairError(redirected_message) from exc
+    if os.path.normcase(str(canonical_parent)) != os.path.normcase(
+        str(canonical_allowed)
+    ):
+        raise RepairError(outside_message)
+    return requested, allowed
+
+
 def restore_csv_backup(
     csv_path: Path,
     backup_path: Path,
@@ -81,12 +116,12 @@ def restore_csv_backup(
 ) -> RestorationResult:
     csv_resolved = csv_path.expanduser().resolve()
     assert_legacy_direct_write_allowed(csv_resolved)
-    backup_resolved = Path(os.path.abspath(str(backup_path.expanduser())))
-    allowed_root = Path(os.path.abspath(str(backup_dir.expanduser())))
-    if os.path.normcase(str(backup_resolved.parent)) != os.path.normcase(
-        str(allowed_root)
-    ):
-        raise RepairError("La sauvegarde choisie n'appartient pas au dossier autorisé.")
+    backup_resolved, allowed_root = validate_backup_location(
+        backup_path,
+        backup_dir,
+        outside_message="La sauvegarde choisie n'appartient pas au dossier autorisé.",
+        redirected_message="La sauvegarde choisie est instable ou redirigée.",
+    )
     if not backup_resolved.is_file() or csv_resolved == backup_resolved:
         raise RepairError("La sauvegarde choisie est introuvable ou invalide.")
     _validate_csv_structure(backup_resolved)
