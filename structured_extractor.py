@@ -11,6 +11,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from safe_io import atomic_copy_file
 
@@ -504,6 +505,10 @@ def extract_map(
             commands = page.ivars.get("@list", [])
             if not isinstance(commands, list):
                 continue
+            dialogue_segments = {
+                segment.start_index: segment
+                for segment in validate_dialogue_command_stream(commands)
+            }
             index = 0
             while index < len(commands):
                 command = commands[index]
@@ -514,22 +519,9 @@ def extract_map(
                 params = command.ivars.get("@parameters", [])
 
                 if code == 101:
-                    pieces: list[str] = []
-                    if isinstance(params, list) and params:
-                        first = text_value(params[0])
-                        if first:
-                            pieces.append(first)
-                    end_index = index
-                    while end_index + 1 < len(commands):
-                        next_cmd = commands[end_index + 1]
-                        if not isinstance(next_cmd, RubyObject) or next_cmd.ivars.get("@code") != 401:
-                            break
-                        next_params = next_cmd.ivars.get("@parameters", [])
-                        if isinstance(next_params, list) and next_params:
-                            continuation = text_value(next_params[0])
-                            pieces.append(continuation)
-                        end_index += 1
-                    message = "\\n".join(pieces).strip()
+                    segmentation = dialogue_segments[index]
+                    end_index = segmentation.end_index
+                    message = segmentation.source_text.strip()
                     if looks_visible(message):
                         rows.append({
                             "id_stable": stable_id("map", map_id, event_id, page_index, index, "message"),
@@ -546,6 +538,7 @@ def extract_map(
                             "rpg_command_indent": command.ivars.get("@indent", ""),
                             "rpg_parameter_index": 0,
                             "rpg_continuation_end": end_index,
+                            "rpg_dialogue_segments": segmentation.metadata,
                             "texte_source": message,
                             "traduction_fr": "",
                             "codes_proteges": codes(message),
@@ -625,6 +618,10 @@ def extract_common_events(
                     f"Liste de commandes CommonEvents invalide à l'index {array_index}"
                 )
             continue
+        dialogue_segments = {
+            segment.start_index: segment
+            for segment in validate_dialogue_command_stream(commands)
+        }
         index = 0
         while index < len(commands):
             command = commands[index]
@@ -634,24 +631,9 @@ def extract_common_events(
             code = command.ivars.get("@code")
             params = command.ivars.get("@parameters", [])
             if code == 101:
-                pieces: list[str] = []
-                if isinstance(params, list) and params:
-                    first = text_value(params[0])
-                    if first:
-                        pieces.append(first)
-                end_index = index
-                while end_index + 1 < len(commands):
-                    continuation = commands[end_index + 1]
-                    if (
-                        not isinstance(continuation, RubyObject)
-                        or continuation.ivars.get("@code") != 401
-                    ):
-                        break
-                    continuation_params = continuation.ivars.get("@parameters", [])
-                    if isinstance(continuation_params, list) and continuation_params:
-                        pieces.append(text_value(continuation_params[0]))
-                    end_index += 1
-                message = "\\n".join(pieces).strip()
+                segmentation = dialogue_segments[index]
+                end_index = segmentation.end_index
+                message = segmentation.source_text.strip()
                 if looks_visible(message):
                     rows.append({
                         "id_stable": stable_id(
@@ -670,6 +652,7 @@ def extract_common_events(
                         "rpg_command_indent": command.ivars.get("@indent", ""),
                         "rpg_parameter_index": 0,
                         "rpg_continuation_end": end_index,
+                        "rpg_dialogue_segments": segmentation.metadata,
                         "texte_source": message,
                         "traduction_fr": "",
                         "codes_proteges": codes(message),
@@ -967,6 +950,7 @@ def _extract_snapshot(
                 "rpg_command_indent",
                 "rpg_parameter_index",
                 "rpg_continuation_end",
+                "rpg_dialogue_segments",
                 "rpg_choice_branch_command",
                 "rpg_choice_branch_parameter_index",
                 "pbs_encoding",
@@ -1040,7 +1024,7 @@ FIELDNAMES = [
     "id_stable", "type", "fichier", "carte_id", "carte_nom",
     "evenement_id", "evenement_nom", "page", "commande", "sous_index",
     "rpg_command_code", "rpg_command_indent", "rpg_parameter_index",
-    "rpg_continuation_end", "rpg_choice_branch_command",
+    "rpg_continuation_end", "rpg_dialogue_segments", "rpg_choice_branch_command",
     "rpg_choice_branch_parameter_index",
     "texte_source", "traduction_fr", "codes_proteges", "statut",
     "pbs_encoding", "pbs_bom", "pbs_newline", "pbs_field_index",

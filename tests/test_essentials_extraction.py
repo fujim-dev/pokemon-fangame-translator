@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,7 +21,7 @@ def ruby_text(value: str) -> RubyString:
 def command(code: int, parameters: list) -> RubyObject:
     return RubyObject(
         "RPG::EventCommand",
-        {"@code": code, "@parameters": parameters},
+        {"@code": code, "@indent": 0, "@parameters": parameters},
     )
 
 
@@ -112,6 +113,87 @@ class EssentialsExtractionIntegrityTests(unittest.TestCase):
             )
             self.assertEqual(r"Hello \PN\nSecond line", dialogue["texte_source"])
             self.assertEqual(r"\PN | \n", dialogue["codes_proteges"])
+
+    def test_common_event_dialogue_records_internal_controls_and_multiple_continuations(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_common_segments_") as temp_dir:
+            root = Path(temp_dir) / "game"
+            prepare_essentials_game(root)
+            common_event = RubyObject(
+                "RPG::CommonEvent",
+                {
+                    "@id": 9,
+                    "@name": ruby_text("Synthetic segmented common event"),
+                    "@list": [
+                        command(108, [ruby_text("Neighbor before")]),
+                        command(101, [ruby_text(r"First \n internal")]),
+                        command(401, [ruby_text("Second segment")]),
+                        command(401, [ruby_text(r"Third \n internal")]),
+                        command(102, [[ruby_text("Neighbor choice")]]),
+                    ],
+                },
+            )
+            (root / "Data" / "CommonEvents.rxdata").write_bytes(
+                dumps([None, common_event])
+            )
+
+            result = PokemonEssentialsAdapter().extract_with_provenance(root)
+            row = next(
+                row
+                for row in result.rows
+                if row["type"] == "Événement commun — Dialogue"
+            )
+            metadata = json.loads(row["rpg_dialogue_segments"])
+
+            self.assertEqual(1, row["commande"])
+            self.assertEqual(3, row["rpg_continuation_end"])
+            self.assertEqual([1, 2, 3], [
+                segment["command_index"] for segment in metadata["segments"]
+            ])
+            self.assertEqual([101, 401, 401], [
+                segment["command_code"] for segment in metadata["segments"]
+            ])
+            self.assertEqual([1, 0, 1], [
+                segment["internal_line_control_count"]
+                for segment in metadata["segments"]
+            ])
+            choice = next(
+                row
+                for row in result.rows
+                if row["type"] == "Événement commun — Choix"
+            )
+            self.assertEqual(4, choice["commande"])
+
+    def test_strict_extraction_refuses_orphan_or_misindented_continuations(self) -> None:
+        invalid_commands = (
+            [command(401, [ruby_text("Orphan")])],
+            [
+                command(101, [ruby_text("First")]),
+                RubyObject(
+                    "RPG::EventCommand",
+                    {"@code": 401, "@indent": 1, "@parameters": [ruby_text("Second")]},
+                ),
+            ],
+        )
+        for commands in invalid_commands:
+            with self.subTest(commands=commands), tempfile.TemporaryDirectory(
+                prefix="pft_test_invalid_dialogue_stream_"
+            ) as temp_dir:
+                root = Path(temp_dir) / "game"
+                prepare_essentials_game(root)
+                page = RubyObject("RPG::Event::Page", {"@list": commands})
+                event = RubyObject(
+                    "RPG::Event",
+                    {"@name": ruby_text("Invalid synthetic event"), "@pages": [page]},
+                )
+                (root / "Data" / "Map001.rxdata").write_bytes(
+                    dumps(RubyObject("RPG::Map", {"@events": {1: event}}))
+                )
+
+                with self.assertRaisesRegex(
+                    ExtractionIntegrityError,
+                    "Map001.rxdata",
+                ):
+                    PokemonEssentialsAdapter().extract_with_provenance(root)
 
     def test_verified_extraction_is_deterministic_and_keeps_original_unchanged(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_essentials_extract_") as temp_dir:

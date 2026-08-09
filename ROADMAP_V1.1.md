@@ -98,9 +98,12 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   occurrences et comparés intégralement. Une vérification humaine en jeu a
   confirmé l'affichage du dialogue, l'affichage du choix et le fonctionnement
   normal du menu ; `RECONSTRUCT` demeure absent.
-- les dialogues dont un contrôle `\n` interne empêche de prouver les limites
-  exactes entre commandes 101/401 restent refusés par la porte privée, en
-  attendant une métadonnée de segmentation non ambiguë.
+- une métadonnée de segmentation immuable distingue désormais les frontières
+  101/401 des contrôles `\n` internes. Les tests synthétiques couvrent plusieurs
+  continuations, commandes voisines, métadonnées altérées et structures invalides ;
+- l'extraction des événements communs réutilise cette preuve, mais leur
+  reconstruction reste entièrement bloquée. Aucun parcours réel supplémentaire
+  ni aucune capacité publique n'a été ajouté dans ce lot.
 
 ## Phase 2 — Interface pilotée par capacités
 

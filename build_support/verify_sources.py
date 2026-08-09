@@ -9,6 +9,7 @@ python_files = [
     "reconstruction_studio.py",
     "reconstruction_engine.py",
     "structured_extractor.py",
+    "rpg_dialogue.py",
     "ruby_marshal_reader.py",
     "ruby_marshal_writer.py",
     "flux_archive.py",

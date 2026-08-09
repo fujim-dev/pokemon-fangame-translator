@@ -26,6 +26,7 @@ Pokemon_Fangame_Translator.py
 ├── flux_import_validator.py
 ├── flux_reinjection.py
 ├── project_identity.py
+├── rpg_dialogue.py
 ├── safe_io.py
 ├── translation_project.py
 ├── structured_extractor.py
@@ -86,6 +87,12 @@ Responsabilités :
 - extraction de certaines clés PBS ;
 - création d'identifiants stables ;
 - production des lignes CSV.
+
+La segmentation des dialogues est déléguée à `rpg_dialogue.py`. Chaque séquence
+contiguë 101/401 produit une métadonnée immuable sans texte : index, code,
+indentation, nombre et empreinte des paramètres, empreinte de la commande et
+nombre de contrôles `\n` internes. Cette preuve distingue les contrôles contenus
+dans un paramètre des séparateurs historiques du CSV sans exécuter Ruby.
 
 Dépendance principale :
 
@@ -347,7 +354,14 @@ Déjà en place :
 - une validation visuelle humaine dans le moteur v21.1 a confirmé que le choix
   102/402 reconstruit s'affiche et que le menu reste fonctionnel, ainsi que
   l'affichage du dialogue 101/401 reconstruit. Cette preuve reste strictement
-  bornée à ces occurrences et n'accorde toujours pas `RECONSTRUCT` au profil.
+  bornée à ces occurrences et n'accorde toujours pas `RECONSTRUCT` au profil ;
+- la segmentation 101/401 est désormais explicite et déterministe. Un round-trip
+  synthétique couvre plusieurs continuations, des contrôles `\n` internes et des
+  commandes voisines sans les modifier. Une continuation orpheline, mal indentée,
+  sans paramètre standard, ou une preuve absente/altérée bloque l'opération ;
+- les événements communs utilisent le même segmentateur pendant l'extraction et
+  exposent la même preuve immuable. Ils restent hors de toutes les portées privées
+  de reconstruction v21.1.
 
 Encore partiel ou pas encore en place :
 
@@ -362,10 +376,10 @@ Encore partiel ou pas encore en place :
 - limite de temps des analyses statiques approfondies autres que les sondes :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
 - validation de réinjection v21.1 pour les événements communs, sous-champs
-  `Point`, PBS modernes, dialogues dont les contrôles `\n` internes rendent les
-  limites 101/401 ambiguës, et un corpus encore plus large de cartes/banques. La
-  capacité publique `RECONSTRUCT` reste absente malgré les candidats bornés
-  concluants.
+  `Point`, PBS modernes et un corpus réel encore plus large de cartes/banques.
+  Les dialogues avec contrôles `\n` internes disposent d'une preuve synthétique,
+  mais pas encore d'un corpus réel représentatif. La capacité publique
+  `RECONSTRUCT` reste absente malgré les candidats bornés concluants.
 
 ## 4. Problèmes à éviter dans la v1.1
 
@@ -435,10 +449,11 @@ traduction, d'écriture dans le jeu et de reconstruction validée. Pour v21.1,
 `RECONSTRUCT` reste absent malgré un premier aller-retour réel concluant limité à
 une banque de messages. Des preuves internes supplémentaires couvrent désormais
 les trois formes de banques observées et une page de carte bornée à un dialogue
-101/401 et un choix 102/402. Elles ne couvrent ni les événements communs, ni les
-sous-champs `Point`, ni l'ensemble des PBS modernes, ni les limites de dialogue
-ambiguës ; un corpus représentatif plus large reste nécessaire avant toute
-autorisation générale.
+101/401 et un choix 102/402. Une preuve de segmentation permet aussi de traiter
+synthétiquement les contrôles `\n` internes sans confondre une commande avec une
+frontière 101/401. Elles ne couvrent ni la réinjection des événements communs, ni
+les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
+représentatif plus large reste nécessaire avant toute autorisation générale.
 
 #### `pokemon_flux.py`
 

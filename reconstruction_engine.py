@@ -33,6 +33,11 @@ from analysis.integrity import (
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
+from rpg_dialogue import (
+    DialogueSegmentationError,
+    segment_dialogue_commands,
+    split_dialogue_translation,
+)
 from structured_extractor import (
     ExtractionIntegrityError,
     build_extraction_inventory,
@@ -104,6 +109,7 @@ class PlanItem:
     rpg_command_indent: str = ""
     rpg_parameter_index: str = ""
     rpg_continuation_end: str = ""
+    rpg_dialogue_segments: str = ""
     rpg_choice_branch_command: str = ""
     rpg_choice_branch_parameter_index: str = ""
     decision: str = "pending"  # applicable, skipped, blocked
@@ -587,6 +593,7 @@ def _validate_v21_1_map_scope(
     if (
         _integer(dialogue.rpg_command_code, "Code RPG du dialogue") != 101
         or _integer(dialogue.rpg_parameter_index, "Paramètre RPG du dialogue") != 0
+        or not dialogue.rpg_dialogue_segments
         or _integer(dialogue.rpg_continuation_end, "Fin du dialogue")
         < _integer(dialogue.command, "Commande du dialogue")
     ):
@@ -815,6 +822,7 @@ def _build_plan_verified_body(
             rpg_command_indent=row.get("rpg_command_indent", ""),
             rpg_parameter_index=row.get("rpg_parameter_index", ""),
             rpg_continuation_end=row.get("rpg_continuation_end", ""),
+            rpg_dialogue_segments=row.get("rpg_dialogue_segments", ""),
             rpg_choice_branch_command=row.get("rpg_choice_branch_command", ""),
             rpg_choice_branch_parameter_index=row.get(
                 "rpg_choice_branch_parameter_index", ""
@@ -1097,48 +1105,38 @@ def _apply_map_item(root: RubyObject, item: PlanItem) -> None:
 def _strict_v21_dialogue_commands(
     root: RubyObject,
     item: PlanItem,
-) -> list[RubyObject]:
+) -> tuple[list[RubyObject], list[str]]:
     commands, index = _locate_map_message(root, item)
-    command = commands[index]
-    expected_indent = _integer(item.rpg_command_indent, "Indentation RPG")
-    if (
-        not isinstance(command, RubyObject)
-        or command.class_name != "RPG::EventCommand"
-        or command.ivars.get("@code") != 101
-        or command.ivars.get("@indent") != expected_indent
-        or _integer(item.rpg_command_code, "Code RPG") != 101
-        or _integer(item.rpg_parameter_index, "Paramètre RPG") != 0
-    ):
-        raise ReconstructionError("Structure 101 du dialogue v21.1 incohérente")
-    actual_commands = [command]
-    cursor = index + 1
-    while cursor < len(commands):
-        continuation = commands[cursor]
-        if (
-            not isinstance(continuation, RubyObject)
-            or continuation.class_name != "RPG::EventCommand"
-            or continuation.ivars.get("@code") != 401
-        ):
-            break
-        if continuation.ivars.get("@indent") != expected_indent:
-            raise ReconstructionError("Indentation 401 du dialogue v21.1 incohérente")
-        actual_commands.append(continuation)
-        cursor += 1
-    if _integer(item.rpg_continuation_end, "Fin 401") != cursor - 1:
-        raise ReconstructionError("Limites 101/401 du dialogue v21.1 incohérentes")
-    pieces: list[str] = []
-    for event_command in actual_commands:
-        parameters = event_command.ivars.get("@parameters", [])
-        if not isinstance(parameters, list) or not parameters:
-            raise ReconstructionError("Paramètre 101/401 du dialogue v21.1 invalide")
-        pieces.append(text_value(parameters[0]))
-    if "\\n".join(pieces).strip() != item.source.strip():
-        raise ReconstructionError("Le dialogue v21.1 original ne correspond plus au projet")
-    if len(item.translation.split("\\n")) != len(actual_commands):
+    try:
+        segmentation = segment_dialogue_commands(commands, index)
+    except DialogueSegmentationError as exc:
         raise ReconstructionError(
-            "Le dialogue v21.1 ne conserve pas le nombre exact de commandes 101/401"
+            f"Segmentation 101/401 du dialogue v21.1 invalide : {exc}"
+        ) from exc
+    if (
+        _integer(item.rpg_command_code, "Code RPG") != 101
+        or _integer(item.rpg_parameter_index, "Paramètre RPG") != 0
+        or _integer(item.rpg_command_indent, "Indentation RPG")
+        != segmentation.indent
+        or _integer(item.rpg_continuation_end, "Fin 401")
+        != segmentation.end_index
+        or item.rpg_dialogue_segments != segmentation.metadata
+    ):
+        raise ReconstructionError(
+            "Preuve de segmentation 101/401 du dialogue v21.1 absente ou incohérente"
         )
-    return actual_commands
+    if segmentation.source_text.strip() != item.source.strip():
+        raise ReconstructionError("Le dialogue v21.1 original ne correspond plus au projet")
+    try:
+        translated_pieces = split_dialogue_translation(segmentation, item.translation)
+    except DialogueSegmentationError as exc:
+        raise ReconstructionError(
+            f"Segmentation de la traduction v21.1 bloquée : {exc}"
+        ) from exc
+    actual_commands = [
+        commands[segment.command_index] for segment in segmentation.segments
+    ]
+    return actual_commands, translated_pieces
 
 
 def _strict_v21_choice_commands(
@@ -1226,14 +1224,17 @@ def _apply_v21_1_map_items(root: RubyObject, items: list[PlanItem]) -> None:
     if dialogue is None or choice is None or len(items) != 2:
         raise ReconstructionError("Corpus de carte v21.1 incomplet")
 
-    dialogue_commands = _strict_v21_dialogue_commands(root, dialogue)
+    dialogue_commands, translated_pieces = _strict_v21_dialogue_commands(
+        root,
+        dialogue,
+    )
     choice_command, branch_command, choice_index = _strict_v21_choice_commands(
         root,
         choice,
     )
     for event_command, translated_piece in zip(
         dialogue_commands,
-        dialogue.translation.split("\\n"),
+        translated_pieces,
     ):
         parameters = event_command.ivars["@parameters"]
         parameters[0] = _ruby_string_set(parameters[0], translated_piece)

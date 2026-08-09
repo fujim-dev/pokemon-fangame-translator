@@ -162,6 +162,19 @@ dans le jeu ; le menu de choix est resté fonctionnel. Ce contrôle humain, sans
 fichier ni contenu du jeu conservé dans le dépôt, ne généralise pas la portée du
 réinjecteur et n'active pas `RECONSTRUCT`.
 
+### AC-117 — Segmentation déterministe des dialogues 101/401
+
+Chaque dialogue extrait possède une preuve immuable, dépourvue de texte, qui
+décrit exactement ses commandes 101/401 : index, codes, indentation, paramètres,
+empreintes et nombre de contrôles `\n` internes par segment. La réinjection privée
+retrouve les frontières par l'ordre des contrôles protégés et ne modifie que le
+paramètre textuel prévu. Les commandes voisines, autres paramètres, métadonnées,
+indentations et ordre restent identiques. Une continuation 401 orpheline ou mal
+indentée, un paramètre invalide, un nombre de contrôles différent, ou une preuve
+absente/altérée bloque le cas. La même segmentation alimente l'extraction des
+événements communs, sans autoriser leur reconstruction ni accorder `RECONSTRUCT`
+au profil v21.1.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

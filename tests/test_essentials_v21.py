@@ -460,6 +460,7 @@ class EssentialsV21ProfileTests(unittest.TestCase):
             )
 
         dialogue = next(row for row in rows if row["type"] == "Dialogue")
+        dialogue_segments = json.loads(dialogue["rpg_dialogue_segments"])
         first_choice = next(
             row
             for row in rows
@@ -471,6 +472,13 @@ class EssentialsV21ProfileTests(unittest.TestCase):
             if row["type"] == "Choix" and row["sous_index"] == 1
         )
         self.assertEqual(1, dialogue["rpg_continuation_end"])
+        self.assertEqual("pft_rpg_dialogue_segments_v1", dialogue_segments["format"])
+        self.assertEqual([101, 401], [
+            segment["command_code"] for segment in dialogue_segments["segments"]
+        ])
+        self.assertTrue(all(
+            segment["command_sha256"] for segment in dialogue_segments["segments"]
+        ))
         self.assertEqual((3, 1), (
             first_choice["rpg_choice_branch_command"],
             first_choice["rpg_choice_branch_parameter_index"],
@@ -672,23 +680,28 @@ class EssentialsV21ProfileTests(unittest.TestCase):
             with self.assertRaisesRegex(ReconstructionError, "402|Branche"):
                 build_v21_1_map_validation_plan(root, csv_path)
 
-    def test_v21_map_candidate_refuses_ambiguous_internal_line_boundaries(self) -> None:
+    def test_v21_map_candidate_reconstructs_explicit_internal_line_boundaries(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_v21_map_lines_") as temporary:
             base = Path(temporary)
             root = base / "game"
             project = base / "project"
+            target = base / "candidate"
             prepare_v21_game(
                 root,
                 map_validation=True,
                 internal_line_control=True,
             )
+            source_before = snapshot_tree(root)
             rows = [
                 dict(row)
                 for row in PokemonEssentialsAdapter().extract_with_provenance(root).rows
             ]
             dialogue = next(row for row in rows if row["type"] == "Dialogue")
             choice = next(row for row in rows if row["type"] == "Choix")
-            dialogue["traduction_fr"] = dialogue["texte_source"] + " [TEST]"
+            dialogue["traduction_fr"] = (
+                r"Translated \n internal control"
+                r"\nTranslated continuation [TEST]"
+            )
             choice["traduction_fr"] = choice["texte_source"] + " [TEST]"
             for row in (dialogue, choice):
                 row["statut"] = "Accepté"
@@ -702,9 +715,104 @@ class EssentialsV21ProfileTests(unittest.TestCase):
             )
 
             plan = build_v21_1_map_validation_plan(root, csv_path)
-            with self.assertRaisesRegex(ReconstructionError, "bloquée"):
-                simulate_plan(plan)
-            self.assertFalse((base / "candidate").exists())
+            simulate_plan(plan)
+            result = reconstruct_copy(plan, target, base / "reports")
+
+            self.assertEqual(["Data/Map001.rxdata"], result.modified_files)
+            self.assertTrue(result.original_unchanged)
+            self.assertTrue(result.integrity_valid)
+            self.assertTrue(compare_snapshots(source_before, snapshot_tree(root)).passed)
+            original_map = load(root / "Data" / "Map001.rxdata")
+            candidate_map = load(target / "Data" / "Map001.rxdata")
+            original_commands = original_map.ivars["@events"][1].ivars["@pages"][0].ivars["@list"]
+            commands = candidate_map.ivars["@events"][1].ivars["@pages"][0].ivars["@list"]
+            for command_index in (0, 1):
+                original_command = original_commands[command_index]
+                candidate_command = commands[command_index]
+                self.assertEqual(
+                    set(original_command.ivars),
+                    set(candidate_command.ivars),
+                )
+                for field in original_command.ivars:
+                    if field != "@parameters":
+                        self.assertEqual(
+                            dumps(original_command.ivars[field]),
+                            dumps(candidate_command.ivars[field]),
+                        )
+                original_parameters = original_command.ivars["@parameters"]
+                candidate_parameters = candidate_command.ivars["@parameters"]
+                self.assertEqual(len(original_parameters), len(candidate_parameters))
+                self.assertEqual(
+                    dumps(original_parameters[1:]),
+                    dumps(candidate_parameters[1:]),
+                )
+                self.assertEqual(
+                    original_parameters[0].ivars,
+                    candidate_parameters[0].ivars,
+                )
+            self.assertEqual(
+                r"Translated \n internal control",
+                commands[0].ivars["@parameters"][0].text(),
+            )
+            self.assertEqual(
+                "Translated continuation [TEST]",
+                commands[1].ivars["@parameters"][0].text(),
+            )
+            reextracted = {
+                row["id_stable"]: row["texte_source"]
+                for row in extract_map(
+                    target / "Data" / "Map001.rxdata",
+                    "Data/Map001.rxdata",
+                    "Synthetic intro",
+                    strict=True,
+                )
+            }
+            self.assertEqual(dialogue["traduction_fr"], reextracted[dialogue["id_stable"]])
+
+    def test_v21_map_candidate_refuses_missing_or_tampered_segmentation_proof(self) -> None:
+        for metadata in ("", "{}"):
+            with self.subTest(metadata=metadata), tempfile.TemporaryDirectory(
+                prefix="pft_test_v21_map_segment_proof_"
+            ) as temporary:
+                base = Path(temporary)
+                root = base / "game"
+                project = base / "project"
+                prepare_v21_game(
+                    root,
+                    map_validation=True,
+                    internal_line_control=True,
+                )
+                rows = [
+                    dict(row)
+                    for row in PokemonEssentialsAdapter().extract_with_provenance(root).rows
+                ]
+                dialogue = next(row for row in rows if row["type"] == "Dialogue")
+                choice = next(row for row in rows if row["type"] == "Choix")
+                dialogue["rpg_dialogue_segments"] = metadata
+                dialogue["traduction_fr"] = dialogue["texte_source"] + " [TEST]"
+                choice["traduction_fr"] = choice["texte_source"] + " [TEST]"
+                for row in (dialogue, choice):
+                    row["statut"] = "Accepté"
+                csv_path = project / "textes_structures.csv"
+                write_extracted_project_csv(csv_path, rows)
+                finalize_verified_essentials_project(
+                    root,
+                    csv_path,
+                    adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+                    declared_version="21.1",
+                )
+
+                if not metadata:
+                    with self.assertRaisesRegex(ReconstructionError, "101/401"):
+                        build_v21_1_map_validation_plan(root, csv_path)
+                else:
+                    plan = build_v21_1_map_validation_plan(root, csv_path)
+                    with self.assertRaisesRegex(ReconstructionError, "occurrence bloquée"):
+                        simulate_plan(plan)
+                    dialogue_item = next(
+                        item for item in plan.items if item.type == "Dialogue"
+                    )
+                    self.assertIn("segmentation", dialogue_item.reason.casefold())
 
     def test_supported_modern_pbs_field_rewrite_preserves_bom_crlf_comments_and_order(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_v21_pbs_format_") as temporary:
