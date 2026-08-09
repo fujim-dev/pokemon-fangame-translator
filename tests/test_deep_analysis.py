@@ -133,6 +133,12 @@ class DeepAnalysisTests(unittest.TestCase):
             self.assertEqual(1, report.dynamic_script_commands)
             self.assertEqual(1, report.ruby_script_files)
             self.assertEqual(1, report.missing_static_references)
+            self.assertEqual(5, report.extractable_text_occurrences)
+            self.assertEqual(5, report.extractable_unique_texts)
+            self.assertEqual(
+                {"common_events": 1, "maps": 2, "pbs": 2},
+                report.extractable_by_source,
+            )
             self.assertGreaterEqual(
                 report.coverage.line_counts["francais_probable"],
                 2,

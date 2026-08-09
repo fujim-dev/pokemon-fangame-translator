@@ -38,4 +38,7 @@ class UnknownAdapter:
             ),
             adapter_recognized=False,
             write_actions_allowed=False,
+            engine_family="unknown",
+            structural_profile="unknown",
+            analysis_compatible=True,
         )

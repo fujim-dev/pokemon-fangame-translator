@@ -54,6 +54,18 @@ IMMUTABLE_ROW_FIELDS = (
     "adaptateur",
     "source_sha256",
     "source_manifest_sha256",
+    "rpg_command_code",
+    "rpg_command_indent",
+    "rpg_parameter_index",
+    "rpg_continuation_end",
+    "profil_essentials",
+    "version_essentials_declaree",
+    "methode_version_essentials",
+    "pbs_encoding",
+    "pbs_bom",
+    "pbs_newline",
+    "pbs_field_index",
+    "pbs_value_sha256",
 )
 REQUIRED_ROW_FIELDS = {
     "id_stable",

@@ -18,6 +18,9 @@ TRANSLATABLE_PBS_KEYS = {
     "Name", "NamePlural", "PortionName", "PortionNamePlural",
     "Description", "Category", "Pokedex", "FormName", "LoseText",
     "VictorySpeech", "IntroText", "EndSpeech", "Title", "DisplayName",
+    "BeginSpeech", "EndSpeechWin", "EndSpeechLose", "BattleRemind",
+    "BattleRequest", "Body", "End", "Intro", "IntroMorning",
+    "IntroAfternoon", "IntroEvening", "MegaMessage", "StorageCreator",
 }
 
 RPG_CODE_RE = re.compile(r"\\(?:[A-Za-z]+\[[^\]]*\]|pn|sh|wu|n|l|g|b|r|[.!|^><]|[0-9]+)|<[^>]+>", re.I)
@@ -78,6 +81,9 @@ class StructuredExtractionResult:
     errors: list[str]
     sources: tuple[ExtractionSource, ...]
     source_manifest_sha256: str
+    essentials_profile: str = ""
+    declared_version: str = ""
+    version_detection_method: str = ""
 
 
 def _is_link_or_junction(path: Path) -> bool:
@@ -266,13 +272,15 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
     path = Path(relative)
     name = path.name.casefold()
     parent = path.parent.as_posix().casefold()
-    if relative.casefold() in {"game.exe", "game.ini"}:
+    if relative.casefold() in {"game.exe", "game.ini", "mkxp.json"}:
         return "identity"
     if parent == "data":
         if name in {"system.rxdata", "scripts.rxdata", "pluginscripts.rxdata"}:
             return "identity"
         if name == "mapinfos.rxdata":
             return "map_names"
+        if name == "commonevents.rxdata":
+            return "common_events"
         if re.fullmatch(r"map\d{3,4}\.rxdata", name, re.I):
             return "map"
         if name in {"messages.dat", "messages_game.dat", "messages_core.dat"}:
@@ -299,7 +307,11 @@ def build_extraction_inventory(root: Path) -> ExtractionInventory:
     if pbs.exists():
         tree.update(_scan_tree(canonical, pbs))
 
-    for direct in (canonical / "Game.exe", canonical / "Game.ini"):
+    for direct in (
+        canonical / "Game.exe",
+        canonical / "Game.ini",
+        canonical / "mkxp.json",
+    ):
         if direct.exists():
             if not direct.is_file() or _is_link_or_junction(direct):
                 raise ExtractionIntegrityError(
@@ -492,6 +504,10 @@ def extract_map(
                             "page": page_index,
                             "commande": index,
                             "sous_index": "",
+                            "rpg_command_code": 101,
+                            "rpg_command_indent": command.ivars.get("@indent", ""),
+                            "rpg_parameter_index": 0,
+                            "rpg_continuation_end": end_index,
                             "texte_source": message,
                             "traduction_fr": "",
                             "codes_proteges": codes(message),
@@ -517,12 +533,136 @@ def extract_map(
                                     "page": page_index,
                                     "commande": index,
                                     "sous_index": choice_index,
+                                    "rpg_command_code": 102,
+                                    "rpg_command_indent": command.ivars.get("@indent", ""),
+                                    "rpg_parameter_index": 0,
+                                    "rpg_continuation_end": index,
                                     "texte_source": choice_text,
                                     "traduction_fr": "",
                                     "codes_proteges": codes(choice_text),
                                     "statut": "À traduire",
                                 })
                 index += 1
+    return rows
+
+
+def extract_common_events(
+    path: Path,
+    relative: str,
+    *,
+    strict: bool = False,
+) -> list[dict]:
+    """Extrait les commandes textuelles des événements communs sans les modifier."""
+    root = load(path)
+    if not isinstance(root, list):
+        if strict:
+            raise ValueError("Table RPG::CommonEvent attendue")
+        return []
+    rows: list[dict] = []
+    for array_index, event in enumerate(root):
+        if event is None:
+            continue
+        if not isinstance(event, RubyObject) or event.class_name != "RPG::CommonEvent":
+            if strict:
+                raise ValueError(
+                    f"Entrée CommonEvents non reconnue à l'index {array_index}"
+                )
+            continue
+        declared_id = event.ivars.get("@id")
+        event_id = declared_id if isinstance(declared_id, int) else array_index
+        event_name = text_value(event.ivars.get("@name")) or f"Événement commun {event_id}"
+        commands = event.ivars.get("@list", [])
+        if not isinstance(commands, list):
+            if strict:
+                raise ValueError(
+                    f"Liste de commandes CommonEvents invalide à l'index {array_index}"
+                )
+            continue
+        index = 0
+        while index < len(commands):
+            command = commands[index]
+            if not isinstance(command, RubyObject):
+                index += 1
+                continue
+            code = command.ivars.get("@code")
+            params = command.ivars.get("@parameters", [])
+            if code == 101:
+                pieces: list[str] = []
+                if isinstance(params, list) and params:
+                    first = text_value(params[0])
+                    if first:
+                        pieces.append(first)
+                end_index = index
+                while end_index + 1 < len(commands):
+                    continuation = commands[end_index + 1]
+                    if (
+                        not isinstance(continuation, RubyObject)
+                        or continuation.ivars.get("@code") != 401
+                    ):
+                        break
+                    continuation_params = continuation.ivars.get("@parameters", [])
+                    if isinstance(continuation_params, list) and continuation_params:
+                        pieces.append(text_value(continuation_params[0]))
+                    end_index += 1
+                message = "\\n".join(pieces).strip()
+                if looks_visible(message):
+                    rows.append({
+                        "id_stable": stable_id(
+                            "common_event", relative, array_index, event_id, index, "message"
+                        ),
+                        "type": "Événement commun — Dialogue",
+                        "fichier": relative,
+                        "carte_id": "",
+                        "carte_nom": "Événements communs",
+                        "evenement_id": event_id,
+                        "evenement_nom": event_name,
+                        "page": "",
+                        "commande": index,
+                        "sous_index": "",
+                        "rpg_command_code": 101,
+                        "rpg_command_indent": command.ivars.get("@indent", ""),
+                        "rpg_parameter_index": 0,
+                        "rpg_continuation_end": end_index,
+                        "texte_source": message,
+                        "traduction_fr": "",
+                        "codes_proteges": codes(message),
+                        "statut": "À traduire",
+                    })
+                index = end_index + 1
+                continue
+            if code == 102 and isinstance(params, list) and params and isinstance(params[0], list):
+                for choice_index, choice in enumerate(params[0]):
+                    choice_text = text_value(choice).strip()
+                    if looks_visible(choice_text):
+                        rows.append({
+                            "id_stable": stable_id(
+                                "common_event",
+                                relative,
+                                array_index,
+                                event_id,
+                                index,
+                                "choice",
+                                choice_index,
+                            ),
+                            "type": "Événement commun — Choix",
+                            "fichier": relative,
+                            "carte_id": "",
+                            "carte_nom": "Événements communs",
+                            "evenement_id": event_id,
+                            "evenement_nom": event_name,
+                            "page": "",
+                            "commande": index,
+                            "sous_index": choice_index,
+                            "rpg_command_code": 102,
+                            "rpg_command_indent": command.ivars.get("@indent", ""),
+                            "rpg_parameter_index": 0,
+                            "rpg_continuation_end": index,
+                            "texte_source": choice_text,
+                            "traduction_fr": "",
+                            "codes_proteges": codes(choice_text),
+                            "statut": "À traduire",
+                        })
+            index += 1
     return rows
 
 
@@ -580,11 +720,39 @@ def iter_pbs_files(pbs_dir: Path):
         yield path
 
 
-def extract_pbs(path: Path, relative: str) -> list[dict]:
+def is_translatable_pbs_key(key: str) -> bool:
+    return key in TRANSLATABLE_PBS_KEYS or bool(re.fullmatch(r"Body\d+", key))
+
+
+def _pbs_format(raw: bytes) -> tuple[str, str, str, str]:
+    bom = "utf-8" if raw.startswith(b"\xef\xbb\xbf") else ""
     try:
-        content = path.read_text(encoding="utf-8-sig")
+        content = raw.decode("utf-8-sig")
+        encoding = "utf-8-sig" if bom else "utf-8"
     except UnicodeDecodeError:
-        content = path.read_text(encoding="cp1252")
+        content = raw.decode("cp1252")
+        encoding = "cp1252"
+    crlf = raw.count(b"\r\n")
+    lf = raw.count(b"\n") - crlf
+    newline = "CRLF" if crlf and not lf else ("LF" if lf and not crlf else "mixed")
+    return content, encoding, bom, newline
+
+
+def _point_fields(value: str) -> list[str]:
+    try:
+        return next(csv.reader([value], skipinitialspace=False))
+    except (csv.Error, StopIteration):
+        return []
+
+
+def _pbs_value_sha256(value: str, encoding: str) -> str:
+    codec = encoding.replace("-sig", "")
+    return hashlib.sha256(value.encode(codec)).hexdigest()
+
+
+def extract_pbs(path: Path, relative: str) -> list[dict]:
+    raw = path.read_bytes()
+    content, encoding, bom, newline = _pbs_format(raw)
     rows = []
     section = "GLOBAL"
     occurrence: Counter[tuple[str, str]] = Counter()
@@ -599,7 +767,41 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
         if "=" not in line:
             continue
         key, value = [part.strip() for part in line.split("=", 1)]
-        if key not in TRANSLATABLE_PBS_KEYS or not looks_visible(value):
+        if key == "Point" and Path(relative).name.casefold() == "town_map.txt":
+            occurrence[(section, key)] += 1
+            sub_index = occurrence[(section, key)]
+            fields = _point_fields(value)
+            for field_index, field_name in ((2, "Name"), (3, "Description")):
+                if field_index >= len(fields):
+                    continue
+                field_value = fields[field_index].strip()
+                if not looks_visible(field_value):
+                    continue
+                rows.append({
+                    "id_stable": stable_id(
+                        "pbs_structured", relative, section, key, sub_index, field_index
+                    ),
+                    "type": f"PBS v21.1 — Point.{field_name}",
+                    "fichier": relative,
+                    "carte_id": "",
+                    "carte_nom": "",
+                    "evenement_id": section,
+                    "evenement_nom": section,
+                    "page": "",
+                    "commande": key,
+                    "sous_index": f"{sub_index}:field:{field_index}",
+                    "texte_source": field_value,
+                    "traduction_fr": "",
+                    "codes_proteges": codes(field_value),
+                    "statut": "À traduire",
+                    "pbs_encoding": encoding,
+                    "pbs_bom": bom,
+                    "pbs_newline": newline,
+                    "pbs_field_index": field_index,
+                    "pbs_value_sha256": _pbs_value_sha256(value, encoding),
+                })
+            continue
+        if not is_translatable_pbs_key(key) or not looks_visible(value):
             continue
         occurrence[(section, key)] += 1
         sub_index = occurrence[(section, key)]
@@ -618,6 +820,11 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
             "traduction_fr": "",
             "codes_proteges": codes(value),
             "statut": "À traduire",
+            "pbs_encoding": encoding,
+            "pbs_bom": bom,
+            "pbs_newline": newline,
+            "pbs_field_index": "",
+            "pbs_value_sha256": _pbs_value_sha256(value, encoding),
         })
     return rows
 
@@ -675,9 +882,9 @@ def _extract_snapshot(
     candidates = [
         source
         for source in inventory.sources
-        if source.kind in {"map", "bank", "pbs"}
+        if source.kind in {"map", "common_events", "bank", "pbs"}
     ]
-    order = {"map": 0, "bank": 1, "pbs": 2}
+    order = {"map": 0, "common_events": 1, "bank": 2, "pbs": 3}
     candidates.sort(key=lambda source: (order[source.kind], source.relative_path.casefold()))
     rows: list[dict] = []
     total = max(1, len(candidates))
@@ -692,6 +899,12 @@ def _extract_snapshot(
                     map_names.get(map_id or -1, ""),
                     strict=True,
                 )
+            elif source.kind == "common_events":
+                extracted = extract_common_events(
+                    path,
+                    source.relative_path,
+                    strict=True,
+                )
             elif source.kind == "bank":
                 extracted = extract_message_bank(path, source.relative_path)
             else:
@@ -702,6 +915,18 @@ def _extract_snapshot(
                 f"{source.relative_path} ({type(exc).__name__})."
             ) from exc
         for row in extracted:
+            for field_name in (
+                "rpg_command_code",
+                "rpg_command_indent",
+                "rpg_parameter_index",
+                "rpg_continuation_end",
+                "pbs_encoding",
+                "pbs_bom",
+                "pbs_newline",
+                "pbs_field_index",
+                "pbs_value_sha256",
+            ):
+                row.setdefault(field_name, "")
             row["adaptateur"] = "pokemon_essentials"
             row["source_sha256"] = records[source.relative_path].sha256
             row["source_manifest_sha256"] = inventory.source_manifest_sha256
@@ -765,7 +990,13 @@ def extract_structured(root: Path, progress=None, logger=None) -> tuple[list[dic
 FIELDNAMES = [
     "id_stable", "type", "fichier", "carte_id", "carte_nom",
     "evenement_id", "evenement_nom", "page", "commande", "sous_index",
+    "rpg_command_code", "rpg_command_indent", "rpg_parameter_index",
+    "rpg_continuation_end",
     "texte_source", "traduction_fr", "codes_proteges", "statut",
+    "pbs_encoding", "pbs_bom", "pbs_newline", "pbs_field_index",
+    "pbs_value_sha256", "adaptateur", "source_sha256",
+    "source_manifest_sha256", "profil_essentials",
+    "version_essentials_declaree", "methode_version_essentials",
 ]
 
 

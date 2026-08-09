@@ -10,6 +10,7 @@ première brique de migration v1.1 : le paquet `adapters`.
 Pokemon_Fangame_Translator.py
 ├── adapters/
 │   ├── base.py
+│   ├── essentials_profiles.py
 │   ├── registry.py
 │   ├── pokemon_essentials.py
 │   ├── pokemon_flux.py
@@ -303,6 +304,23 @@ Déjà en place :
   mémoire, publication commune du CSV, de l'état, de la reprise, du point de
   restauration et du journal ; un rollback incomplet conserve explicitement les
   fichiers temporaires exacts nécessaires à la récupération.
+- profils Essentials désormais séparés : `essentials_legacy_rxmp` conserve le
+  chemin classique déjà validé, `essentials_v21_1_readonly` autorise l'analyse,
+  l'extraction et le projet CSV sans écriture dans le jeu, et
+  `essentials_modified_or_unknown` reste limité à l'analyse statique ;
+- inspection de version v21.1 isolée dans `adapters/essentials_profiles.py` :
+  `Game.ini`, `mkxp.json` et la constante compressée de `Scripts.rxdata` sont
+  comparés sans exécuter Ruby. Les tailles Marshal/zlib sont bornées et toute
+  contradiction déclasse le profil en lecture seule ;
+- les événements communs Essentials font partie de l'inventaire et du CSV avec
+  des identifiants d'occurrence précis. Les métriques d'analyse profonde utilisent
+  les mêmes catégories extractibles (cartes, événements communs, banques et PBS) ;
+- les champs PBS modernes confirmés sont lus avec conservation de la casse, des
+  commandes, de l'encodage, du BOM et des fins de ligne. Les sous-champs `Point`
+  sont exposés pour traduction mais restent explicitement hors reconstruction ;
+- le profil Essentials et la méthode de version sont liés aux lignes CSV et au
+  manifeste privé. Une identité de projet qui annonce un autre profil que son
+  manifeste est refusée.
 
 Encore partiel ou pas encore en place :
 
@@ -314,8 +332,8 @@ Encore partiel ou pas encore en place :
 - validation d'un corpus traduit représentatif de toutes les sources Flux,
   tests de démarrage/jouabilité et multiplication des scénarios de rollback ;
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
-- limite de temps des sondes et des analyses statiques : une sonde qui se bloque
-  sans lever d'exception n'est pas encore interrompue automatiquement.
+- limite de temps des analyses statiques approfondies autres que les sondes :
+  leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
 
 ## 4. Problèmes à éviter dans la v1.1
 
@@ -336,6 +354,7 @@ Structure suggérée :
 ```text
 adapters/
 ├── base.py
+├── essentials_profiles.py
 ├── registry.py
 ├── pokemon_essentials.py
 ├── pokemon_flux.py
@@ -376,6 +395,13 @@ Encapsule progressivement les fonctions existantes :
 - reconstruction actuelle.
 
 La première étape est une enveloppe sans réécriture fonctionnelle.
+
+La détection Essentials ne vaut plus autorisation générale. Le résultat distingue
+la famille, la version déclarée, la méthode de détection et le profil structurel,
+puis expose séparément les compatibilités d'analyse, d'extraction, de projet de
+traduction, d'écriture dans le jeu et de reconstruction validée. Pour v21.1,
+`RECONSTRUCT` reste absent jusqu'à un aller-retour réel sur copie de travail suivi
+d'un démarrage concluant du jeu.
 
 #### `pokemon_flux.py`
 

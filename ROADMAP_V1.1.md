@@ -77,6 +77,14 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   dossier ou à la fermeture de l'application ;
 - le thread Tkinter ne bloque plus pendant les sondes et ignore tout résultat
   appartenant à un diagnostic annulé ou remplacé.
+- la famille Essentials est subdivisée en profils de capacité : classique RMXP,
+  v21.1 avec jeu en lecture seule, et version modifiée/inconnue ;
+- la version v21.1 est confirmée par concordance de marqueurs statiques provenant
+  de `Game.ini`, `mkxp.json` et de `Scripts.rxdata` décompressé sans exécution ;
+- une version contradictoire, v20, future ou insuffisamment confirmée bloque
+  extraction, traduction et reconstruction ;
+- le profil v21.1 confirmé peut produire une extraction et un projet CSV, mais
+  la reconstruction reste volontairement absente jusqu'au parcours réel dédié.
 
 ## Phase 2 — Interface pilotée par capacités
 

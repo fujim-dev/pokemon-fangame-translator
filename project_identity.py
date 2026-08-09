@@ -26,6 +26,7 @@ class ProjectIdentity:
     adapter_id: str
     adapter_version: str
     sha256: str
+    adapter_profile: str = ""
     source_manifest_sha256: str = ""
     extraction_manifest_sha256: str = ""
     extraction_id: str = ""
@@ -49,6 +50,7 @@ def build_project_identity_bytes(
     *,
     adapter_id: str = "",
     adapter_version: str = "",
+    adapter_profile: str = "",
     software_version: str = "1.0.2",
     source_manifest_sha256: str = "",
     extraction_manifest_name: str = "",
@@ -63,6 +65,7 @@ def build_project_identity_bytes(
         "dossier_jeu": str(root),
         "adapter_id": adapter_id,
         "adapter_version": adapter_version,
+        "adapter_profile": adapter_profile,
         "version_logiciel": software_version,
         "mis_a_jour": datetime.now().isoformat(timespec="seconds"),
     }
@@ -85,6 +88,7 @@ def write_project_identity(
     *,
     adapter_id: str = "",
     adapter_version: str = "",
+    adapter_profile: str = "",
     software_version: str = "1.0.2",
     source_manifest_sha256: str = "",
     extraction_manifest_name: str = "",
@@ -135,12 +139,14 @@ def write_project_identity(
             return destination
         adapter_id = adapter_id or previous_adapter
         adapter_version = adapter_version or str(previous.get("adapter_version") or "")
+        adapter_profile = adapter_profile or str(previous.get("adapter_profile") or "")
     atomic_write_bytes(
         destination,
         build_project_identity_bytes(
             game_root,
             adapter_id=adapter_id,
             adapter_version=adapter_version,
+            adapter_profile=adapter_profile,
             software_version=software_version,
             source_manifest_sha256=source_manifest_sha256,
             extraction_manifest_name=extraction_manifest_name,
@@ -206,6 +212,7 @@ def read_project_identity(
     source_manifest_sha256 = str(payload.get("source_manifest_sha256") or "")
     extraction_manifest_sha256 = ""
     extraction_id = str(payload.get("extraction_id") or "")
+    adapter_profile = str(payload.get("adapter_profile") or "")
     extracted_csv_sha256 = ""
     if source_manifest_sha256:
         source_manifest_sha256 = _validated_sha256(
@@ -237,6 +244,10 @@ def read_project_identity(
             not isinstance(manifest, dict)
             or manifest.get("format") != "pft_essentials_extraction_v1"
             or str(manifest.get("adapter_id") or "") != adapter_id
+            or (
+                adapter_profile
+                and str(manifest.get("essentials_profile") or "") != adapter_profile
+            )
             or str(manifest.get("source_manifest_sha256") or "").casefold()
             != source_manifest_sha256
             or str(manifest.get("extraction_id") or "") != extraction_id
@@ -266,6 +277,7 @@ def read_project_identity(
         adapter_id=adapter_id,
         adapter_version=str(payload.get("adapter_version") or ""),
         sha256=hashlib.sha256(raw).hexdigest(),
+        adapter_profile=adapter_profile,
         source_manifest_sha256=source_manifest_sha256,
         extraction_manifest_sha256=extraction_manifest_sha256,
         extraction_id=extraction_id,

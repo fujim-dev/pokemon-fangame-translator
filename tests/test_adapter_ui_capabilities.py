@@ -145,6 +145,42 @@ class AdapterUiCapabilityTests(unittest.TestCase):
             app.file_menu.states["Ouvrir le studio de traduction"],
         )
 
+    def test_v21_readonly_game_profile_never_exposes_reconstruction(self) -> None:
+        app = self._app_without_tk()
+        app.detection_result = DetectionResult(
+            adapter_id="pokemon_essentials",
+            display_name="Pokémon Essentials v21.1 (jeu en lecture seule)",
+            confidence=100,
+            capabilities=frozenset(
+                {
+                    GameCapability.ANALYZE,
+                    GameCapability.DEEP_ANALYZE,
+                    GameCapability.EXTRACT,
+                    GameCapability.TRANSLATE,
+                }
+            ),
+            recognized_version="21.1",
+            structural_profile="essentials_v21_1_readonly",
+            adapter_recognized=True,
+            write_actions_allowed=False,
+        )
+        app.extract_btn.manager = ""
+        app.translate_btn.manager = ""
+        app.reconstruction_btn.manager = ""
+
+        with tempfile.TemporaryDirectory(prefix="pft_test_v21_ui_") as temp_dir:
+            csv_path = Path(temp_dir) / "textes_structures.csv"
+            csv_path.write_text("synthetic", encoding="utf-8")
+            app.translation_csv_path = csv_path
+            app._refresh_action_buttons()
+
+        self.assertEqual("pack", app.extract_btn.manager)
+        self.assertEqual("pack", app.translate_btn.manager)
+        self.assertEqual("", app.reconstruction_btn.manager)
+        self.assertTrue(app.extract_btn.enabled)
+        self.assertTrue(app.translate_btn.enabled)
+        self.assertFalse(app.reconstruction_btn.enabled)
+
     def test_homologated_flux_shows_extraction_and_csv_translation_but_not_reconstruction(self) -> None:
         app = self._app_without_tk()
         app.detection_result = DetectionResult(

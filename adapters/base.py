@@ -40,6 +40,15 @@ class DetectionResult:
     adapter_recognized: bool = True
     write_actions_allowed: bool = False
     ambiguous: bool = False
+    engine_family: str = ""
+    declared_version: str = ""
+    version_detection_method: str = ""
+    structural_profile: str = ""
+    analysis_compatible: bool = False
+    extraction_compatible: bool = False
+    translation_compatible: bool = False
+    game_write_compatible: bool = False
+    reconstruction_validated: bool = False
 
     def can(self, capability: GameCapability) -> bool:
         return capability in self.capabilities

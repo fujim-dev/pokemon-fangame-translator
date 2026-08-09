@@ -72,6 +72,15 @@ class Diagnostic:
     write_actions_allowed: bool
     adapter_ambiguous: bool
     detection_evidence: list[str]
+    engine_family: str
+    declared_version: str
+    version_detection_method: str
+    structural_profile: str
+    analysis_compatible: bool
+    extraction_compatible: bool
+    translation_compatible: bool
+    game_write_compatible: bool
+    reconstruction_validated: bool
     rpg_maker_xp_detected: bool
     pokemon_essentials_detected: bool
     probable_essentials_version: str
@@ -1149,40 +1158,6 @@ class FangameTranslatorApp(tk.Tk):
                 result[f"{section}.{key}"] = value
         return result
 
-    @staticmethod
-    def _detect_essentials_version(root: Path) -> str:
-        candidates = [
-            root / "Data" / "Scripts.rxdata",
-            root / "Data" / "PluginScripts.rxdata",
-            root / "PBS" / "metadata.txt",
-            root / "PBS" / "pokemon.txt",
-            root / "Scripts" / "Settings.rb",
-            root / "Data" / "messages.dat",
-        ]
-
-        patterns = [
-            re.compile(rb"Essentials\s+v?(\d+(?:\.\d+)*)", re.I),
-            re.compile(rb"Pokemon Essentials\s+v?(\d+(?:\.\d+)*)", re.I),
-            re.compile(rb"ESSENTIALS_VERSION.{0,30}?(\d+(?:\.\d+)*)", re.I),
-        ]
-
-        for path in candidates:
-            if not path.exists() or not path.is_file():
-                continue
-            try:
-                raw = path.read_bytes()[:8_000_000]
-            except OSError:
-                continue
-
-            for pattern in patterns:
-                match = pattern.search(raw)
-                if match:
-                    return match.group(1).decode("ascii", "ignore")
-
-        if (root / "PBS").is_dir():
-            return "inconnue (structure PBS détectée)"
-        return "inconnue"
-
     def _cancel_detection(self, *, wait: bool = False) -> None:
         self._detection_generation += 1
         cancel_event = self._detection_cancel_event
@@ -1299,6 +1274,7 @@ class FangameTranslatorApp(tk.Tk):
                     root,
                     adapter_id=detection.adapter_id,
                     adapter_version=detection.recognized_version,
+                    adapter_profile=detection.structural_profile,
                 )
             except (OSError, ProjectIdentityError) as exc:
                 self._log(
@@ -1367,7 +1343,7 @@ class FangameTranslatorApp(tk.Tk):
         )
 
         essentials = detection.adapter_id == "pokemon_essentials"
-        version = detection.recognized_version or self._detect_essentials_version(root)
+        version = detection.declared_version or detection.recognized_version or "inconnue"
 
         warnings = list(detection.warnings)
         notes = [f"Adaptateur sélectionné : {detection.display_name} ({detection.adapter_id})."]
@@ -1389,7 +1365,12 @@ class FangameTranslatorApp(tk.Tk):
             notes.append(f"Bibliothèque déclarée : {ini_values['Game.Library']}")
 
         score = detection.confidence
-        if detection.adapter_recognized and not detection.write_actions_allowed:
+        if detection.adapter_recognized and detection.can(GameCapability.EXTRACT):
+            level = (
+                "Profil reconnu — extraction et projet CSV autorisés, "
+                "écriture dans le jeu bloquée"
+            )
+        elif detection.adapter_recognized and not detection.write_actions_allowed:
             level = "Profil reconnu — analyse en lecture seule"
         elif not detection.write_actions_allowed:
             level = "Structure inconnue ou détection incertaine"
@@ -1407,6 +1388,29 @@ class FangameTranslatorApp(tk.Tk):
                 f"{item.relative_path} — {item.explanation} (+{item.weight})"
                 for item in detection.evidence
             ],
+            engine_family=detection.engine_family,
+            declared_version=detection.declared_version,
+            version_detection_method=detection.version_detection_method,
+            structural_profile=detection.structural_profile,
+            analysis_compatible=(
+                detection.analysis_compatible or detection.can(GameCapability.ANALYZE)
+            ),
+            extraction_compatible=(
+                detection.extraction_compatible or detection.can(GameCapability.EXTRACT)
+            ),
+            translation_compatible=(
+                detection.translation_compatible or detection.can(GameCapability.TRANSLATE)
+            ),
+            game_write_compatible=(
+                detection.game_write_compatible or detection.write_actions_allowed
+            ),
+            reconstruction_validated=(
+                detection.reconstruction_validated
+                or (
+                    detection.write_actions_allowed
+                    and detection.can(GameCapability.RECONSTRUCT)
+                )
+            ),
             rpg_maker_xp_detected=rpg_maker_xp,
             pokemon_essentials_detected=essentials,
             probable_essentials_version=version,
@@ -1569,6 +1573,15 @@ class FangameTranslatorApp(tk.Tk):
             f"Confiance de détection : {d.detection_confidence}/100",
             f"Reconstruction et écriture dans le jeu : {'AUTORISÉES' if d.write_actions_allowed else 'BLOQUÉES'}",
             f"Détection ambiguë : {'OUI' if d.adapter_ambiguous else 'NON'}",
+            f"Famille détectée : {d.engine_family or 'inconnue'}",
+            f"Profil structurel : {d.structural_profile or 'non confirmé'}",
+            f"Version déclarée : {d.declared_version or 'non déclarée'}",
+            f"Méthode de version : {d.version_detection_method or 'aucune preuve statique'}",
+            f"Analyse compatible : {'OUI' if d.analysis_compatible else 'NON'}",
+            f"Extraction compatible : {'OUI' if d.extraction_compatible else 'NON'}",
+            f"Projet de traduction compatible : {'OUI' if d.translation_compatible else 'NON'}",
+            f"Écriture dans le jeu compatible : {'OUI' if d.game_write_compatible else 'NON'}",
+            f"Reconstruction validée : {'OUI' if d.reconstruction_validated else 'NON'}",
             "",
             f"RPG Maker XP détecté : {'OUI' if d.rpg_maker_xp_detected else 'NON'}",
             f"Pokémon Essentials détecté : {'OUI' if d.pokemon_essentials_detected else 'NON'}",
@@ -1595,9 +1608,14 @@ class FangameTranslatorApp(tk.Tk):
             "PROCHAINE ÉTAPE",
             "-" * 72,
             (
-                "Le jeu semble compatible avec l'extracteur structuré de la v1.0.2."
-                if d.write_actions_allowed
-                else "La structure doit être étudiée manuellement ; les actions d'écriture restent bloquées."
+                "Le profil permet une extraction en lecture seule et un projet CSV ; "
+                "la reconstruction du jeu reste bloquée."
+                if d.extraction_compatible and not d.game_write_compatible
+                else (
+                    "Le jeu semble compatible avec l'extracteur structuré de la v1.0.2."
+                    if d.write_actions_allowed
+                    else "La structure doit être étudiée manuellement ; les actions d'écriture restent bloquées."
+                )
             ),
         ]
         self._set_text(self.summary_text, "\n".join(summary))
@@ -1711,8 +1729,11 @@ class FangameTranslatorApp(tk.Tk):
 
         dialogues = sum(1 for row in rows if row["type"] == "Dialogue")
         choices = sum(1 for row in rows if row["type"] == "Choix")
+        common_event_rows = sum(
+            1 for row in rows if row["type"].startswith("Événement commun —")
+        )
         bank_rows = sum(1 for row in rows if row["type"] == "Banque de messages")
-        pbs_rows = sum(1 for row in rows if row["type"].startswith("PBS —"))
+        pbs_rows = sum(1 for row in rows if row["type"].startswith("PBS"))
         unique_texts = len({row["texte_source"] for row in rows})
         duplicates = len(rows) - unique_texts
         protected = sum(1 for row in rows if row["codes_proteges"])
@@ -1734,6 +1755,7 @@ class FangameTranslatorApp(tk.Tk):
             f"Textes structurés : {len(rows)}",
             f"Dialogues de cartes : {dialogues}",
             f"Choix du joueur : {choices}",
+            f"Textes d'événements communs : {common_event_rows}",
             f"Banques de messages : {bank_rows}",
             f"Champs PBS : {pbs_rows}",
             f"Textes uniques : {unique_texts}",
@@ -1742,6 +1764,9 @@ class FangameTranslatorApp(tk.Tk):
             f"Traductions conservées du projet : {preserved_translations}",
             f"Sauvegarde avant réextraction : {existing_backup or 'Aucune'}",
             f"Identifiant d'extraction : {run_id or 'non disponible'}",
+            f"Profil Essentials : {getattr(extraction_result, 'essentials_profile', '') or 'non disponible'}",
+            f"Version Essentials déclarée : {getattr(extraction_result, 'declared_version', '') or 'non déclarée'}",
+            f"Méthode de détection de version : {getattr(extraction_result, 'version_detection_method', '') or 'aucune'}",
             f"Empreinte de l'inventaire source : {source_manifest_sha256 or 'non disponible'}",
             f"Empreinte du CSV extrait : {csv_sha256}",
             "",
@@ -1801,6 +1826,7 @@ class FangameTranslatorApp(tk.Tk):
                 root,
                 adapter_id="pokemon_essentials",
                 adapter_version=adapter_version,
+                adapter_profile=extraction_result.essentials_profile,
                 source_manifest_sha256=source_manifest_sha256,
                 extraction_manifest_name=EXTRACTION_MANIFEST_NAME,
                 extraction_manifest_sha256=manifest_sha256,
@@ -2017,6 +2043,15 @@ class FangameTranslatorApp(tk.Tk):
             f"Confiance de détection : {d.detection_confidence}/100",
             f"Actions d'écriture : {'AUTORISÉES' if d.write_actions_allowed else 'BLOQUÉES'}",
             f"Détection ambiguë : {'OUI' if d.adapter_ambiguous else 'NON'}",
+            f"Famille détectée : {d.engine_family or 'inconnue'}",
+            f"Profil structurel : {d.structural_profile or 'non confirmé'}",
+            f"Version déclarée : {d.declared_version or 'non déclarée'}",
+            f"Méthode de version : {d.version_detection_method or 'aucune preuve statique'}",
+            f"Analyse compatible : {'OUI' if d.analysis_compatible else 'NON'}",
+            f"Extraction compatible : {'OUI' if d.extraction_compatible else 'NON'}",
+            f"Projet de traduction compatible : {'OUI' if d.translation_compatible else 'NON'}",
+            f"Écriture dans le jeu compatible : {'OUI' if d.game_write_compatible else 'NON'}",
+            f"Reconstruction validée : {'OUI' if d.reconstruction_validated else 'NON'}",
             f"RPG Maker XP : {'OUI' if d.rpg_maker_xp_detected else 'NON'}",
             f"Pokémon Essentials : {'OUI' if d.pokemon_essentials_detected else 'NON'}",
             f"Version probable : {d.probable_essentials_version}",
@@ -2148,6 +2183,15 @@ class FangameTranslatorApp(tk.Tk):
                 f"Confiance de détection : {diagnostic.detection_confidence}/100",
                 f"Actions d'écriture : {'AUTORISÉES' if diagnostic.write_actions_allowed else 'BLOQUÉES'}",
                 f"Détection ambiguë : {'OUI' if diagnostic.adapter_ambiguous else 'NON'}",
+                f"Famille détectée : {diagnostic.engine_family or 'inconnue'}",
+                f"Profil structurel : {diagnostic.structural_profile or 'non confirmé'}",
+                f"Version déclarée : {diagnostic.declared_version or 'non déclarée'}",
+                f"Méthode de version : {diagnostic.version_detection_method or 'aucune preuve statique'}",
+                f"Analyse compatible : {'OUI' if diagnostic.analysis_compatible else 'NON'}",
+                f"Extraction compatible : {'OUI' if diagnostic.extraction_compatible else 'NON'}",
+                f"Projet de traduction compatible : {'OUI' if diagnostic.translation_compatible else 'NON'}",
+                f"Écriture dans le jeu compatible : {'OUI' if diagnostic.game_write_compatible else 'NON'}",
+                f"Reconstruction validée : {'OUI' if diagnostic.reconstruction_validated else 'NON'}",
                 f"RPG Maker XP : {'OUI' if diagnostic.rpg_maker_xp_detected else 'NON'}",
                 f"Pokémon Essentials : {'OUI' if diagnostic.pokemon_essentials_detected else 'NON'}",
                 f"Version probable : {diagnostic.probable_essentials_version}",

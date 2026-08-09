@@ -35,11 +35,11 @@ from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
 from structured_extractor import (
     ExtractionIntegrityError,
-    TRANSLATABLE_PBS_KEYS,
     build_extraction_inventory,
     extract_map,
     extract_message_bank,
     extract_pbs,
+    is_translatable_pbs_key,
     looks_visible,
     stable_id,
     text_value,
@@ -743,7 +743,7 @@ def _apply_pbs_items(path: Path, relative: str, items: list[PlanItem]) -> None:
             continue
         prefix, raw_key, value, trailing = match.groups()
         key = raw_key.strip()
-        if key not in TRANSLATABLE_PBS_KEYS or not looks_visible(value):
+        if not is_translatable_pbs_key(key) or not looks_visible(value):
             continue
         occurrence[(section, key)] += 1
         sub_index = occurrence[(section, key)]

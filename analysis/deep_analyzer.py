@@ -401,7 +401,26 @@ def _analyze_common_events(
             _relative(path, root),
         )
         return
-    common_events = [event for event in loaded if isinstance(event, RubyObject)]
+    unsupported_entries = [
+        event
+        for event in loaded
+        if event is not None
+        and (not isinstance(event, RubyObject) or event.class_name != "RPG::CommonEvent")
+    ]
+    if unsupported_entries:
+        _add_issue(
+            report,
+            "unsupported_common_event_entry",
+            "warning",
+            "compatibility",
+            "Une ou plusieurs entrées CommonEvents ne sont pas extractibles avec certitude.",
+            _relative(path, root),
+        )
+    common_events = [
+        event
+        for event in loaded
+        if isinstance(event, RubyObject) and event.class_name == "RPG::CommonEvent"
+    ]
     report.common_events_found = len(common_events)
     for event in common_events:
         commands = event.ivars.get("@list", [])
@@ -496,21 +515,30 @@ def analyze_game(
     tasks_total = max(1, len(maps) + len(pbs_files) + len(banks) + int(common_events_available))
     task_index = 0
     texts: list[str] = []
+    extractable_by_source: Counter[str] = Counter()
     seen_references: set[tuple[str, str]] = set()
 
     for path in maps:
         task_index += 1
         if progress:
             progress(task_index, tasks_total, _relative(path, root))
+        before_count = len(texts)
         _analyze_map(path, report, root, texts, seen_references)
+        extracted_count = len(texts) - before_count
+        if extracted_count:
+            extractable_by_source["maps"] += extracted_count
 
     if common_events_available:
         task_index += 1
         if progress:
             progress(task_index, tasks_total, _relative(common_events_path, root))
+        before_count = len(texts)
         _analyze_common_events(
             common_events_path, report, root, texts, seen_references
         )
+        extracted_count = len(texts) - before_count
+        if extracted_count:
+            extractable_by_source["common_events"] += extracted_count
 
     for path in banks:
         task_index += 1
@@ -531,11 +559,13 @@ def analyze_game(
             )
             continue
         report.message_banks_analyzed += 1
-        texts.extend(
+        extracted_texts = [
             (row.get("traduction_fr") or row.get("texte_source") or "").strip()
             for row in rows
             if (row.get("traduction_fr") or row.get("texte_source") or "").strip()
-        )
+        ]
+        texts.extend(extracted_texts)
+        extractable_by_source["message_banks"] += len(extracted_texts)
 
     for path in pbs_files:
         task_index += 1
@@ -573,11 +603,13 @@ def analyze_game(
             )
             continue
         report.pbs_files_analyzed += 1
-        texts.extend(
+        extracted_texts = [
             (row.get("texte_source") or "").strip()
             for row in rows
             if (row.get("texte_source") or "").strip()
-        )
+        ]
+        texts.extend(extracted_texts)
+        extractable_by_source["pbs"] += len(extracted_texts)
 
     if report.dynamic_script_commands:
         report.unverified.append(
@@ -601,5 +633,8 @@ def analyze_game(
         or report.unsupported
         or any(issue.code == "filesystem_link" for issue in report.issues)
     )
+    report.extractable_text_occurrences = len(texts)
+    report.extractable_unique_texts = len(set(texts))
+    report.extractable_by_source = dict(sorted(extractable_by_source.items()))
     report.coverage = calculate_coverage(texts, incomplete_sources=incomplete_sources)
     return report

@@ -218,7 +218,9 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertTrue(result.can(GameCapability.EXTRACT))
             self.assertTrue(result.can(GameCapability.TRANSLATE))
             self.assertTrue(result.can(GameCapability.RECONSTRUCT))
-            self.assertEqual(result.recognized_version, "21.1")
+            self.assertEqual(result.recognized_version, "inconnue")
+            self.assertEqual("", result.declared_version)
+            self.assertEqual("essentials_legacy_rxmp", result.structural_profile)
             self.assertIn("maps", {item.evidence_id for item in result.evidence})
             self.assertEqual(before, after)
 
@@ -637,7 +639,12 @@ class AdapterDetectionTests(unittest.TestCase):
             ) as extractor:
                 result = PokemonEssentialsAdapter().extract(root)
 
-            self.assertEqual(result, expected)
+            self.assertEqual(result[1], expected[1])
+            self.assertEqual("synthetic", result[0][0]["identifiant"])
+            self.assertEqual(
+                "essentials_legacy_rxmp",
+                result[0][0]["profil_essentials"],
+            )
             extractor.assert_called_once_with(root, progress=None, logger=None)
 
     def test_direct_essentials_extraction_respects_an_ambiguous_registry_decision(self):

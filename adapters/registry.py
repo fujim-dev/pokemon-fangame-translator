@@ -55,6 +55,7 @@ class AdapterRegistry:
                 warnings=(warning, *base.warnings),
                 adapter_recognized=False,
                 write_actions_allowed=False,
+                analysis_compatible=True,
             )
         primary_warning = warning or (
             "Détection ambiguë : plusieurs adaptateurs ont des scores trop proches."
@@ -72,6 +73,15 @@ class AdapterRegistry:
             adapter_recognized=False,
             write_actions_allowed=False,
             ambiguous=ambiguous,
+            engine_family=candidate.engine_family,
+            declared_version=candidate.declared_version,
+            version_detection_method=candidate.version_detection_method,
+            structural_profile=candidate.structural_profile,
+            analysis_compatible=True,
+            extraction_compatible=False,
+            translation_compatible=False,
+            game_write_compatible=False,
+            reconstruction_validated=False,
         )
 
     def detect(

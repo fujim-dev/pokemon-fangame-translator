@@ -68,6 +68,51 @@ def file_hashes(root: Path) -> dict[str, str]:
 
 
 class EssentialsExtractionIntegrityTests(unittest.TestCase):
+    def test_common_events_are_extracted_with_precise_stable_identifiers(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_essentials_common_") as temp_dir:
+            root = Path(temp_dir) / "game"
+            prepare_essentials_game(root)
+            common_event = RubyObject(
+                "RPG::CommonEvent",
+                {
+                    "@id": 7,
+                    "@name": ruby_text("Synthetic common event"),
+                    "@list": [
+                        command(101, [ruby_text(r"Hello \PN")]),
+                        command(401, [ruby_text("Second line")]),
+                        command(102, [[ruby_text("First choice"), ruby_text("Second choice")]]),
+                    ],
+                },
+            )
+            (root / "Data" / "CommonEvents.rxdata").write_bytes(
+                dumps([None, common_event])
+            )
+
+            first = PokemonEssentialsAdapter().extract_with_provenance(root)
+            second = PokemonEssentialsAdapter().extract_with_provenance(root)
+
+            common_rows = [
+                row for row in first.rows if row["fichier"] == "Data/CommonEvents.rxdata"
+            ]
+            second_common_rows = [
+                row for row in second.rows if row["fichier"] == "Data/CommonEvents.rxdata"
+            ]
+            self.assertEqual(3, len(common_rows))
+            self.assertEqual(
+                [row["id_stable"] for row in common_rows],
+                [row["id_stable"] for row in second_common_rows],
+            )
+            self.assertEqual(3, len({row["id_stable"] for row in common_rows}))
+            self.assertEqual({7}, {row["evenement_id"] for row in common_rows})
+            self.assertEqual({0, 2}, {row["commande"] for row in common_rows})
+            self.assertEqual({101, 102}, {row["rpg_command_code"] for row in common_rows})
+            self.assertEqual({0}, {row["rpg_parameter_index"] for row in common_rows})
+            dialogue = next(
+                row for row in common_rows if row["type"] == "Événement commun — Dialogue"
+            )
+            self.assertEqual(r"Hello \PN\nSecond line", dialogue["texte_source"])
+            self.assertEqual(r"\PN | \n", dialogue["codes_proteges"])
+
     def test_verified_extraction_is_deterministic_and_keeps_original_unchanged(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_essentials_extract_") as temp_dir:
             root = Path(temp_dir) / "game"
@@ -201,6 +246,17 @@ class EssentialsExtractionIntegrityTests(unittest.TestCase):
             (root / "Data" / "Map001.rxdata").write_bytes(b"invalid marshal source")
 
             with self.assertRaisesRegex(ExtractionIntegrityError, "Map001.rxdata"):
+                extract_structured_verified(root)
+
+    def test_unknown_common_event_structure_never_returns_partial_rows(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_test_essentials_common_unknown_") as temp_dir:
+            root = Path(temp_dir) / "game"
+            prepare_essentials_game(root)
+            (root / "Data" / "CommonEvents.rxdata").write_bytes(
+                dumps([None, RubyObject("Synthetic::UnknownCommonEvent", {})])
+            )
+
+            with self.assertRaisesRegex(ExtractionIntegrityError, "CommonEvents.rxdata"):
                 extract_structured_verified(root)
 
 

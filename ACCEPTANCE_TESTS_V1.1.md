@@ -107,6 +107,27 @@ descendants sont terminés ; aucun résultat ou effet tardif ne peut modifier le
 capacités déjà annoncées. Une fermeture ou un changement de dossier annule le
 diagnostic actif sans laisser de processus de sonde résiduel.
 
+### AC-113 — Profil structurel et version Essentials
+
+La détection distingue la famille Essentials de son profil de capacité. Une
+constante `Essentials::VERSION` présente dans le script `Settings` compressé est
+lue par Marshal et zlib sans exécuter Ruby, puis comparée aux déclarations de
+`Game.ini` et `mkxp.json`. Une contradiction, une version v20/future ou une
+structure moderne insuffisamment confirmée donne `essentials_modified_or_unknown`
+et bloque extraction, traduction et reconstruction. Un `PluginScripts.rxdata`
+vide n'est jamais un indice de plugin et quelques PBS copiés dans un faux projet
+RMXP ne suffisent pas à reconnaître Essentials.
+
+### AC-114 — Essentials v21.1 en lecture seule du jeu
+
+Le profil `essentials_v21_1_readonly` autorise l'analyse, l'extraction et le
+cycle de vie du projet CSV, mais jamais `RECONSTRUCT` ni l'écriture dans le jeu.
+Les événements communs ont des identifiants stables incluant leur occurrence et
+les métriques d'analyse profonde correspondent au CSV extractible. Les schémas
+PBS modernes pris en charge conservent commandes, casse, encodage, BOM, CRLF,
+commentaires et ordre ; les sous-champs non reconstructibles restent explicitement
+distingués. Le profil et la méthode de version font partie de la provenance.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté
