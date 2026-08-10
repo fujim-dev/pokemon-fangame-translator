@@ -255,6 +255,43 @@ exactement une continuation 401. Cette preuve ne couvre aucun CommonEvent avec
 plusieurs 401, aucun choix commun 102/402, aucun sous-champ `Point` ni PBS moderne.
 Elle n'active pas `RECONSTRUCT` et ne conserve aucun contenu du jeu dans le dépôt.
 
+La référence v21.1 inspectée ne contient aucune séquence commune réelle composée
+d'une commande 101 suivie d'au moins deux continuations 401. Cette forme reste
+couverte uniquement par AC-117/AC-118 sur fixtures synthétiques et devra recevoir
+une preuve réelle distincte si un corpus approprié devient disponible ; aucune
+occurrence n'a été fabriquée dans la référence.
+
+### AC-121 — Candidat réel borné d'un choix commun 102/402
+
+Une quatrième portée interne accepte exactement un libellé de choix commun 102 et
+sa branche 402 correspondante. L'extraction doit enregistrer l'index de la 102, le
+sous-index du libellé, l'index de l'unique 402, son paramètre textuel, l'indentation,
+l'index/ID, le trigger/switch et l'empreinte Marshal complète de l'événement. La
+réinjection remplace uniquement la chaîne dans le tableau de choix 102 et sa copie
+dans le paramètre 1 de la branche 402.
+
+Les fixtures synthétiques refusent une branche absente ou supplémentaire, un
+sous-index, ordre, indentation ou paramètre non textuel modifié, ainsi qu'une
+preuve ou provenance altérée. Elles vérifient aussi que la logique 102/402 partagée
+avec les cartes ne régresse pas et que les autres choix et commandes restent
+byte-identical.
+
+La preuve technique réelle a réussi sur une copie séparée de la référence v21.1 :
+30 402 occurrences extraites, dont 18 occurrences CommonEvents et 4 choix, session
+Studio exclusive, sauvegarde/reprise transactionnelles, simulation, reconstruction
+et réextraction à la même identité stable. Parmi les fichiers du jeu, seul
+`Data/CommonEvents.rxdata` diffère ; les trois fichiers d'accompagnement PFT sont
+ajoutés séparément. La référence et la copie de travail sont inchangées, tous les
+autres choix, branches et commandes restent identiques, et le candidat court
+atteint l'écran titre sans modifier ses fichiers.
+
+Une validation visuelle humaine a ensuite confirmé l'affichage complet du marqueur
+sur ce choix réel, sa sélection, puis la navigation normale dans la branche 402
+correspondante jusqu'à sa fin. Cette preuve ne couvre qu'un seul choix et cette
+branche correspondante : elle ne valide pas plusieurs 401 réelles, d'autres formes
+de choix communs, `Point`, les PBS modernes ni la reconstruction publique v21.1.
+`RECONSTRUCT` reste absent.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

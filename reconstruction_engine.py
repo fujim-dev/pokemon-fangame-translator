@@ -82,6 +82,9 @@ V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE = (
 V21_1_COMMON_EVENT_401_VALIDATION_SCOPE = (
     "essentials_v21_1_common_event_401_candidate_v1"
 )
+V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE = (
+    "essentials_v21_1_common_event_choice_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -97,6 +100,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
+        V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE,
     }
 )
 
@@ -106,6 +110,7 @@ def _is_v21_1_common_event_validation_scope(scope: str) -> bool:
         V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
+        V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE,
     }
 
 
@@ -115,6 +120,8 @@ def _v21_1_common_event_expected_count(scope: str) -> int:
     if scope == V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE:
         return 1
     if scope == V21_1_COMMON_EVENT_401_VALIDATION_SCOPE:
+        return 1
+    if scope == V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE:
         return 1
     raise ReconstructionError("Portée d'événement commun v21.1 inconnue.")
 
@@ -327,7 +334,10 @@ def _path_matches_item_type(relative: str, row_type: str) -> bool:
             and lowered[0] == "data"
             and re.fullmatch(r"map\d{3,4}\.rxdata", lowered[1]) is not None
         )
-    if row_type == "Événement commun — Dialogue":
+    if row_type in {
+        "Événement commun — Dialogue",
+        "Événement commun — Choix",
+    }:
         return lowered == ("data", "commonevents.rxdata")
     if row_type == "Banque de messages":
         return lowered in {
@@ -978,6 +988,87 @@ def _validate_v21_1_common_event_401_scope(
     )
 
 
+def _validate_v21_1_common_event_choice_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve réelle à un seul libellé 102 et sa branche 402."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation du choix commun v21.1 exige exactement un choix "
+            "accepté et applicable."
+        )
+    item = applicable[0]
+    if accepted[0].id_stable != item.id_stable:
+        raise ReconstructionError(
+            "L'occurrence acceptée ne correspond pas au choix commun applicable."
+        )
+    if (
+        item.type != "Événement commun — Choix"
+        or item.fichier.replace("\\", "/").casefold()
+        != V21_1_COMMON_EVENTS_FILE.casefold()
+        or {path.casefold() for path in plan.source_hashes}
+        != {V21_1_COMMON_EVENTS_FILE.casefold()}
+    ):
+        raise ReconstructionError(
+            "La validation du choix commun est limitée à Data/CommonEvents.rxdata."
+        )
+
+    array_index = _integer(
+        item.rpg_common_event_array_index,
+        "Index de l'événement commun",
+    )
+    event_id = _integer(item.event_id, "ID de l'événement commun")
+    command_index = _integer(item.command, "Commande 102 de l'événement commun")
+    choice_index = _integer(item.sub_index, "Sous-index du choix commun")
+    command_indent = _integer(item.rpg_command_indent, "Indentation du choix commun")
+    branch_index = _integer(item.rpg_choice_branch_command, "Branche 402")
+    trigger = _integer(item.rpg_common_event_trigger, "Trigger de l'événement commun")
+    switch_id = _integer(
+        item.rpg_common_event_switch_id,
+        "Switch de l'événement commun",
+    )
+    if (
+        array_index <= 0
+        or event_id != array_index
+        or command_index < 0
+        or choice_index < 0
+        or command_indent < 0
+        or branch_index <= command_index
+        or trigger not in {0, 1, 2}
+        or switch_id <= 0
+        or not item.event_name.strip()
+        or item.map_id
+        or item.page
+        or _integer(item.rpg_command_code, "Code du choix commun") != 102
+        or _integer(item.rpg_parameter_index, "Paramètre du choix commun") != 0
+        or _integer(item.rpg_continuation_end, "Fin du choix commun") != command_index
+        or _integer(
+            item.rpg_choice_branch_parameter_index,
+            "Paramètre de la branche 402",
+        )
+        != 1
+        or not re.fullmatch(r"[0-9a-f]{64}", item.rpg_common_event_sha256)
+        or item.rpg_dialogue_segments
+    ):
+        raise ReconstructionError(
+            "Preuve structurelle 102/402 du choix commun absente ou incohérente."
+        )
+    if not item.translation or extract_protected(item.source) != extract_protected(
+        item.translation
+    ):
+        raise ReconstructionError(
+            "La traduction du choix commun ne conserve pas exactement les commandes."
+        )
+    return applicable
+
+
 def _validate_v21_1_private_scope(
     plan: ReconstructionPlan,
     detection,
@@ -994,6 +1085,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_common_event_single_scope(plan, detection)
     if plan.validation_scope == V21_1_COMMON_EVENT_401_VALIDATION_SCOPE:
         return _validate_v21_1_common_event_401_scope(plan, detection)
+    if plan.validation_scope == V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE:
+        return _validate_v21_1_common_event_choice_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -1060,6 +1153,11 @@ def _integer(value: str, field_name: str) -> int:
 
 
 def _supported_row_type(row_type: str, *, validation_scope: str = "") -> bool:
+    if (
+        validation_scope == V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE
+        and row_type == "Événement commun — Choix"
+    ):
+        return True
     if (
         validation_scope
         in {
@@ -1342,6 +1440,18 @@ def build_v21_1_common_event_401_validation_plan(
     )
 
 
+def build_v21_1_common_event_choice_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un seul libellé commun 102/402."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE,
+    )
+
+
 def _build_v21_1_private_validation_plan(
     game_root: Path,
     csv_path: Path,
@@ -1561,6 +1671,19 @@ def _strict_v21_choice_commands(
     item: PlanItem,
 ) -> tuple[RubyObject, RubyObject, int]:
     commands, index = _locate_v21_map_message(root, item)
+    return _strict_v21_choice_in_commands(commands, index, item)
+
+
+def _strict_v21_choice_in_commands(
+    commands: list,
+    index: int,
+    item: PlanItem,
+    *,
+    require_exact_text: bool = False,
+) -> tuple[RubyObject, RubyObject, int]:
+    """Valide une occurrence 102/402 sans dépendre de son conteneur RPG."""
+    if not (0 <= index < len(commands)):
+        raise ReconstructionError("Commande 102 du choix v21.1 introuvable")
     command = commands[index]
     expected_indent = _integer(item.rpg_command_indent, "Indentation RPG")
     choice_index = _integer(item.sub_index, "Index de choix")
@@ -1580,8 +1703,12 @@ def _strict_v21_choice_commands(
         or not parameters
         or not isinstance(parameters[0], list)
         or not (0 <= choice_index < len(parameters[0]))
-        or text_value(parameters[0][choice_index]).strip() != item.source.strip()
     ):
+        raise ReconstructionError("Texte 102 du choix v21.1 incohérent")
+    choice_text = text_value(parameters[0][choice_index])
+    expected_source = item.source if require_exact_text else item.source.strip()
+    actual_choice = choice_text if require_exact_text else choice_text.strip()
+    if actual_choice != expected_source:
         raise ReconstructionError("Texte 102 du choix v21.1 incohérent")
 
     branch_index = _integer(item.rpg_choice_branch_command, "Branche 402")
@@ -1603,8 +1730,12 @@ def _strict_v21_choice_commands(
         or not isinstance(branch_parameters, list)
         or len(branch_parameters) <= branch_parameter_index
         or branch_parameters[0] != choice_index
-        or text_value(branch_parameters[branch_parameter_index]).strip()
-        != item.source.strip()
+        or (
+            text_value(branch_parameters[branch_parameter_index])
+            if require_exact_text
+            else text_value(branch_parameters[branch_parameter_index]).strip()
+        )
+        != expected_source
     ):
         raise ReconstructionError("Branche 402 du choix v21.1 incohérente")
 
@@ -1626,7 +1757,12 @@ def _strict_v21_choice_commands(
             isinstance(candidate_parameters, list)
             and len(candidate_parameters) >= 2
             and candidate_parameters[0] == choice_index
-            and text_value(candidate_parameters[1]).strip() == item.source.strip()
+            and (
+                text_value(candidate_parameters[1])
+                if require_exact_text
+                else text_value(candidate_parameters[1]).strip()
+            )
+            == expected_source
         ):
             matching_branches.append(candidate_index)
     if matching_branches != [branch_index]:
@@ -1680,11 +1816,11 @@ def _apply_v21_1_map_items(root: RubyObject, items: list[PlanItem]) -> None:
     )
 
 
-def _strict_v21_common_event_dialogue(
+def _strict_v21_common_event_commands(
     root: list,
     item: PlanItem,
-) -> tuple[list, DialogueSegmentation, list[str]]:
-    """Localise un dialogue commun et revalide l'événement source complet."""
+) -> tuple[RubyObject, list, int]:
+    """Localise un événement commun et revalide sa preuve Marshal complète."""
     array_index = _integer(
         item.rpg_common_event_array_index,
         "Index de l'événement commun",
@@ -1714,6 +1850,15 @@ def _strict_v21_common_event_dialogue(
     command_index = _integer(item.command, "Commande de l'événement commun")
     if not isinstance(commands, list) or not (0 <= command_index < len(commands)):
         raise ReconstructionError("Liste ou commande d'événement commun v21.1 invalide")
+    return event, commands, command_index
+
+
+def _strict_v21_common_event_dialogue(
+    root: list,
+    item: PlanItem,
+) -> tuple[list, DialogueSegmentation, list[str]]:
+    """Localise un dialogue commun et revalide l'événement source complet."""
+    _event, commands, command_index = _strict_v21_common_event_commands(root, item)
     try:
         segmentations = {
             candidate.start_index: candidate
@@ -1753,6 +1898,62 @@ def _strict_v21_common_event_dialogue(
     return commands, segmentation, translated_pieces
 
 
+def _strict_v21_common_event_choice(
+    root: list,
+    item: PlanItem,
+) -> tuple[RubyObject, RubyObject, int]:
+    """Revalide une occurrence commune 102/402 contre l'événement extrait."""
+    _event, commands, command_index = _strict_v21_common_event_commands(root, item)
+    return _strict_v21_choice_in_commands(
+        commands,
+        command_index,
+        item,
+        require_exact_text=True,
+    )
+
+
+def _apply_v21_1_common_event_choice(
+    root: list,
+    item: PlanItem,
+) -> None:
+    """Remplace uniquement les deux chaînes du couple commun 102/402 prouvé."""
+    choice_command, branch_command, choice_index = _strict_v21_common_event_choice(
+        root,
+        item,
+    )
+    choice_parameters = choice_command.ivars["@parameters"]
+    branch_parameters = branch_command.ivars["@parameters"]
+    original_choice = choice_parameters[0][choice_index]
+    original_branch = branch_parameters[1]
+    choice_ivars = dumps(original_choice.ivars)
+    branch_ivars = dumps(original_branch.ivars)
+
+    choice_parameters[0][choice_index] = _ruby_string_set(
+        original_choice,
+        item.translation,
+    )
+    branch_parameters[1] = _ruby_string_set(
+        original_branch,
+        item.translation,
+    )
+    if (
+        dumps(choice_parameters[0][choice_index].ivars) != choice_ivars
+        or dumps(branch_parameters[1].ivars) != branch_ivars
+    ):
+        raise ReconstructionError(
+            "La traduction exigerait de modifier les métadonnées d'encodage "
+            "du choix commun."
+        )
+    _assert_utf8_translation_bytes(
+        choice_parameters[0][choice_index],
+        f"{item.fichier} — choix commun 102 v21.1 {item.id_stable}",
+    )
+    _assert_utf8_translation_bytes(
+        branch_parameters[1],
+        f"{item.fichier} — branche commune 402 v21.1 {item.id_stable}",
+    )
+
+
 def _apply_v21_1_common_event_items(
     root: list,
     items: list[PlanItem],
@@ -1767,6 +1968,13 @@ def _apply_v21_1_common_event_items(
         or len(items) != expected_count
     ):
         raise ReconstructionError("Corpus d'événements communs v21.1 invalide")
+    if items[0].type == "Événement commun — Choix":
+        if expected_count != 1:
+            raise ReconstructionError("Portée privée du choix commun v21.1 invalide")
+        _apply_v21_1_common_event_choice(root, items[0])
+        return
+    if any(item.type != "Événement commun — Dialogue" for item in items):
+        raise ReconstructionError("Type d'événement commun v21.1 inattendu")
     validated: list[
         tuple[PlanItem, list, DialogueSegmentation, list[str]]
     ] = []
@@ -2036,7 +2244,7 @@ def _validate_file(target_root: Path, relative: str, items: list[PlanItem]) -> l
     path = _resolve_group_path(target_root, relative, items)
     expected = {item.id_stable: item.translation for item in items}
     if relative.lower().endswith(".rxdata"):
-        if items and items[0].type == "Événement commun — Dialogue":
+        if items and items[0].type.startswith("Événement commun —"):
             extracted = extract_common_events(path, relative, strict=True)
         else:
             map_name = items[0].map_name if items else ""

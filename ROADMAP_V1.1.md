@@ -137,6 +137,22 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   réelle 101 + exactement une 401. Les CommonEvents avec plusieurs 401, les choix
   communs, `Point`, les PBS modernes et la capacité publique `RECONSTRUCT` restent
   bloqués.
+- aucun CommonEvent réel 101 + plusieurs 401 n'existe dans la référence v21.1 :
+  cette forme reste couverte synthétiquement et attend un futur corpus réel, sans
+  modification artificielle de la référence ;
+- une portée privée distincte couvre maintenant exactement un libellé de choix
+  commun 102 et son unique branche 402. Les tests refusent branche manquante ou
+  supplémentaire, sous-index, ordre, indentation ou paramètre hors texte modifié,
+  preuve altérée et provenance différente ;
+- le parcours technique réel 102/402 a extrait 30 402 lignes, dont 18 occurrences
+  CommonEvents et 4 choix, validé sauvegarde/reprise et exclusivité du Studio, puis
+  limité le changement à `Data/CommonEvents.rxdata`. La réextraction conserve la
+  même identité stable, la référence et la copie de travail restent inchangées et
+  le candidat court atteint l'écran titre sans modifier ses fichiers. Une validation
+  visuelle humaine a confirmé l'affichage et la sélection du choix modifié, puis la
+  navigation normale jusqu'à la fin de sa branche 402. Cette preuve reste limitée
+  à cette occurrence réelle ; les autres formes 102/402, le multi-401 réel, `Point`,
+  les PBS modernes et `RECONSTRUCT` public demeurent bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

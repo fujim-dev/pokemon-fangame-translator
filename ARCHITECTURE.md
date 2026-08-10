@@ -403,6 +403,22 @@ Déjà en place :
   occurrence réelle 101 + exactement une 401. Aucun CommonEvent avec plusieurs
   401, choix commun, `Point` ou PBS moderne n'est déduit de cette preuve, et
   `RECONSTRUCT` public reste absent ;
+- la référence v21.1 ne contient aucune occurrence commune réelle 101 suivie de
+  plusieurs 401. Cette forme demeure démontrée uniquement par fixtures synthétiques
+  et n'a pas été fabriquée dans le projet de référence ;
+- une quatrième portée privée réutilise la validation 102/402 des cartes dans le
+  conteneur `RPG::CommonEvent`. Elle exige exactement un libellé accepté, la preuve
+  complète de l'événement, le sous-index 102 et l'unique branche 402 correspondante,
+  puis modifie seulement ces deux chaînes. Une branche absente/supplémentaire, un
+  ordre, une indentation, un paramètre hors texte, une preuve ou une provenance
+  modifiés sont refusés ;
+- le round-trip réel 102/402 a extrait 30 402 occurrences, traversé la session
+  Studio exclusive et sa reprise, limité le changement du jeu à
+  `Data/CommonEvents.rxdata`, puis retrouvé la même identité stable. Le candidat
+  court atteint l'écran titre et reste inchangé après fermeture. Une validation
+  visuelle humaine a confirmé l'affichage du libellé modifié, sa sélection et la
+  navigation normale jusqu'à la fin de l'unique branche 402 ciblée. Cette porte
+  n'accorde pas `RECONSTRUCT` ;
 
 Encore partiel ou pas encore en place :
 
@@ -416,10 +432,11 @@ Encore partiel ou pas encore en place :
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 - limite de temps des analyses statiques approfondies autres que les sondes :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
-- élargissement réel des événements communs aux continuations 401 et aux choix,
+- élargissement réel des événements communs à un corpus multi-401 et 102/402 plus
+  représentatif au-delà de l'unique choix commun désormais validé,
   réinjection des sous-champs `Point`, PBS modernes et corpus réel encore plus
   large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
-  malgré les candidats bornés et leur validation visuelle concluante.
+  malgré les preuves techniques et les validations visuelles déjà conclues.
 
 ## 4. Problèmes à éviter dans la v1.1
 
@@ -497,8 +514,10 @@ Marshal complète. Deux portées unitaires distinctes possèdent désormais chac
 une preuve réelle et une validation visuelle humaine : la première est limitée à
 un dialogue commun simple composé d'une commande 101 ; la seconde, à une commande
 101 suivie d'exactement une continuation 401. Ces portes ne couvrent ni les
-CommonEvents avec plusieurs 401, ni les choix d'événements communs, ni les
-sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
+CommonEvents avec plusieurs 401. Une quatrième portée privée possède une preuve
+réelle et une validation visuelle humaine limitées à un seul choix commun 102/402
+et à sa branche correspondante. Ces portes ne couvrent ni les autres formes de
+choix communs, ni les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
 représentatif plus large reste nécessaire avant toute autorisation générale.
 
 #### `pokemon_flux.py`

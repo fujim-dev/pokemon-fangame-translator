@@ -672,6 +672,13 @@ def extract_common_events(
                 for choice_index, choice in enumerate(params[0]):
                     choice_text = text_value(choice).strip()
                     if looks_visible(choice_text):
+                        branch_command, branch_parameter = _choice_branch_metadata(
+                            commands,
+                            index,
+                            choice_index,
+                            choice_text,
+                            command.ivars.get("@indent", ""),
+                        )
                         rows.append({
                             "id_stable": stable_id(
                                 "common_event",
@@ -695,6 +702,8 @@ def extract_common_events(
                             "rpg_command_indent": command.ivars.get("@indent", ""),
                             "rpg_parameter_index": 0,
                             "rpg_continuation_end": index,
+                            "rpg_choice_branch_command": branch_command,
+                            "rpg_choice_branch_parameter_index": branch_parameter,
                             "rpg_common_event_array_index": array_index,
                             "rpg_common_event_trigger": event_trigger,
                             "rpg_common_event_switch_id": event_switch_id,
