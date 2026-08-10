@@ -13,6 +13,7 @@ from pathlib import Path
 
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
+from ruby_marshal_writer import dumps
 from safe_io import atomic_copy_file
 
 TRANSLATABLE_PBS_KEYS = {
@@ -611,6 +612,9 @@ def extract_common_events(
         declared_id = event.ivars.get("@id")
         event_id = declared_id if isinstance(declared_id, int) else array_index
         event_name = text_value(event.ivars.get("@name")) or f"Événement commun {event_id}"
+        event_sha256 = hashlib.sha256(dumps(event)).hexdigest()
+        event_trigger = event.ivars.get("@trigger", "")
+        event_switch_id = event.ivars.get("@switch_id", "")
         commands = event.ivars.get("@list", [])
         if not isinstance(commands, list):
             if strict:
@@ -653,6 +657,10 @@ def extract_common_events(
                         "rpg_parameter_index": 0,
                         "rpg_continuation_end": end_index,
                         "rpg_dialogue_segments": segmentation.metadata,
+                        "rpg_common_event_array_index": array_index,
+                        "rpg_common_event_trigger": event_trigger,
+                        "rpg_common_event_switch_id": event_switch_id,
+                        "rpg_common_event_sha256": event_sha256,
                         "texte_source": message,
                         "traduction_fr": "",
                         "codes_proteges": codes(message),
@@ -687,6 +695,10 @@ def extract_common_events(
                             "rpg_command_indent": command.ivars.get("@indent", ""),
                             "rpg_parameter_index": 0,
                             "rpg_continuation_end": index,
+                            "rpg_common_event_array_index": array_index,
+                            "rpg_common_event_trigger": event_trigger,
+                            "rpg_common_event_switch_id": event_switch_id,
+                            "rpg_common_event_sha256": event_sha256,
                             "texte_source": choice_text,
                             "traduction_fr": "",
                             "codes_proteges": codes(choice_text),
@@ -951,6 +963,10 @@ def _extract_snapshot(
                 "rpg_parameter_index",
                 "rpg_continuation_end",
                 "rpg_dialogue_segments",
+                "rpg_common_event_array_index",
+                "rpg_common_event_trigger",
+                "rpg_common_event_switch_id",
+                "rpg_common_event_sha256",
                 "rpg_choice_branch_command",
                 "rpg_choice_branch_parameter_index",
                 "pbs_encoding",
@@ -1024,7 +1040,10 @@ FIELDNAMES = [
     "id_stable", "type", "fichier", "carte_id", "carte_nom",
     "evenement_id", "evenement_nom", "page", "commande", "sous_index",
     "rpg_command_code", "rpg_command_indent", "rpg_parameter_index",
-    "rpg_continuation_end", "rpg_dialogue_segments", "rpg_choice_branch_command",
+    "rpg_continuation_end", "rpg_dialogue_segments",
+    "rpg_common_event_array_index", "rpg_common_event_trigger",
+    "rpg_common_event_switch_id", "rpg_common_event_sha256",
+    "rpg_choice_branch_command",
     "rpg_choice_branch_parameter_index",
     "texte_source", "traduction_fr", "codes_proteges", "statut",
     "pbs_encoding", "pbs_bom", "pbs_newline", "pbs_field_index",

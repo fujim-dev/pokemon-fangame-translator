@@ -34,13 +34,16 @@ from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
 from rpg_dialogue import (
+    DialogueSegmentation,
     DialogueSegmentationError,
     segment_dialogue_commands,
     split_dialogue_translation,
+    validate_dialogue_command_stream,
 )
 from structured_extractor import (
     ExtractionIntegrityError,
     build_extraction_inventory,
+    extract_common_events,
     extract_map,
     extract_message_bank,
     extract_pbs,
@@ -70,8 +73,12 @@ ESSENTIALS_ADAPTER_ID = "pokemon_essentials"
 V21_1_VALIDATION_SCOPE = "essentials_v21_1_message_bank_candidate_v1"
 V21_1_BANK_CORPUS_VALIDATION_SCOPE = "essentials_v21_1_message_bank_corpus_candidate_v1"
 V21_1_MAP_VALIDATION_SCOPE = "essentials_v21_1_map_dialogue_choice_candidate_v1"
+V21_1_COMMON_EVENTS_VALIDATION_SCOPE = (
+    "essentials_v21_1_common_event_dialogue_corpus_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
+V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
 V21_1_BANK_CORPUS_FILES = frozenset(
     {"Data/messages_core.dat", "Data/messages_game.dat"}
 )
@@ -80,6 +87,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_VALIDATION_SCOPE,
         V21_1_BANK_CORPUS_VALIDATION_SCOPE,
         V21_1_MAP_VALIDATION_SCOPE,
+        V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
     }
 )
 RESERVED_COPY_OUTPUTS = (
@@ -110,6 +118,10 @@ class PlanItem:
     rpg_parameter_index: str = ""
     rpg_continuation_end: str = ""
     rpg_dialogue_segments: str = ""
+    rpg_common_event_array_index: str = ""
+    rpg_common_event_trigger: str = ""
+    rpg_common_event_switch_id: str = ""
+    rpg_common_event_sha256: str = ""
     rpg_choice_branch_command: str = ""
     rpg_choice_branch_parameter_index: str = ""
     decision: str = "pending"  # applicable, skipped, blocked
@@ -286,6 +298,8 @@ def _path_matches_item_type(relative: str, row_type: str) -> bool:
             and lowered[0] == "data"
             and re.fullmatch(r"map\d{3,4}\.rxdata", lowered[1]) is not None
         )
+    if row_type == "Événement commun — Dialogue":
+        return lowered == ("data", "commonevents.rxdata")
     if row_type == "Banque de messages":
         return lowered in {
             ("data", "messages_game.dat"),
@@ -621,6 +635,163 @@ def _validate_v21_1_map_scope(
     return applicable
 
 
+def _validate_v21_1_common_events_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve à trois dialogues répartis sur deux événements communs."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 3 or len(applicable) != 3:
+        raise ReconstructionError(
+            "La validation des événements communs v21.1 exige exactement trois "
+            "dialogues acceptés et applicables."
+        )
+    if {item.id_stable for item in accepted} != {
+        item.id_stable for item in applicable
+    }:
+        raise ReconstructionError(
+            "Les occurrences acceptées ne correspondent pas exactement au corpus "
+            "d'événements communs applicable."
+        )
+    if any(
+        item.type != "Événement commun — Dialogue"
+        or item.fichier.replace("\\", "/").casefold()
+        != V21_1_COMMON_EVENTS_FILE.casefold()
+        for item in applicable
+    ):
+        raise ReconstructionError(
+            "Le corpus v21.1 est limité aux dialogues de Data/CommonEvents.rxdata."
+        )
+    if {path.casefold() for path in plan.source_hashes} != {
+        V21_1_COMMON_EVENTS_FILE.casefold()
+    }:
+        raise ReconstructionError(
+            "Le plan d'événements communs v21.1 cible un inventaire inattendu."
+        )
+
+    locations: set[tuple[int, int, int]] = set()
+    event_counts: Counter[tuple[int, int]] = Counter()
+    event_proofs: dict[tuple[int, int], set[tuple[int, int, str]]] = defaultdict(set)
+    segment_counts: list[int] = []
+    has_internal_line_control = False
+    for item in applicable:
+        array_index = _integer(
+            item.rpg_common_event_array_index,
+            "Index de l'événement commun",
+        )
+        event_id = _integer(item.event_id, "ID de l'événement commun")
+        command_index = _integer(item.command, "Commande de l'événement commun")
+        trigger = _integer(item.rpg_common_event_trigger, "Trigger de l'événement commun")
+        switch_id = _integer(
+            item.rpg_common_event_switch_id,
+            "Switch de l'événement commun",
+        )
+        if (
+            array_index <= 0
+            or event_id != array_index
+            or command_index < 0
+            or trigger not in {0, 1, 2}
+            or switch_id <= 0
+        ):
+            raise ReconstructionError(
+                "ID, index, trigger, switch ou commande de l'événement commun "
+                "v21.1 incohérent."
+            )
+        location = (array_index, event_id, command_index)
+        if location in locations:
+            raise ReconstructionError(
+                "Deux occurrences d'événement commun ciblent la même commande."
+            )
+        locations.add(location)
+        event_key = (array_index, event_id)
+        event_counts[event_key] += 1
+        if not re.fullmatch(r"[0-9a-f]{64}", item.rpg_common_event_sha256):
+            raise ReconstructionError(
+                "Empreinte de l'événement commun v21.1 absente ou invalide."
+            )
+        event_proofs[event_key].add(
+            (trigger, switch_id, item.rpg_common_event_sha256)
+        )
+        if (
+            item.map_id
+            or item.page
+            or item.sub_index
+            or _integer(item.rpg_command_code, "Code du dialogue commun") != 101
+            or _integer(item.rpg_parameter_index, "Paramètre du dialogue commun") != 0
+            or _integer(item.rpg_command_indent, "Indentation du dialogue commun") < 0
+            or _integer(item.rpg_continuation_end, "Fin du dialogue commun")
+            < command_index
+            or not item.rpg_dialogue_segments
+        ):
+            raise ReconstructionError(
+                "Métadonnées du dialogue d'événement commun v21.1 incohérentes."
+            )
+        if not item.translation or extract_protected(item.source) != extract_protected(
+            item.translation
+        ):
+            raise ReconstructionError(
+                "Une traduction d'événement commun ne conserve pas exactement "
+                "les commandes."
+            )
+        try:
+            metadata = json.loads(item.rpg_dialogue_segments)
+            segments = metadata["segments"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ReconstructionError(
+                "Preuve de segmentation de l'événement commun illisible."
+            ) from exc
+        if (
+            metadata.get("format") != "pft_rpg_dialogue_segments_v1"
+            or metadata.get("start_index") != command_index
+            or metadata.get("end_index")
+            != _integer(item.rpg_continuation_end, "Fin du dialogue commun")
+            or not isinstance(segments, list)
+            or not segments
+        ):
+            raise ReconstructionError(
+                "Preuve de segmentation de l'événement commun incohérente."
+            )
+        internal_counts: list[int] = []
+        for segment in segments:
+            if not isinstance(segment, dict):
+                raise ReconstructionError(
+                    "Preuve de segmentation de l'événement commun incohérente."
+                )
+            internal_count = segment.get("internal_line_control_count")
+            if not isinstance(internal_count, int) or internal_count < 0:
+                raise ReconstructionError(
+                    "Nombre de contrôles internes de l'événement commun invalide."
+                )
+            internal_counts.append(internal_count)
+        segment_counts.append(len(segments))
+        has_internal_line_control = (
+            has_internal_line_control or any(count > 0 for count in internal_counts)
+        )
+
+    if sorted(event_counts.values()) != [1, 2]:
+        raise ReconstructionError(
+            "Le corpus doit couvrir deux dialogues dans un événement commun et un "
+            "dialogue dans un second événement."
+        )
+    if any(len(proofs) != 1 for proofs in event_proofs.values()):
+        raise ReconstructionError(
+            "Les occurrences d'un même événement commun portent des preuves incompatibles."
+        )
+    if not any(count == 1 for count in segment_counts) or not any(
+        count >= 3 for count in segment_counts
+    ) or not has_internal_line_control:
+        raise ReconstructionError(
+            "Le corpus doit inclure un dialogue simple, plusieurs continuations 401 "
+            "et un contrôle interne \\n."
+        )
+    return applicable
+
+
 def _validate_v21_1_private_scope(
     plan: ReconstructionPlan,
     detection,
@@ -631,6 +802,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_bank_corpus_scope(plan, detection)
     if plan.validation_scope == V21_1_MAP_VALIDATION_SCOPE:
         return _validate_v21_1_map_scope(plan, detection)
+    if plan.validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
+        return _validate_v21_1_common_events_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -696,7 +869,12 @@ def _integer(value: str, field_name: str) -> int:
         raise ReconstructionError(f"{field_name} invalide : {value!r}")
 
 
-def _supported_row_type(row_type: str) -> bool:
+def _supported_row_type(row_type: str, *, validation_scope: str = "") -> bool:
+    if (
+        validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE
+        and row_type == "Événement commun — Dialogue"
+    ):
+        return True
     return row_type in SUPPORTED_TYPES or row_type.startswith("PBS —")
 
 
@@ -823,13 +1001,21 @@ def _build_plan_verified_body(
             rpg_parameter_index=row.get("rpg_parameter_index", ""),
             rpg_continuation_end=row.get("rpg_continuation_end", ""),
             rpg_dialogue_segments=row.get("rpg_dialogue_segments", ""),
+            rpg_common_event_array_index=row.get(
+                "rpg_common_event_array_index", ""
+            ),
+            rpg_common_event_trigger=row.get("rpg_common_event_trigger", ""),
+            rpg_common_event_switch_id=row.get(
+                "rpg_common_event_switch_id", ""
+            ),
+            rpg_common_event_sha256=row.get("rpg_common_event_sha256", ""),
             rpg_choice_branch_command=row.get("rpg_choice_branch_command", ""),
             rpg_choice_branch_parameter_index=row.get(
                 "rpg_choice_branch_parameter_index", ""
             ),
         )
 
-        if not _supported_row_type(item.type):
+        if not _supported_row_type(item.type, validation_scope=validation_scope):
             item.decision, item.reason = "skipped", "Type non pris en charge"
         else:
             eligible, reason = _row_is_eligible(row, mode)
@@ -922,6 +1108,18 @@ def build_v21_1_map_validation_plan(
         game_root,
         csv_path,
         V21_1_MAP_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_common_events_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit le corpus privé de trois dialogues d'événements communs v21.1."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
     )
 
 
@@ -1263,6 +1461,134 @@ def _apply_v21_1_map_items(root: RubyObject, items: list[PlanItem]) -> None:
     )
 
 
+def _strict_v21_common_event_dialogue(
+    root: list,
+    item: PlanItem,
+) -> tuple[list, DialogueSegmentation, list[str]]:
+    """Localise un dialogue commun et revalide l'événement source complet."""
+    array_index = _integer(
+        item.rpg_common_event_array_index,
+        "Index de l'événement commun",
+    )
+    event_id = _integer(item.event_id, "ID de l'événement commun")
+    if not (0 < array_index < len(root)) or event_id != array_index:
+        raise ReconstructionError("Événement commun v21.1 introuvable ou déplacé")
+    event = root[array_index]
+    if (
+        not isinstance(event, RubyObject)
+        or event.class_name != "RPG::CommonEvent"
+        or event.ivars.get("@id") != event_id
+        or not isinstance(event.ivars.get("@name"), RubyString)
+        or event.ivars.get("@trigger")
+        != _integer(item.rpg_common_event_trigger, "Trigger de l'événement commun")
+        or event.ivars.get("@switch_id")
+        != _integer(item.rpg_common_event_switch_id, "Switch de l'événement commun")
+    ):
+        raise ReconstructionError(
+            "ID, classe, trigger ou switch de l'événement commun v21.1 incohérent"
+        )
+    if hashlib.sha256(dumps(event)).hexdigest() != item.rpg_common_event_sha256:
+        raise ReconstructionError(
+            "L'événement commun v21.1 ne correspond plus à son empreinte extraite"
+        )
+    commands = event.ivars.get("@list")
+    command_index = _integer(item.command, "Commande de l'événement commun")
+    if not isinstance(commands, list) or not (0 <= command_index < len(commands)):
+        raise ReconstructionError("Liste ou commande d'événement commun v21.1 invalide")
+    try:
+        segmentations = {
+            candidate.start_index: candidate
+            for candidate in validate_dialogue_command_stream(commands)
+        }
+    except DialogueSegmentationError as exc:
+        raise ReconstructionError(
+            f"Segmentation 101/401 de l'événement commun invalide : {exc}"
+        ) from exc
+    segmentation = segmentations.get(command_index)
+    if segmentation is None:
+        raise ReconstructionError(
+            "La commande ciblée n'est pas le début d'un dialogue 101/401 valide."
+        )
+    if (
+        _integer(item.rpg_command_code, "Code du dialogue commun") != 101
+        or _integer(item.rpg_parameter_index, "Paramètre du dialogue commun") != 0
+        or _integer(item.rpg_command_indent, "Indentation du dialogue commun")
+        != segmentation.indent
+        or _integer(item.rpg_continuation_end, "Fin du dialogue commun")
+        != segmentation.end_index
+        or item.rpg_dialogue_segments != segmentation.metadata
+    ):
+        raise ReconstructionError(
+            "Preuve structurelle 101/401 de l'événement commun absente ou incohérente"
+        )
+    if segmentation.source_text.strip() != item.source.strip():
+        raise ReconstructionError(
+            "Le dialogue de l'événement commun ne correspond plus au projet"
+        )
+    try:
+        translated_pieces = split_dialogue_translation(segmentation, item.translation)
+    except DialogueSegmentationError as exc:
+        raise ReconstructionError(
+            f"Segmentation de la traduction de l'événement commun bloquée : {exc}"
+        ) from exc
+    return commands, segmentation, translated_pieces
+
+
+def _apply_v21_1_common_event_items(root: list, items: list[PlanItem]) -> None:
+    """Valide toutes les occurrences communes avant la première mutation."""
+    if (
+        not isinstance(root, list)
+        or not root
+        or root[0] is not None
+        or len(items) != 3
+    ):
+        raise ReconstructionError("Corpus d'événements communs v21.1 invalide")
+    validated: list[
+        tuple[PlanItem, list, DialogueSegmentation, list[str]]
+    ] = []
+    occupied: set[tuple[int, int]] = set()
+    for item in items:
+        commands, segmentation, translated_pieces = _strict_v21_common_event_dialogue(
+            root,
+            item,
+        )
+        array_index = _integer(
+            item.rpg_common_event_array_index,
+            "Index de l'événement commun",
+        )
+        for segment in segmentation.segments:
+            location = (array_index, segment.command_index)
+            if location in occupied:
+                raise ReconstructionError(
+                    "Deux dialogues d'événements communs se chevauchent."
+                )
+            occupied.add(location)
+        validated.append((item, commands, segmentation, translated_pieces))
+
+    for item, commands, segmentation, translated_pieces in validated:
+        for segment, translated_piece in zip(
+            segmentation.segments,
+            translated_pieces,
+        ):
+            event_command = commands[segment.command_index]
+            parameters = event_command.ivars["@parameters"]
+            original_string = parameters[segment.parameter_index]
+            original_ivars = dumps(original_string.ivars)
+            parameters[segment.parameter_index] = _ruby_string_set(
+                original_string,
+                translated_piece,
+            )
+            if dumps(parameters[segment.parameter_index].ivars) != original_ivars:
+                raise ReconstructionError(
+                    "La traduction exigerait de modifier les métadonnées d'encodage "
+                    "du dialogue d'événement commun."
+                )
+            _assert_utf8_translation_bytes(
+                parameters[segment.parameter_index],
+                f"{item.fichier} — événement commun v21.1 {item.id_stable}",
+            )
+
+
 def _walk_message_bank_refs(value, path=()):
     if isinstance(value, list):
         for index, child in enumerate(value):
@@ -1389,11 +1715,19 @@ def _apply_file(
     path = _resolve_group_path(target_root, relative, items)
     if relative.lower().endswith(".rxdata"):
         root = load(path)
-        if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
-            raise ReconstructionError("Seules les cartes RPG::Map sont modifiées en v1.0.2")
-        if validation_scope == V21_1_MAP_VALIDATION_SCOPE:
+        if validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
+            if not isinstance(root, list):
+                raise ReconstructionError("Table RPG::CommonEvent v21.1 attendue")
+            _apply_v21_1_common_event_items(root, items)
+        elif validation_scope == V21_1_MAP_VALIDATION_SCOPE:
+            if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
+                raise ReconstructionError("Carte RPG::Map v21.1 attendue")
             _apply_v21_1_map_items(root, items)
         else:
+            if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
+                raise ReconstructionError(
+                    "Seules les cartes RPG::Map sont modifiées en v1.0.2"
+                )
             for item in items:
                 _apply_map_item(root, item)
         _atomic_write_marshal(path, root)
@@ -1439,13 +1773,18 @@ def _expected_v21_1_private_payloads(
         path = _resolve_contained_path(source_root, relative)
         root = load(path)
         if relative.lower().endswith(".rxdata"):
-            if (
-                plan.validation_scope != V21_1_MAP_VALIDATION_SCOPE
-                or not isinstance(root, RubyObject)
-                or root.class_name != "RPG::Map"
+            if plan.validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
+                if not isinstance(root, list):
+                    raise ReconstructionError("Table RPG::CommonEvent v21.1 attendue")
+                _apply_v21_1_common_event_items(root, items)
+            elif (
+                plan.validation_scope == V21_1_MAP_VALIDATION_SCOPE
+                and isinstance(root, RubyObject)
+                and root.class_name == "RPG::Map"
             ):
+                _apply_v21_1_map_items(root, items)
+            else:
                 raise ReconstructionError("Carte RPG::Map v21.1 attendue")
-            _apply_v21_1_map_items(root, items)
         elif relative.lower().endswith(".dat"):
             if not isinstance(root, (list, dict)):
                 raise ReconstructionError("Banque v21.1 Array ou Hash attendue")
@@ -1463,8 +1802,11 @@ def _validate_file(target_root: Path, relative: str, items: list[PlanItem]) -> l
     path = _resolve_group_path(target_root, relative, items)
     expected = {item.id_stable: item.translation for item in items}
     if relative.lower().endswith(".rxdata"):
-        map_name = items[0].map_name if items else ""
-        extracted = extract_map(path, relative, map_name)
+        if items and items[0].type == "Événement commun — Dialogue":
+            extracted = extract_common_events(path, relative, strict=True)
+        else:
+            map_name = items[0].map_name if items else ""
+            extracted = extract_map(path, relative, map_name)
         actual = {row["id_stable"]: row["texte_source"] for row in extracted}
     elif relative.lower().endswith(".dat"):
         extracted = extract_message_bank(path, relative)
@@ -1499,6 +1841,11 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
             path = _resolve_group_path(game_root, relative, items)
             if relative.lower().endswith(".rxdata"):
                 root = load(path)
+                if plan.validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
+                    if not isinstance(root, list):
+                        raise ReconstructionError("Table RPG::CommonEvent v21.1 attendue")
+                    _apply_v21_1_common_event_items(root, items)
+                    continue
                 if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
                     raise ReconstructionError("Carte RPG::Map attendue")
                 if plan.validation_scope == V21_1_MAP_VALIDATION_SCOPE:

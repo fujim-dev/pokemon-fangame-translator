@@ -172,8 +172,31 @@ paramètre textuel prévu. Les commandes voisines, autres paramètres, métadonn
 indentations et ordre restent identiques. Une continuation 401 orpheline ou mal
 indentée, un paramètre invalide, un nombre de contrôles différent, ou une preuve
 absente/altérée bloque le cas. La même segmentation alimente l'extraction des
-événements communs, sans autoriser leur reconstruction ni accorder `RECONSTRUCT`
-au profil v21.1.
+événements communs, sans accorder `RECONSTRUCT` au profil v21.1.
+
+### AC-118 — Candidat synthétique d'événements communs v21.1
+
+Une portée interne distincte exige exactement trois dialogues acceptés répartis
+sur deux objets `RPG::CommonEvent` de `Data/CommonEvents.rxdata`, dont un dialogue
+simple et un dialogue avec plusieurs 401 et contrôle `\n` interne. Chaque ligne
+est liée à l'index du tableau Marshal, à `@id`, `@trigger`, `@switch_id`, à
+l'empreinte complète de l'événement et à la preuve 101/401 extraite.
+
+Avant toute mutation, toutes les occurrences sont revalidées ensemble et chaque
+flux complet de commandes est contrôlé par le segmentateur partagé. ID/index,
+trigger/switch, ordre, codes, indentations, paramètres non textuels, commandes
+voisines, choix/branches et ivars restent inchangés. Les seules valeurs modifiées
+sont les paramètres textuels explicitement ciblés. Un événement manquant ou
+remplacé, une structure/empreinte modifiée, un 401 orphelin ou mal indenté, une
+preuve incohérente, plusieurs occurrences incompatibles ou un chevauchement
+bloquent le candidat avant la première écriture.
+
+Après reconstruction sur copie, `CommonEvents.rxdata` doit être identique au
+payload complet calculé en mémoire, aucun fichier hors plan ne doit changer et
+la réextraction doit retrouver exactement les trois traductions. Ce test reste
+synthétique et privé : il n'accorde aucune capacité publique, ne couvre pas les
+sous-champs `Point` ou les PBS modernes et exige encore un round-trip réel sur
+copie de travail avant tout élargissement.
 
 ## 4. Analyse profonde
 

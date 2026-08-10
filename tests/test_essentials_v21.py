@@ -108,6 +108,53 @@ def validation_map(
     return RubyObject("RPG::Map", {"@events": {1: event}})
 
 
+def validation_common_events() -> list:
+    first_choice = ruby_text("First synthetic common choice")
+    second_choice = ruby_text("Second synthetic common choice")
+    first_event = RubyObject(
+        "RPG::CommonEvent",
+        {
+            "@id": 1,
+            "@name": ruby_text("Synthetic common event one"),
+            "@trigger": 1,
+            "@switch_id": 7,
+            "@synthetic_metadata": ruby_text("preserve first event metadata"),
+            "@list": [
+                event_command(108, [ruby_text("Neighbor before first dialogue")]),
+                event_command(101, [ruby_text("Simple common dialogue")]),
+                event_command(111, [12, 0]),
+                event_command(101, [ruby_text(r"Internal \n common control")], indent=1),
+                event_command(401, [ruby_text("Second common line")], indent=1),
+                event_command(401, [ruby_text("Third common line")], indent=1),
+                event_command(102, [[first_choice, second_choice], 0]),
+                event_command(402, [0, ruby_text("First synthetic common choice")]),
+                event_command(108, [ruby_text("First branch body")], indent=1),
+                event_command(402, [1, ruby_text("Second synthetic common choice")]),
+                event_command(108, [ruby_text("Second branch body")], indent=1),
+                event_command(404, []),
+                event_command(0, []),
+            ],
+        },
+    )
+    second_event = RubyObject(
+        "RPG::CommonEvent",
+        {
+            "@id": 2,
+            "@name": ruby_text("Synthetic common event two"),
+            "@trigger": 2,
+            "@switch_id": 9,
+            "@synthetic_metadata": ruby_text("preserve second event metadata"),
+            "@list": [
+                event_command(121, [4, 4, 0]),
+                event_command(101, [ruby_text("Second event dialogue")]),
+                event_command(201, [0, 3, 4, 5, 2, 0]),
+                event_command(0, []),
+            ],
+        },
+    )
+    return [None, first_event, second_event]
+
+
 def prepare_v21_game(
     root: Path,
     *,
@@ -120,6 +167,7 @@ def prepare_v21_game(
     map_validation: bool = False,
     ambiguous_choice_branch: bool = False,
     internal_line_control: bool = False,
+    common_event_corpus: bool = False,
     dangerous_marker: Path | None = None,
 ) -> None:
     ini_version = ini_version or script_version
@@ -154,6 +202,8 @@ def prepare_v21_game(
         1: RubyObject("RPG::MapInfo", {"@name": ruby_text("Synthetic intro")})
     }
     (data / "MapInfos.rxdata").write_bytes(dumps(map_infos))
+    if common_event_corpus:
+        (data / "CommonEvents.rxdata").write_bytes(dumps(validation_common_events()))
     core_bank = {}
     if bank_corpus:
         bank = [

@@ -101,9 +101,17 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
 - une métadonnée de segmentation immuable distingue désormais les frontières
   101/401 des contrôles `\n` internes. Les tests synthétiques couvrent plusieurs
   continuations, commandes voisines, métadonnées altérées et structures invalides ;
-- l'extraction des événements communs réutilise cette preuve, mais leur
-  reconstruction reste entièrement bloquée. Aucun parcours réel supplémentaire
-  ni aucune capacité publique n'a été ajouté dans ce lot.
+- l'extraction des événements communs réutilise cette preuve. Une porte interne
+  synthétique accepte seulement trois dialogues répartis sur deux événements et
+  revalide l'objet `RPG::CommonEvent` complet, son index/ID, trigger, switch et
+  toutes ses commandes avant de modifier les seuls paramètres textuels 101/401 ;
+- le round-trip synthétique conserve exactement les commandes voisines, choix et
+  branches, ivars, ordre et paramètres non textuels, puis réextrait les trois
+  traductions attendues. Un événement manquant/remplacé, une provenance modifiée,
+  des preuves incompatibles, un 401 invalide ou un chevauchement est refusé ;
+- aucun parcours réel d'événement commun ni aucune capacité publique n'a été
+  ajouté : cette preuve devra être répétée sur une copie de travail avant tout
+  élargissement, et `RECONSTRUCT` demeure absent.
 
 ## Phase 2 — Interface pilotée par capacités
 

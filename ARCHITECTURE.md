@@ -360,8 +360,18 @@ Déjà en place :
   commandes voisines sans les modifier. Une continuation orpheline, mal indentée,
   sans paramètre standard, ou une preuve absente/altérée bloque l'opération ;
 - les événements communs utilisent le même segmentateur pendant l'extraction et
-  exposent la même preuve immuable. Ils restent hors de toutes les portées privées
-  de reconstruction v21.1.
+  exposent la même preuve immuable. Une portée interne synthétique, toujours
+  inaccessible à l'interface, exige exactement trois dialogues répartis sur deux
+  événements de `Data/CommonEvents.rxdata`. Elle lie chaque occurrence à l'index
+  du tableau Marshal, à `@id`, `@trigger`, `@switch_id` et à l'empreinte complète
+  de l'objet `RPG::CommonEvent` ;
+- avant la première mutation, le flux complet de commandes de chaque événement
+  ciblé est revalidé par le segmentateur commun. L'événement, ses commandes non
+  textuelles, choix/branches, indentations, paramètres supplémentaires, ivars et
+  ordre doivent rester identiques. Un événement manquant/remplacé, un 401
+  orphelin ou mal indenté, des preuves incompatibles ou un chevauchement bloque
+  le candidat. Le fichier relu doit être identique au payload complet calculé en
+  mémoire et la réextraction doit retrouver les trois traductions exactes ;
 
 Encore partiel ou pas encore en place :
 
@@ -375,11 +385,12 @@ Encore partiel ou pas encore en place :
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 - limite de temps des analyses statiques approfondies autres que les sondes :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
-- validation de réinjection v21.1 pour les événements communs, sous-champs
-  `Point`, PBS modernes et un corpus réel encore plus large de cartes/banques.
-  Les dialogues avec contrôles `\n` internes disposent d'une preuve synthétique,
-  mais pas encore d'un corpus réel représentatif. La capacité publique
-  `RECONSTRUCT` reste absente malgré les candidats bornés concluants.
+- validation réelle de la portée synthétique d'événements communs v21.1,
+  réinjection des sous-champs `Point`, PBS modernes et corpus réel encore plus
+  large de cartes/banques. Les dialogues communs avec contrôles `\n` internes
+  disposent d'une preuve synthétique, mais pas encore d'un round-trip sur copie
+  de travail ni d'une validation en jeu. La capacité publique `RECONSTRUCT`
+  reste absente malgré les candidats bornés concluants.
 
 ## 4. Problèmes à éviter dans la v1.1
 
@@ -451,8 +462,10 @@ une banque de messages. Des preuves internes supplémentaires couvrent désormai
 les trois formes de banques observées et une page de carte bornée à un dialogue
 101/401 et un choix 102/402. Une preuve de segmentation permet aussi de traiter
 synthétiquement les contrôles `\n` internes sans confondre une commande avec une
-frontière 101/401. Elles ne couvrent ni la réinjection des événements communs, ni
-les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
+frontière 101/401. Une portée synthétique supplémentaire couvre trois dialogues
+répartis sur deux événements communs et préserve le reste de leur structure
+Marshal complète ; elle n'a pas encore de preuve réelle. Ces portes ne couvrent
+ni les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
 représentatif plus large reste nécessaire avant toute autorisation générale.
 
 #### `pokemon_flux.py`
