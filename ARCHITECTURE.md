@@ -372,6 +372,22 @@ Déjà en place :
   orphelin ou mal indenté, des preuves incompatibles ou un chevauchement bloque
   le candidat. Le fichier relu doit être identique au payload complet calculé en
   mémoire et la réextraction doit retrouver les trois traductions exactes ;
+- une seconde portée privée, plus étroite, accepte exactement un dialogue commun
+  composé d'une seule commande 101. Elle conserve la portée synthétique intacte
+  et sert uniquement au round-trip réel d'une occurrence dont la provenance,
+  l'événement complet et la segmentation ont été confirmés ;
+- cette portée unitaire a réussi sur une copie séparée de la référence v21.1 :
+  30 402 occurrences extraites, cycle Studio transactionnel vérifié, seul
+  `Data/CommonEvents.rxdata` modifié parmi 7 606 fichiers du jeu, réextraction à
+  la même identité stable. Le premier essai de lancement a révélé une limite de
+  chemin mkxp-z : un candidat sous une racine de 145 caractères affiche à tort
+  l'absence de script malgré un `Game.ini` et un `Scripts.rxdata` intacts. Une
+  nouvelle copie sous une racine courte atteint réellement l'écran titre ; les
+  portées privées refusent désormais par prudence toute racine dépassant 120
+  caractères avant la copie. Une validation humaine a ensuite confirmé dans le
+  jeu l'affichage complet de l'unique dialogue 101 ciblé. Cette preuve ne couvre
+  aucun 401 réel ni choix commun, et aucun contenu du jeu n'est conservé dans le
+  dépôt ;
 
 Encore partiel ou pas encore en place :
 
@@ -385,12 +401,10 @@ Encore partiel ou pas encore en place :
 - encapsulation complète de la stratégie de reconstruction dans chaque adaptateur.
 - limite de temps des analyses statiques approfondies autres que les sondes :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
-- validation réelle de la portée synthétique d'événements communs v21.1,
+- élargissement réel des événements communs aux continuations 401 et aux choix,
   réinjection des sous-champs `Point`, PBS modernes et corpus réel encore plus
-  large de cartes/banques. Les dialogues communs avec contrôles `\n` internes
-  disposent d'une preuve synthétique, mais pas encore d'un round-trip sur copie
-  de travail ni d'une validation en jeu. La capacité publique `RECONSTRUCT`
-  reste absente malgré les candidats bornés concluants.
+  large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
+  malgré les candidats bornés et leur validation visuelle concluante.
 
 ## 4. Problèmes à éviter dans la v1.1
 
@@ -464,9 +478,12 @@ les trois formes de banques observées et une page de carte bornée à un dialog
 synthétiquement les contrôles `\n` internes sans confondre une commande avec une
 frontière 101/401. Une portée synthétique supplémentaire couvre trois dialogues
 répartis sur deux événements communs et préserve le reste de leur structure
-Marshal complète ; elle n'a pas encore de preuve réelle. Ces portes ne couvrent
-ni les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
-représentatif plus large reste nécessaire avant toute autorisation générale.
+Marshal complète. Une portée unitaire distincte possède désormais une preuve
+réelle et une validation visuelle humaine limitées à un dialogue commun simple
+composé d'une commande 101. Ces portes ne couvrent ni des continuations 401
+réelles, ni les choix d'événements communs, ni les sous-champs `Point`, ni
+l'ensemble des PBS modernes ; un corpus réel représentatif plus large reste
+nécessaire avant toute autorisation générale.
 
 #### `pokemon_flux.py`
 

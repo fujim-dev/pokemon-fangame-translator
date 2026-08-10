@@ -76,9 +76,13 @@ V21_1_MAP_VALIDATION_SCOPE = "essentials_v21_1_map_dialogue_choice_candidate_v1"
 V21_1_COMMON_EVENTS_VALIDATION_SCOPE = (
     "essentials_v21_1_common_event_dialogue_corpus_candidate_v1"
 )
+V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE = (
+    "essentials_v21_1_common_event_single_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
+V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS = 120
 V21_1_BANK_CORPUS_FILES = frozenset(
     {"Data/messages_core.dat", "Data/messages_game.dat"}
 )
@@ -88,8 +92,26 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_BANK_CORPUS_VALIDATION_SCOPE,
         V21_1_MAP_VALIDATION_SCOPE,
         V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
+        V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
     }
 )
+
+
+def _is_v21_1_common_event_validation_scope(scope: str) -> bool:
+    return scope in {
+        V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
+        V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+    }
+
+
+def _v21_1_common_event_expected_count(scope: str) -> int:
+    if scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
+        return 3
+    if scope == V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE:
+        return 1
+    raise ReconstructionError("Portée d'événement commun v21.1 inconnue.")
+
+
 RESERVED_COPY_OUTPUTS = (
     "PFT_RECONSTRUCTION_V1.0.txt",
     "LIRE_AVANT_DE_JOUER.txt",
@@ -792,6 +814,111 @@ def _validate_v21_1_common_events_scope(
     return applicable
 
 
+def _validate_v21_1_common_event_single_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve réelle à un seul dialogue commun précisément identifié."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation unitaire d'événement commun v21.1 exige exactement "
+            "un dialogue accepté et applicable."
+        )
+    item = applicable[0]
+    if accepted[0].id_stable != item.id_stable:
+        raise ReconstructionError(
+            "L'occurrence acceptée ne correspond pas au dialogue commun applicable."
+        )
+    if (
+        item.type != "Événement commun — Dialogue"
+        or item.fichier.replace("\\", "/").casefold()
+        != V21_1_COMMON_EVENTS_FILE.casefold()
+        or {path.casefold() for path in plan.source_hashes}
+        != {V21_1_COMMON_EVENTS_FILE.casefold()}
+    ):
+        raise ReconstructionError(
+            "La validation unitaire est limitée à Data/CommonEvents.rxdata."
+        )
+
+    array_index = _integer(
+        item.rpg_common_event_array_index,
+        "Index de l'événement commun",
+    )
+    event_id = _integer(item.event_id, "ID de l'événement commun")
+    command_index = _integer(item.command, "Commande de l'événement commun")
+    trigger = _integer(item.rpg_common_event_trigger, "Trigger de l'événement commun")
+    switch_id = _integer(
+        item.rpg_common_event_switch_id,
+        "Switch de l'événement commun",
+    )
+    continuation_end = _integer(
+        item.rpg_continuation_end,
+        "Fin du dialogue commun",
+    )
+    if (
+        array_index <= 0
+        or event_id != array_index
+        or command_index < 0
+        or trigger not in {0, 1, 2}
+        or switch_id <= 0
+        or not item.event_name.strip()
+        or item.map_id
+        or item.page
+        or item.sub_index
+        or _integer(item.rpg_command_code, "Code du dialogue commun") != 101
+        or _integer(item.rpg_parameter_index, "Paramètre du dialogue commun") != 0
+        or _integer(item.rpg_command_indent, "Indentation du dialogue commun") < 0
+        or continuation_end < command_index
+        or not re.fullmatch(r"[0-9a-f]{64}", item.rpg_common_event_sha256)
+        or not item.rpg_dialogue_segments
+    ):
+        raise ReconstructionError(
+            "Preuve structurelle du dialogue commun unitaire absente ou incohérente."
+        )
+    if not item.translation or extract_protected(item.source) != extract_protected(
+        item.translation
+    ):
+        raise ReconstructionError(
+            "La traduction unitaire ne conserve pas exactement les commandes."
+        )
+    try:
+        metadata = json.loads(item.rpg_dialogue_segments)
+        segments = metadata["segments"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ReconstructionError(
+            "Preuve de segmentation du dialogue commun unitaire illisible."
+        ) from exc
+    if (
+        metadata.get("format") != "pft_rpg_dialogue_segments_v1"
+        or metadata.get("start_index") != command_index
+        or metadata.get("end_index") != continuation_end
+        or not isinstance(segments, list)
+        or len(segments) != 1
+    ):
+        raise ReconstructionError(
+            "La preuve réelle est volontairement limitée à une seule commande 101."
+        )
+    segment = segments[0]
+    if (
+        not isinstance(segment, dict)
+        or segment.get("command_code") != 101
+        or segment.get("command_index") != command_index
+        or segment.get("parameter_index") != 0
+        or not isinstance(segment.get("internal_line_control_count"), int)
+        or segment["internal_line_control_count"] < 0
+    ):
+        raise ReconstructionError(
+            "Métadonnées du segment 101 unitaire absentes ou incohérentes."
+        )
+    return applicable
+
+
 def _validate_v21_1_private_scope(
     plan: ReconstructionPlan,
     detection,
@@ -804,6 +931,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_map_scope(plan, detection)
     if plan.validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
         return _validate_v21_1_common_events_scope(plan, detection)
+    if plan.validation_scope == V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE:
+        return _validate_v21_1_common_event_single_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -871,7 +1000,11 @@ def _integer(value: str, field_name: str) -> int:
 
 def _supported_row_type(row_type: str, *, validation_scope: str = "") -> bool:
     if (
-        validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE
+        validation_scope
+        in {
+            V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
+            V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+        }
         and row_type == "Événement commun — Dialogue"
     ):
         return True
@@ -1120,6 +1253,18 @@ def build_v21_1_common_events_validation_plan(
         game_root,
         csv_path,
         V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_common_event_single_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un seul dialogue commun v21.1 simple."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
     )
 
 
@@ -1534,13 +1679,18 @@ def _strict_v21_common_event_dialogue(
     return commands, segmentation, translated_pieces
 
 
-def _apply_v21_1_common_event_items(root: list, items: list[PlanItem]) -> None:
+def _apply_v21_1_common_event_items(
+    root: list,
+    items: list[PlanItem],
+    *,
+    expected_count: int,
+) -> None:
     """Valide toutes les occurrences communes avant la première mutation."""
     if (
         not isinstance(root, list)
         or not root
         or root[0] is not None
-        or len(items) != 3
+        or len(items) != expected_count
     ):
         raise ReconstructionError("Corpus d'événements communs v21.1 invalide")
     validated: list[
@@ -1715,10 +1865,14 @@ def _apply_file(
     path = _resolve_group_path(target_root, relative, items)
     if relative.lower().endswith(".rxdata"):
         root = load(path)
-        if validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
+        if _is_v21_1_common_event_validation_scope(validation_scope):
             if not isinstance(root, list):
                 raise ReconstructionError("Table RPG::CommonEvent v21.1 attendue")
-            _apply_v21_1_common_event_items(root, items)
+            _apply_v21_1_common_event_items(
+                root,
+                items,
+                expected_count=_v21_1_common_event_expected_count(validation_scope),
+            )
         elif validation_scope == V21_1_MAP_VALIDATION_SCOPE:
             if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
                 raise ReconstructionError("Carte RPG::Map v21.1 attendue")
@@ -1773,10 +1927,16 @@ def _expected_v21_1_private_payloads(
         path = _resolve_contained_path(source_root, relative)
         root = load(path)
         if relative.lower().endswith(".rxdata"):
-            if plan.validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
+            if _is_v21_1_common_event_validation_scope(plan.validation_scope):
                 if not isinstance(root, list):
                     raise ReconstructionError("Table RPG::CommonEvent v21.1 attendue")
-                _apply_v21_1_common_event_items(root, items)
+                _apply_v21_1_common_event_items(
+                    root,
+                    items,
+                    expected_count=_v21_1_common_event_expected_count(
+                        plan.validation_scope
+                    ),
+                )
             elif (
                 plan.validation_scope == V21_1_MAP_VALIDATION_SCOPE
                 and isinstance(root, RubyObject)
@@ -1841,10 +2001,16 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
             path = _resolve_group_path(game_root, relative, items)
             if relative.lower().endswith(".rxdata"):
                 root = load(path)
-                if plan.validation_scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
+                if _is_v21_1_common_event_validation_scope(plan.validation_scope):
                     if not isinstance(root, list):
                         raise ReconstructionError("Table RPG::CommonEvent v21.1 attendue")
-                    _apply_v21_1_common_event_items(root, items)
+                    _apply_v21_1_common_event_items(
+                        root,
+                        items,
+                        expected_count=_v21_1_common_event_expected_count(
+                            plan.validation_scope
+                        ),
+                    )
                     continue
                 if not isinstance(root, RubyObject) or root.class_name != "RPG::Map":
                     raise ReconstructionError("Carte RPG::Map attendue")
@@ -2034,6 +2200,16 @@ def _reconstruct_copy_verified_body(
         )
     _assert_reserved_copy_outputs_absent(source_root)
     target_root = target_root.expanduser().resolve()
+    if (
+        plan.validation_scope in V21_1_PRIVATE_VALIDATION_SCOPES
+        and len(str(target_root)) > V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS
+    ):
+        raise ReconstructionError(
+            "Le chemin de destination est trop long pour la validation mkxp-z v21.1 "
+            f"({len(str(target_root))} caractères ; maximum prudent : "
+            f"{V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS}). Choisissez un dossier "
+            "de sortie plus proche de la racine du disque."
+        )
     report_dir = report_dir.expanduser().resolve()
     if _is_same_or_within(report_dir, source_root):
         raise ReconstructionError("Le dossier des rapports ne peut pas être placé dans le fangame original.")

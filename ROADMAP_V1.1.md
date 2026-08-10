@@ -109,9 +109,22 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   branches, ivars, ordre et paramètres non textuels, puis réextrait les trois
   traductions attendues. Un événement manquant/remplacé, une provenance modifiée,
   des preuves incompatibles, un 401 invalide ou un chevauchement est refusé ;
-- aucun parcours réel d'événement commun ni aucune capacité publique n'a été
-  ajouté : cette preuve devra être répétée sur une copie de travail avant tout
-  élargissement, et `RECONSTRUCT` demeure absent.
+- ce corpus synthétique n'ajoute aucune capacité publique : sa preuve devait être
+  répétée sur une copie de travail avant tout élargissement, et `RECONSTRUCT`
+  demeure absent ;
+- une portée privée unitaire séparée a ensuite validé une occurrence réelle
+  simple, sans assouplir le corpus synthétique : extraction de 30 402 lignes,
+  sauvegarde/réouverture transactionnelles du Studio, candidat limité à
+  `Data/CommonEvents.rxdata`, comparaison des 7 606 fichiers, réextraction à la
+  même identité stable ;
+- un premier chemin de candidat trop long a provoqué l'erreur mkxp-z d'absence
+  de script alors que `Game.ini` et `Scripts.rxdata` étaient byte-identical. Le
+  même candidat sous une racine courte atteint l'écran titre et une destination
+  privée dépassant 120 caractères est maintenant refusée avant toute copie ;
+- la validation humaine a confirmé l'affichage complet de l'unique dialogue 101
+  ciblé lors du déclenchement réel de l'événement commun. Cette preuve ne couvre
+  pas les choix communs, les dialogues réels avec continuations 401, `Point` ou
+  les PBS modernes, et n'ajoute toujours pas `RECONSTRUCT`.
 
 ## Phase 2 — Interface pilotée par capacités
 

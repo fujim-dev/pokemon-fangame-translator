@@ -198,6 +198,37 @@ synthétique et privé : il n'accorde aucune capacité publique, ne couvre pas l
 sous-champs `Point` ou les PBS modernes et exige encore un round-trip réel sur
 copie de travail avant tout élargissement.
 
+### AC-119 — Validation réelle unitaire d'un événement commun v21.1
+
+Une seconde portée interne, distincte du corpus AC-118, accepte exactement une
+occurrence de dialogue commun composée d'une seule commande 101. Elle exige le
+même profil v21.1 en lecture seule, le projet `accepted`, un événement nommé dont
+l'index correspond à l'ID, un trigger/switch valide, l'empreinte complète de
+l'objet et une preuve de segmentation à un seul segment. Toute autre occurrence,
+un choix, une continuation 401 ou un autre fichier est refusé par cette portée.
+
+Le parcours privé réel doit partir d'une copie byte-identical de la référence,
+passer par l'extraction complète et la sauvegarde transactionnelle du Studio,
+puis reconstruire une troisième copie. Parmi les fichiers provenant du jeu,
+seul `Data/CommonEvents.rxdata` peut différer. La structure Marshal, tous les
+événements et commandes non ciblés, les métadonnées de la commande cible et
+l'identifiant stable réextrait doivent rester identiques. Une provenance modifiée
+ou l'empreinte déjà altérée de l'événement doit être refusée.
+
+Cette preuve a réussi techniquement sur la référence v21.1 : 30 402 occurrences,
+7 606 fichiers de jeu contrôlés et une occurrence réextraite à la même identité.
+La racine de sortie privée est limitée prudemment à 120 caractères : une racine
+plus longue est refusée avant la copie, car le binaire mkxp-z de référence a
+affiché une absence erronée de script à 145 caractères malgré des fichiers
+`Game.ini` et `Scripts.rxdata` intacts. Le candidat reconstruit sous une racine
+courte a atteint l'écran titre, puis une validation humaine a confirmé en jeu
+l'affichage complet de la traduction ciblée lors du déclenchement réel de
+l'événement commun. Cette preuve reste strictement limitée à cette occurrence
+simple composée d'une commande 101 : elle ne valide pas des continuations 401
+réelles, des choix 102/402 d'événements communs, les sous-champs `Point` ou les
+PBS modernes. Elle ne conserve aucun contenu privé dans le dépôt et ne confère
+toujours pas `RECONSTRUCT` au profil public.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

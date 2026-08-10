@@ -7,9 +7,12 @@ from pathlib import Path
 from adapters import ESSENTIALS_V21_1_READONLY_PROFILE, PokemonEssentialsAdapter
 from analysis.integrity import compare_snapshots, snapshot_tree
 from reconstruction_engine import (
+    V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+    V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS,
     V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
     ReconstructionError,
     build_plan,
+    build_v21_1_common_event_single_validation_plan,
     build_v21_1_common_events_validation_plan,
     reconstruct_copy,
     simulate_plan,
@@ -68,7 +71,121 @@ def prepare_project(base: Path, *, explicit_non_utf8_encoding: bool = False):
     return root, csv_path, rows, dialogues
 
 
+def prepare_single_dialogue_project(base: Path):
+    root = base / "game"
+    project = base / "project"
+    prepare_v21_game(root, common_event_corpus=True)
+    rows = [
+        dict(row)
+        for row in PokemonEssentialsAdapter().extract_with_provenance(root).rows
+    ]
+    selected = [
+        row
+        for row in rows
+        if row["type"] == "Événement commun — Dialogue"
+        and row["evenement_id"] == 1
+        and row["commande"] == 1
+    ]
+    if len(selected) != 1:
+        raise AssertionError("La fixture doit exposer un dialogue commun simple")
+    selected[0]["traduction_fr"] = (
+        selected[0]["texte_source"] + " [TEST PFT COMMON SINGLE]"
+    )
+    selected[0]["statut"] = "Accepté"
+    csv_path = project / "textes_structures.csv"
+    write_extracted_project_csv(csv_path, rows)
+    finalize_verified_essentials_project(
+        root,
+        csv_path,
+        adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+        declared_version="21.1",
+    )
+    return root, csv_path, selected[0]
+
+
 class EssentialsCommonEventCandidateTests(unittest.TestCase):
+    def test_single_common_event_scope_is_private_bounded_and_reextractable(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pft_test_v21_common_single_"
+        ) as temporary:
+            base = Path(temporary)
+            root, csv_path, selected = prepare_single_dialogue_project(base)
+            target = base / "candidate"
+            source_before = snapshot_tree(root)
+
+            with self.assertRaisesRegex(ReconstructionError, "Reconstruction bloquée"):
+                build_plan(root, csv_path, mode="accepted")
+            with self.assertRaisesRegex(ReconstructionError, "trois"):
+                build_v21_1_common_events_validation_plan(root, csv_path)
+
+            plan = build_v21_1_common_event_single_validation_plan(root, csv_path)
+            self.assertEqual(
+                V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+                plan.validation_scope,
+            )
+            self.assertEqual(1, plan.counts().get("applicable", 0))
+            simulate_plan(plan)
+            result = reconstruct_copy(plan, target, base / "reports")
+
+            self.assertEqual([COMMON_EVENTS_FILE], result.modified_files)
+            self.assertEqual(1, result.applied)
+            self.assertTrue(result.integrity_valid)
+            self.assertTrue(result.original_unchanged)
+            self.assertTrue(compare_snapshots(source_before, snapshot_tree(root)).passed)
+            reextracted = {
+                row["id_stable"]: row["texte_source"]
+                for row in extract_common_events(
+                    target / COMMON_EVENTS_FILE,
+                    COMMON_EVENTS_FILE,
+                    strict=True,
+                )
+            }
+            self.assertEqual(
+                selected["traduction_fr"],
+                reextracted[selected["id_stable"]],
+            )
+
+    def test_single_common_event_scope_refuses_source_changed_after_plan(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pft_test_v21_common_single_changed_"
+        ) as temporary:
+            base = Path(temporary)
+            root, csv_path, _selected = prepare_single_dialogue_project(base)
+            plan = build_v21_1_common_event_single_validation_plan(root, csv_path)
+            common_path = root / COMMON_EVENTS_FILE
+            common_events = load(common_path)
+            common_events[1].ivars["@trigger"] = 2
+            common_path.write_bytes(dumps(common_events))
+
+            with self.assertRaisesRegex(ReconstructionError, "bloquée"):
+                simulate_plan(plan)
+            self.assertTrue(any(
+                "simulation" in item.reason.casefold()
+                for item in plan.items
+                if item.status == "Accepté"
+            ))
+
+    def test_single_common_event_scope_refuses_unlaunchable_long_mkxp_path(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pft_test_v21_common_long_target_"
+        ) as temporary:
+            base = Path(temporary)
+            root, csv_path, _selected = prepare_single_dialogue_project(base)
+            plan = simulate_plan(
+                build_v21_1_common_event_single_validation_plan(root, csv_path)
+            )
+            missing = V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS + 1 - len(str(base.resolve()))
+            target = base / ("x" * max(1, missing))
+            self.assertGreater(
+                len(str(target.resolve())),
+                V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS,
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "trop long.*mkxp-z"):
+                reconstruct_copy(plan, target, base / "reports")
+
+            self.assertFalse(target.exists())
+
     def test_common_event_dialogue_corpus_roundtrip_preserves_full_structure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_test_v21_common_roundtrip_") as temporary:
             base = Path(temporary)
