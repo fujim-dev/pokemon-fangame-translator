@@ -125,6 +125,18 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   ciblé lors du déclenchement réel de l'événement commun. Cette preuve ne couvre
   pas les choix communs, les dialogues réels avec continuations 401, `Point` ou
   les PBS modernes, et n'ajoute toujours pas `RECONSTRUCT`.
+- une portée privée séparée couvre maintenant exactement une occurrence réelle
+  101 + une 401. Les tests synthétiques refusent continuation manquante,
+  supplémentaire, mal indentée ou déplacée, paramètre inattendu, preuve altérée
+  et provenance différente ;
+- le parcours réel a extrait 30 402 lignes, validé la session Studio exclusive et
+  sa reprise, puis reconstruit uniquement `Data/CommonEvents.rxdata` parmi 7 606
+  fichiers du jeu. La réextraction retrouve l'identité stable et le candidat
+  court atteint la fenêtre de titre sans modifier ses fichiers. Une validation
+  visuelle humaine a confirmé l'affichage complet de cette unique occurrence
+  réelle 101 + exactement une 401. Les CommonEvents avec plusieurs 401, les choix
+  communs, `Point`, les PBS modernes et la capacité publique `RECONSTRUCT` restent
+  bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

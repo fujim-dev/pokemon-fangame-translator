@@ -79,6 +79,9 @@ V21_1_COMMON_EVENTS_VALIDATION_SCOPE = (
 V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE = (
     "essentials_v21_1_common_event_single_candidate_v1"
 )
+V21_1_COMMON_EVENT_401_VALIDATION_SCOPE = (
+    "essentials_v21_1_common_event_401_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -93,6 +96,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_MAP_VALIDATION_SCOPE,
         V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+        V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
     }
 )
 
@@ -101,6 +105,7 @@ def _is_v21_1_common_event_validation_scope(scope: str) -> bool:
     return scope in {
         V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+        V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
     }
 
 
@@ -108,6 +113,8 @@ def _v21_1_common_event_expected_count(scope: str) -> int:
     if scope == V21_1_COMMON_EVENTS_VALIDATION_SCOPE:
         return 3
     if scope == V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE:
+        return 1
+    if scope == V21_1_COMMON_EVENT_401_VALIDATION_SCOPE:
         return 1
     raise ReconstructionError("Portée d'événement commun v21.1 inconnue.")
 
@@ -814,15 +821,19 @@ def _validate_v21_1_common_events_scope(
     return applicable
 
 
-def _validate_v21_1_common_event_single_scope(
+def _validate_v21_1_common_event_unit_scope(
     plan: ReconstructionPlan,
     detection,
+    *,
+    validation_scope: str,
+    expected_codes: tuple[int, ...],
+    require_internal_line_control: bool,
 ) -> list[PlanItem]:
-    """Borne la preuve réelle à un seul dialogue commun précisément identifié."""
+    """Borne une preuve réelle à une seule séquence commune précisément décrite."""
     applicable = _validate_v21_1_scope_header(
         plan,
         detection,
-        V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+        validation_scope,
     )
     accepted = [item for item in plan.items if item.status == "Accepté"]
     if len(accepted) != 1 or len(applicable) != 1:
@@ -835,6 +846,10 @@ def _validate_v21_1_common_event_single_scope(
         raise ReconstructionError(
             "L'occurrence acceptée ne correspond pas au dialogue commun applicable."
         )
+    command_indent = _integer(
+        item.rpg_command_indent,
+        "Indentation du dialogue commun",
+    )
     if (
         item.type != "Événement commun — Dialogue"
         or item.fichier.replace("\\", "/").casefold()
@@ -873,8 +888,8 @@ def _validate_v21_1_common_event_single_scope(
         or item.sub_index
         or _integer(item.rpg_command_code, "Code du dialogue commun") != 101
         or _integer(item.rpg_parameter_index, "Paramètre du dialogue commun") != 0
-        or _integer(item.rpg_command_indent, "Indentation du dialogue commun") < 0
-        or continuation_end < command_index
+        or command_indent < 0
+        or continuation_end != command_index + len(expected_codes) - 1
         or not re.fullmatch(r"[0-9a-f]{64}", item.rpg_common_event_sha256)
         or not item.rpg_dialogue_segments
     ):
@@ -896,27 +911,71 @@ def _validate_v21_1_common_event_single_scope(
         ) from exc
     if (
         metadata.get("format") != "pft_rpg_dialogue_segments_v1"
+        or metadata.get("boundary") != r"\n"
         or metadata.get("start_index") != command_index
         or metadata.get("end_index") != continuation_end
+        or metadata.get("indent") != command_indent
         or not isinstance(segments, list)
-        or len(segments) != 1
+        or len(segments) != len(expected_codes)
     ):
         raise ReconstructionError(
-            "La preuve réelle est volontairement limitée à une seule commande 101."
+            "La preuve réelle ne correspond pas à la forme 101/401 attendue."
         )
-    segment = segments[0]
-    if (
-        not isinstance(segment, dict)
-        or segment.get("command_code") != 101
-        or segment.get("command_index") != command_index
-        or segment.get("parameter_index") != 0
-        or not isinstance(segment.get("internal_line_control_count"), int)
-        or segment["internal_line_control_count"] < 0
-    ):
+    internal_counts: list[int] = []
+    for offset, (segment, expected_code) in enumerate(zip(segments, expected_codes)):
+        if not isinstance(segment, dict):
+            raise ReconstructionError(
+                "Métadonnées de la séquence 101/401 unitaire incohérentes."
+            )
+        internal_count = segment.get("internal_line_control_count")
+        if (
+            segment.get("command_code") != expected_code
+            or segment.get("command_index") != command_index + offset
+            or segment.get("indent") != command_indent
+            or segment.get("parameter_index") != 0
+            or segment.get("parameter_count") != 1
+            or not re.fullmatch(r"[0-9a-f]{64}", str(segment.get("command_sha256", "")))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(segment.get("parameter_sha256", "")))
+            or not isinstance(internal_count, int)
+            or internal_count < 0
+        ):
+            raise ReconstructionError(
+                "Métadonnées de la séquence 101/401 unitaire incohérentes."
+            )
+        internal_counts.append(internal_count)
+    if require_internal_line_control and not any(internal_counts):
         raise ReconstructionError(
-            "Métadonnées du segment 101 unitaire absentes ou incohérentes."
+            "La preuve 101/401 réelle doit conserver ses contrôles internes \\n."
         )
     return applicable
+
+
+def _validate_v21_1_common_event_single_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la première preuve réelle à une seule commande 101."""
+    return _validate_v21_1_common_event_unit_scope(
+        plan,
+        detection,
+        validation_scope=V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+        expected_codes=(101,),
+        require_internal_line_control=False,
+    )
+
+
+def _validate_v21_1_common_event_401_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve réelle suivante à exactement une séquence 101+401."""
+    return _validate_v21_1_common_event_unit_scope(
+        plan,
+        detection,
+        validation_scope=V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
+        expected_codes=(101, 401),
+        require_internal_line_control=True,
+    )
 
 
 def _validate_v21_1_private_scope(
@@ -933,6 +992,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_common_events_scope(plan, detection)
     if plan.validation_scope == V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE:
         return _validate_v21_1_common_event_single_scope(plan, detection)
+    if plan.validation_scope == V21_1_COMMON_EVENT_401_VALIDATION_SCOPE:
+        return _validate_v21_1_common_event_401_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -1004,6 +1065,7 @@ def _supported_row_type(row_type: str, *, validation_scope: str = "") -> bool:
         in {
             V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
             V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+            V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
         }
         and row_type == "Événement commun — Dialogue"
     ):
@@ -1265,6 +1327,18 @@ def build_v21_1_common_event_single_validation_plan(
         game_root,
         csv_path,
         V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_common_event_401_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'une unique séquence commune 101+401."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
     )
 
 

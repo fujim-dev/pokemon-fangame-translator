@@ -229,6 +229,32 @@ réelles, des choix 102/402 d'événements communs, les sous-champs `Point` ou l
 PBS modernes. Elle ne conserve aucun contenu privé dans le dépôt et ne confère
 toujours pas `RECONSTRUCT` au profil public.
 
+### AC-120 — Validation réelle bornée d'une continuation 401 commune
+
+Une troisième portée interne accepte exactement une occurrence de dialogue
+commun composée de deux segments contigus : une commande 101 suivie d'une seule
+commande 401 de même indentation. Elle exige la preuve immuable issue du
+segmentateur partagé, les index et codes exacts, les empreintes des commandes et
+paramètres, le nombre de contrôles `\n` internes et l'empreinte complète de
+l'événement. Une 401 manquante, supplémentaire, déplacée ou mal indentée, un
+paramètre non textuel modifié, une preuve altérée ou une provenance incohérente
+bloquent la portée avant toute copie.
+
+La preuve technique réelle a réussi sur une copie séparée de la référence v21.1 :
+30 402 occurrences extraites, sauvegarde/réouverture transactionnelles du Studio,
+seconde session refusée, simulation privée, reconstruction et réextraction à la
+même identité stable. Parmi les 7 606 fichiers du jeu, seul
+`Data/CommonEvents.rxdata` diffère ; les trois fichiers d'accompagnement PFT sont
+ajoutés séparément. La référence et la copie de travail restent inchangées, la
+structure 101/401 est conservée et le candidat sous chemin court atteint une
+fenêtre de titre v21.1 sans modifier ses fichiers.
+
+Une validation visuelle humaine a ensuite confirmé dans le jeu l'affichage
+complet de la traduction reconstruite pour cette unique occurrence réelle 101 +
+exactement une continuation 401. Cette preuve ne couvre aucun CommonEvent avec
+plusieurs 401, aucun choix commun 102/402, aucun sous-champ `Point` ni PBS moderne.
+Elle n'active pas `RECONSTRUCT` et ne conserve aucun contenu du jeu dans le dépôt.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

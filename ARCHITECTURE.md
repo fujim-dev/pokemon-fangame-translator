@@ -388,6 +388,21 @@ Déjà en place :
   jeu l'affichage complet de l'unique dialogue 101 ciblé. Cette preuve ne couvre
   aucun 401 réel ni choix commun, et aucun contenu du jeu n'est conservé dans le
   dépôt ;
+- une troisième portée privée, distincte des deux précédentes, exige exactement
+  une séquence commune 101 suivie d'une seule 401 de même indentation. Elle lie
+  l'unique ligne acceptée aux empreintes des deux commandes/paramètres, au nombre
+  de contrôles `\n` internes et à l'événement complet. Les tests refusent une 401
+  manquante, supplémentaire, déplacée ou mal indentée, un paramètre inattendu,
+  ainsi qu'une preuve de segmentation ou une provenance altérée ;
+- le round-trip réel correspondant a conservé l'identité stable parmi 30 402
+  occurrences et limité les changements du jeu à `Data/CommonEvents.rxdata` sur
+  7 606 fichiers. Le Studio a refusé une seconde session, puis a sauvegardé et
+  rouvert le projet avec une reprise cohérente. Le candidat court atteint la
+  fenêtre de titre v21.1 et reste byte-identical après ce simple démarrage. Une
+  validation visuelle humaine a confirmé l'affichage complet de cette unique
+  occurrence réelle 101 + exactement une 401. Aucun CommonEvent avec plusieurs
+  401, choix commun, `Point` ou PBS moderne n'est déduit de cette preuve, et
+  `RECONSTRUCT` public reste absent ;
 
 Encore partiel ou pas encore en place :
 
@@ -478,12 +493,13 @@ les trois formes de banques observées et une page de carte bornée à un dialog
 synthétiquement les contrôles `\n` internes sans confondre une commande avec une
 frontière 101/401. Une portée synthétique supplémentaire couvre trois dialogues
 répartis sur deux événements communs et préserve le reste de leur structure
-Marshal complète. Une portée unitaire distincte possède désormais une preuve
-réelle et une validation visuelle humaine limitées à un dialogue commun simple
-composé d'une commande 101. Ces portes ne couvrent ni des continuations 401
-réelles, ni les choix d'événements communs, ni les sous-champs `Point`, ni
-l'ensemble des PBS modernes ; un corpus réel représentatif plus large reste
-nécessaire avant toute autorisation générale.
+Marshal complète. Deux portées unitaires distinctes possèdent désormais chacune
+une preuve réelle et une validation visuelle humaine : la première est limitée à
+un dialogue commun simple composé d'une commande 101 ; la seconde, à une commande
+101 suivie d'exactement une continuation 401. Ces portes ne couvrent ni les
+CommonEvents avec plusieurs 401, ni les choix d'événements communs, ni les
+sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
+représentatif plus large reste nécessaire avant toute autorisation générale.
 
 #### `pokemon_flux.py`
 

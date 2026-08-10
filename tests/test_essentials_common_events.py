@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,11 +8,13 @@ from pathlib import Path
 from adapters import ESSENTIALS_V21_1_READONLY_PROFILE, PokemonEssentialsAdapter
 from analysis.integrity import compare_snapshots, snapshot_tree
 from reconstruction_engine import (
+    V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
     V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
     V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS,
     V21_1_COMMON_EVENTS_VALIDATION_SCOPE,
     ReconstructionError,
     build_plan,
+    build_v21_1_common_event_401_validation_plan,
     build_v21_1_common_event_single_validation_plan,
     build_v21_1_common_events_validation_plan,
     reconstruct_copy,
@@ -22,7 +25,12 @@ from ruby_marshal_reader import RubyObject, load
 from ruby_marshal_writer import dumps
 from structured_extractor import extract_common_events
 from project_test_support import finalize_verified_essentials_project
-from test_essentials_v21 import prepare_v21_game, ruby_text, write_extracted_project_csv
+from test_essentials_v21 import (
+    event_command,
+    prepare_v21_game,
+    ruby_text,
+    write_extracted_project_csv,
+)
 
 
 COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -103,7 +111,217 @@ def prepare_single_dialogue_project(base: Path):
     return root, csv_path, selected[0]
 
 
+def prepare_continuation_dialogue_project(base: Path):
+    """Crée une preuve synthétique bornée à une séquence 101 + une 401."""
+    root = base / "game"
+    project = base / "project"
+    prepare_v21_game(root, common_event_corpus=True)
+    common_path = root / COMMON_EVENTS_FILE
+    common_events = load(common_path)
+    commands = common_events[1].ivars["@list"]
+    commands.pop(5)
+    commands[4].ivars["@parameters"][0] = ruby_text(
+        r"Continuation \n with \n internal controls"
+    )
+    common_path.write_bytes(dumps(common_events))
+
+    rows = [
+        dict(row)
+        for row in PokemonEssentialsAdapter().extract_with_provenance(root).rows
+    ]
+    selected = [
+        row
+        for row in rows
+        if row["type"] == "Événement commun — Dialogue"
+        and row["evenement_id"] == 1
+        and row["commande"] == 3
+    ]
+    if len(selected) != 1:
+        raise AssertionError("La fixture doit exposer une séquence commune 101 + 401")
+    selected[0]["traduction_fr"] = (
+        selected[0]["texte_source"] + " [TEST PFT COMMON 401]"
+    )
+    selected[0]["statut"] = "Accepté"
+    csv_path = project / "textes_structures.csv"
+    write_extracted_project_csv(csv_path, rows)
+    finalize_verified_essentials_project(
+        root,
+        csv_path,
+        adapter_profile=ESSENTIALS_V21_1_READONLY_PROFILE,
+        declared_version="21.1",
+    )
+    return root, csv_path, selected[0]
+
+
 class EssentialsCommonEventCandidateTests(unittest.TestCase):
+    def test_401_scope_is_private_bounded_and_preserves_full_structure(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pft_test_v21_common_401_"
+        ) as temporary:
+            base = Path(temporary)
+            root, csv_path, selected = prepare_continuation_dialogue_project(base)
+            target = base / "candidate"
+            source_before = snapshot_tree(root)
+
+            with self.assertRaisesRegex(ReconstructionError, "Reconstruction bloquée"):
+                build_plan(root, csv_path, mode="accepted")
+            with self.assertRaisesRegex(ReconstructionError, "preuve|structurelle"):
+                build_v21_1_common_event_single_validation_plan(root, csv_path)
+
+            plan = build_v21_1_common_event_401_validation_plan(root, csv_path)
+            self.assertEqual(V21_1_COMMON_EVENT_401_VALIDATION_SCOPE, plan.validation_scope)
+            self.assertEqual(1, plan.counts().get("applicable", 0))
+            simulate_plan(plan)
+            result = reconstruct_copy(plan, target, base / "reports")
+
+            self.assertEqual([COMMON_EVENTS_FILE], result.modified_files)
+            self.assertEqual(1, result.applied)
+            self.assertTrue(result.integrity_valid)
+            self.assertTrue(result.original_unchanged)
+            self.assertTrue(compare_snapshots(source_before, snapshot_tree(root)).passed)
+
+            original = load(root / COMMON_EVENTS_FILE)
+            candidate = load(target / COMMON_EVENTS_FILE)
+            self.assertEqual(len(original), len(candidate))
+            for event_index, (original_event, candidate_event) in enumerate(
+                zip(original, candidate)
+            ):
+                if event_index != 1:
+                    self.assertEqual(dumps(original_event), dumps(candidate_event))
+                    continue
+                self.assertEqual(set(original_event.ivars), set(candidate_event.ivars))
+                for field in original_event.ivars:
+                    if field != "@list":
+                        self.assertEqual(
+                            dumps(original_event.ivars[field]),
+                            dumps(candidate_event.ivars[field]),
+                        )
+                original_commands = original_event.ivars["@list"]
+                candidate_commands = candidate_event.ivars["@list"]
+                self.assertEqual(len(original_commands), len(candidate_commands))
+                self.assertEqual(
+                    [
+                        (command.ivars["@code"], command.ivars["@indent"])
+                        for command in original_commands
+                    ],
+                    [
+                        (command.ivars["@code"], command.ivars["@indent"])
+                        for command in candidate_commands
+                    ],
+                )
+                for command_index, (original_command, candidate_command) in enumerate(
+                    zip(original_commands, candidate_commands)
+                ):
+                    if command_index not in (3, 4):
+                        self.assertEqual(dumps(original_command), dumps(candidate_command))
+                        continue
+                    self.assertEqual(set(original_command.ivars), set(candidate_command.ivars))
+                    for field in original_command.ivars:
+                        if field != "@parameters":
+                            self.assertEqual(
+                                dumps(original_command.ivars[field]),
+                                dumps(candidate_command.ivars[field]),
+                            )
+                    original_parameters = original_command.ivars["@parameters"]
+                    candidate_parameters = candidate_command.ivars["@parameters"]
+                    self.assertEqual(len(original_parameters), len(candidate_parameters))
+                    self.assertEqual(
+                        dumps(original_parameters[1:]),
+                        dumps(candidate_parameters[1:]),
+                    )
+                    self.assertEqual(
+                        original_parameters[0].ivars,
+                        candidate_parameters[0].ivars,
+                    )
+
+            reextracted = {
+                row["id_stable"]: row["texte_source"]
+                for row in extract_common_events(
+                    target / COMMON_EVENTS_FILE,
+                    COMMON_EVENTS_FILE,
+                    strict=True,
+                )
+            }
+            self.assertEqual(selected["traduction_fr"], reextracted[selected["id_stable"]])
+
+    def test_401_scope_refuses_changed_command_stream(self) -> None:
+        for mutation in (
+            "missing_401",
+            "extra_401",
+            "misindented_401",
+            "reordered",
+            "unexpected_parameter",
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                prefix="pft_test_v21_common_401_changed_"
+            ) as temporary:
+                base = Path(temporary)
+                root, csv_path, _selected = prepare_continuation_dialogue_project(base)
+                plan = build_v21_1_common_event_401_validation_plan(root, csv_path)
+                common_path = root / COMMON_EVENTS_FILE
+                common_events = load(common_path)
+                commands = common_events[1].ivars["@list"]
+                if mutation == "missing_401":
+                    commands.pop(4)
+                elif mutation == "extra_401":
+                    commands.insert(
+                        5,
+                        event_command(
+                            401,
+                            [ruby_text("Unexpected continuation")],
+                            indent=1,
+                        ),
+                    )
+                elif mutation == "misindented_401":
+                    commands[4].ivars["@indent"] = 0
+                elif mutation == "reordered":
+                    commands[3], commands[4] = commands[4], commands[3]
+                else:
+                    commands[4].ivars["@parameters"].append(99)
+                common_path.write_bytes(dumps(common_events))
+
+                with self.assertRaisesRegex(ReconstructionError, "bloquée"):
+                    simulate_plan(plan)
+                self.assertTrue(any(
+                    "simulation" in item.reason.casefold()
+                    for item in plan.items
+                    if item.status == "Accepté"
+                ))
+
+    def test_401_scope_refuses_altered_segmentation_proof(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pft_test_v21_common_401_proof_"
+        ) as temporary:
+            base = Path(temporary)
+            root, csv_path, _selected = prepare_continuation_dialogue_project(base)
+            plan = build_v21_1_common_event_401_validation_plan(root, csv_path)
+            item = next(item for item in plan.items if item.decision == "applicable")
+            metadata = json.loads(item.rpg_dialogue_segments)
+            metadata["segments"][1]["command_index"] += 1
+            item.rpg_dialogue_segments = json.dumps(
+                metadata,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+            with self.assertRaisesRegex(ReconstructionError, "101/401|preuve"):
+                simulate_plan(plan)
+
+    def test_401_scope_refuses_changed_source_provenance(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pft_test_v21_common_401_provenance_"
+        ) as temporary:
+            base = Path(temporary)
+            root, csv_path, _selected = prepare_continuation_dialogue_project(base)
+            common_path = root / COMMON_EVENTS_FILE
+            common_events = load(common_path)
+            common_events[1].ivars["@trigger"] = 2
+            common_path.write_bytes(dumps(common_events))
+
+            with self.assertRaisesRegex(ReconstructionError, "sources Essentials"):
+                build_v21_1_common_event_401_validation_plan(root, csv_path)
+
     def test_single_common_event_scope_is_private_bounded_and_reextractable(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="pft_test_v21_common_single_"
