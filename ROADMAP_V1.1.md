@@ -153,6 +153,19 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   navigation normale jusqu'à la fin de sa branche 402. Cette preuve reste limitée
   à cette occurrence réelle ; les autres formes 102/402, le multi-401 réel, `Point`,
   les PBS modernes et `RECONSTRUCT` public demeurent bloqués.
+- une seconde preuve 102/402 cible maintenant un choix réel de sous-index 1 et une
+  branche éloignée de la commande 102. La structure synthétique exige également
+  la fermeture 404 et refuse mauvais sous-index, branches échangées/manquantes ou
+  supplémentaires, ordre ou autre choix modifié, indentation, paramètre hors texte,
+  404, preuve et provenance altérés ;
+- le round-trip réel correspondant conserve le premier choix et sa branche
+  byte-identical, modifie uniquement le choix ciblé et sa branche, retrouve la même
+  identité stable et ne change que `Data/CommonEvents.rxdata`. Original et travail
+  restent inchangés, le candidat court atteint l'écran titre et `RECONSTRUCT` reste
+  absent. Une validation visuelle humaine a confirmé l'affichage du second choix
+  modifié, l'exécution de sa branche 402 sans passage par la première branche et
+  la fin normale de l'appel. Cette seconde preuve reste strictement limitée à
+  cette occurrence et ne valide aucune autre forme 102/402.
 
 ## Phase 2 — Interface pilotée par capacités
 

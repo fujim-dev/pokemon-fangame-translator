@@ -451,6 +451,7 @@ def _choice_branch_metadata(
     réinjection stricte pourra alors refuser le cas au lieu de l'inventer.
     """
     matches: list[int] = []
+    choice_closed = False
     for branch_index in range(command_index + 1, len(commands)):
         branch = commands[branch_index]
         if not isinstance(branch, RubyObject):
@@ -458,6 +459,7 @@ def _choice_branch_metadata(
         branch_code = branch.ivars.get("@code")
         branch_indent = branch.ivars.get("@indent")
         if branch_code == 404 and branch_indent == indent:
+            choice_closed = True
             break
         if branch_code != 402 or branch_indent != indent:
             continue
@@ -469,7 +471,7 @@ def _choice_branch_metadata(
             and text_value(parameters[1]).strip() == source
         ):
             matches.append(branch_index)
-    if len(matches) != 1:
+    if not choice_closed or len(matches) != 1:
         return "", ""
     return matches[0], 1
 

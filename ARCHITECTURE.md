@@ -419,6 +419,19 @@ Déjà en place :
   visuelle humaine a confirmé l'affichage du libellé modifié, sa sélection et la
   navigation normale jusqu'à la fin de l'unique branche 402 ciblée. Cette porte
   n'accorde pas `RECONSTRUCT` ;
+- la même porte privée a ensuite été éprouvée sur une seconde forme réelle : un
+  choix de sous-index 1 dont la branche 402 est éloignée de la commande 102. Le
+  validateur exige désormais aussi une fermeture 404 de même indentation. Les
+  tests refusent sous-index erroné, branches échangées/absentes/supplémentaires,
+  ordre ou autre choix modifié, indentation, paramètre hors texte, 404, preuve ou
+  provenance altérés ;
+- le second round-trip réel conserve le premier choix et sa branche byte-identical,
+  ne remplace que le libellé ciblé et sa branche, retrouve la même identité stable
+  et limite encore le changement du jeu à `Data/CommonEvents.rxdata`. Le candidat
+  court atteint l'écran titre sans modifier ses fichiers. Une validation humaine
+  a confirmé l'affichage du second choix modifié, l'exécution de sa branche 402
+  sans passage par la première branche et la fin normale de l'appel ;
+  `RECONSTRUCT` public demeure absent ;
 
 Encore partiel ou pas encore en place :
 
@@ -515,9 +528,11 @@ une preuve réelle et une validation visuelle humaine : la première est limité
 un dialogue commun simple composé d'une commande 101 ; la seconde, à une commande
 101 suivie d'exactement une continuation 401. Ces portes ne couvrent ni les
 CommonEvents avec plusieurs 401. Une quatrième portée privée possède une preuve
-réelle et une validation visuelle humaine limitées à un seul choix commun 102/402
-et à sa branche correspondante. Ces portes ne couvrent ni les autres formes de
-choix communs, ni les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
+réelle et une validation visuelle humaine limitées à un premier choix commun
+102/402 et à sa branche correspondante. La même porte possède une seconde preuve
+réelle et une validation visuelle humaine sur un choix de sous-index non nul et
+sa branche éloignée. Ces portes ne couvrent ni les autres formes de choix communs,
+ni les sous-champs `Point`, ni l'ensemble des PBS modernes ; un corpus réel
 représentatif plus large reste nécessaire avant toute autorisation générale.
 
 #### `pokemon_flux.py`

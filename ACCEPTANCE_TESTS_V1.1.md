@@ -292,6 +292,37 @@ branche correspondante : elle ne valide pas plusieurs 401 réelles, d'autres for
 de choix communs, `Point`, les PBS modernes ni la reconstruction publique v21.1.
 `RECONSTRUCT` reste absent.
 
+### AC-122 — Choix commun réel de sous-index non nul
+
+La même porte privée doit accepter une occurrence unique dont le choix ciblé a un
+sous-index strictement supérieur à zéro et dont la branche 402 n'est pas
+nécessairement adjacente à la commande 102. La preuve exige l'ordre complet des
+choix, le sous-index exact, l'unique branche correspondante, son indentation, les
+paramètres non textuels et une fermeture 404 de même indentation.
+
+Les fixtures synthétiques couvrent le sous-index 1 et refusent un mauvais
+sous-index, des branches échangées, absentes ou supplémentaires, un ordre de choix
+modifié, le changement d'un autre choix, une indentation ou un paramètre hors texte
+différent, une fermeture 404 altérée, ainsi qu'une preuve ou provenance incohérente.
+Le round-trip vérifie que le premier choix et sa branche restent byte-identical et
+que seules les deux chaînes du choix ciblé et de sa branche changent.
+
+La preuve technique réelle a réussi sur une copie séparée de la référence v21.1 :
+une occurrence de sous-index 1 associée à une branche 402 éloignée a traversé
+l'extraction complète, le Studio transactionnel, la simulation, la reconstruction
+privée et la réextraction à la même identité stable. Seul
+`Data/CommonEvents.rxdata` diffère parmi les fichiers du jeu ; la référence et la
+copie de travail restent inchangées, les autres choix/branches et la fermeture 404
+sont préservés, et le candidat court atteint l'écran titre sans modifier ses
+fichiers.
+
+Une validation visuelle humaine a ensuite confirmé que le libellé modifié
+s'affiche sur le second choix, que sa sélection exécute bien la branche 402 de
+sous-index 1 sans entrer dans la première branche, puis que l'appel se termine
+normalement. Cette preuve ne s'étend pas aux autres structures 102/402, au
+multi-401 réel, à `Point`, aux PBS modernes ou à la reconstruction publique.
+`RECONSTRUCT` reste absent.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

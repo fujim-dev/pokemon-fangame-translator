@@ -1740,6 +1740,7 @@ def _strict_v21_choice_in_commands(
         raise ReconstructionError("Branche 402 du choix v21.1 incohérente")
 
     matching_branches: list[int] = []
+    choice_end_index: int | None = None
     for candidate_index in range(index + 1, len(commands)):
         candidate = commands[candidate_index]
         if not isinstance(candidate, RubyObject):
@@ -1749,6 +1750,7 @@ def _strict_v21_choice_in_commands(
         candidate_code = candidate.ivars.get("@code")
         candidate_indent = candidate.ivars.get("@indent")
         if candidate_code == 404 and candidate_indent == expected_indent:
+            choice_end_index = candidate_index
             break
         if candidate_code != 402 or candidate_indent != expected_indent:
             continue
@@ -1765,6 +1767,8 @@ def _strict_v21_choice_in_commands(
             == expected_source
         ):
             matching_branches.append(candidate_index)
+    if choice_end_index is None:
+        raise ReconstructionError("Fin 404 du choix v21.1 absente ou ambiguë")
     if matching_branches != [branch_index]:
         raise ReconstructionError("Branche 402 du choix v21.1 absente ou ambiguë")
     return command, branch, choice_index

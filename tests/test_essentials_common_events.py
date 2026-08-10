@@ -156,7 +156,7 @@ def prepare_continuation_dialogue_project(base: Path):
     return root, csv_path, selected[0]
 
 
-def prepare_choice_project(base: Path):
+def prepare_choice_project(base: Path, *, choice_sub_index: int = 0):
     """Crée une preuve synthétique bornée à un libellé 102 et sa branche 402."""
     root = base / "game"
     project = base / "project"
@@ -171,12 +171,13 @@ def prepare_choice_project(base: Path):
         if row["type"] == "Événement commun — Choix"
         and row["evenement_id"] == 1
         and row["commande"] == 6
-        and row["sous_index"] == 0
+        and row["sous_index"] == choice_sub_index
     ]
     if len(selected) != 1:
         raise AssertionError("La fixture doit exposer un choix commun 102/402 unique")
     selected[0]["traduction_fr"] = (
-        selected[0]["texte_source"] + " [TEST PFT COMMON CHOICE]"
+        selected[0]["texte_source"]
+        + f" [TEST PFT COMMON CHOICE {choice_sub_index}]"
     )
     selected[0]["statut"] = "Accepté"
     csv_path = project / "textes_structures.csv"
@@ -273,6 +274,189 @@ class EssentialsCommonEventCandidateTests(unittest.TestCase):
             self.assertEqual(selected["traduction_fr"], rebuilt["texte_source"])
             self.assertEqual(7, rebuilt["rpg_choice_branch_command"])
             self.assertEqual(1, rebuilt["rpg_choice_branch_parameter_index"])
+
+    def test_nonzero_choice_updates_only_second_option_and_distant_branch(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="pft_test_v21_common_choice_nonzero_"
+        ) as temporary:
+            base = Path(temporary)
+            root, csv_path, selected = prepare_choice_project(
+                base,
+                choice_sub_index=1,
+            )
+            target = base / "candidate"
+            source_before = snapshot_tree(root)
+
+            plan = build_v21_1_common_event_choice_validation_plan(root, csv_path)
+            self.assertEqual(1, plan.counts().get("applicable", 0))
+            simulate_plan(plan)
+            result = reconstruct_copy(plan, target, base / "reports")
+
+            self.assertEqual([COMMON_EVENTS_FILE], result.modified_files)
+            self.assertEqual(1, result.applied)
+            self.assertTrue(result.integrity_valid)
+            self.assertTrue(result.original_unchanged)
+            self.assertTrue(compare_snapshots(source_before, snapshot_tree(root)).passed)
+
+            original = load(root / COMMON_EVENTS_FILE)
+            candidate = load(target / COMMON_EVENTS_FILE)
+            self.assertEqual(len(original), len(candidate))
+            for event_index, (original_event, candidate_event) in enumerate(
+                zip(original, candidate)
+            ):
+                if event_index != 1:
+                    self.assertEqual(dumps(original_event), dumps(candidate_event))
+                    continue
+                self.assertEqual(set(original_event.ivars), set(candidate_event.ivars))
+                for field in original_event.ivars:
+                    if field != "@list":
+                        self.assertEqual(
+                            dumps(original_event.ivars[field]),
+                            dumps(candidate_event.ivars[field]),
+                        )
+                original_commands = original_event.ivars["@list"]
+                candidate_commands = candidate_event.ivars["@list"]
+                self.assertEqual(len(original_commands), len(candidate_commands))
+                for command_index, (original_command, candidate_command) in enumerate(
+                    zip(original_commands, candidate_commands)
+                ):
+                    if command_index not in (6, 9):
+                        self.assertEqual(dumps(original_command), dumps(candidate_command))
+                        continue
+                    self.assertEqual(set(original_command.ivars), set(candidate_command.ivars))
+                    for field in original_command.ivars:
+                        if field != "@parameters":
+                            self.assertEqual(
+                                dumps(original_command.ivars[field]),
+                                dumps(candidate_command.ivars[field]),
+                            )
+
+                original_choice = original_commands[6].ivars["@parameters"]
+                candidate_choice = candidate_commands[6].ivars["@parameters"]
+                self.assertEqual(dumps(original_choice[1:]), dumps(candidate_choice[1:]))
+                self.assertEqual(
+                    dumps(original_choice[0][0]),
+                    dumps(candidate_choice[0][0]),
+                )
+                self.assertEqual(
+                    original_choice[0][1].ivars,
+                    candidate_choice[0][1].ivars,
+                )
+                self.assertEqual(
+                    selected["traduction_fr"],
+                    candidate_choice[0][1].data.decode("utf-8"),
+                )
+
+                self.assertEqual(
+                    dumps(original_commands[7]),
+                    dumps(candidate_commands[7]),
+                )
+                original_branch = original_commands[9].ivars["@parameters"]
+                candidate_branch = candidate_commands[9].ivars["@parameters"]
+                self.assertEqual(dumps(original_branch[:1]), dumps(candidate_branch[:1]))
+                self.assertEqual(original_branch[1].ivars, candidate_branch[1].ivars)
+                self.assertEqual(
+                    selected["traduction_fr"],
+                    candidate_branch[1].data.decode("utf-8"),
+                )
+                self.assertEqual(
+                    dumps(original_commands[11]),
+                    dumps(candidate_commands[11]),
+                )
+
+            reextracted = {
+                row["id_stable"]: row
+                for row in extract_common_events(
+                    target / COMMON_EVENTS_FILE,
+                    COMMON_EVENTS_FILE,
+                    strict=True,
+                )
+            }
+            rebuilt = reextracted[selected["id_stable"]]
+            self.assertEqual(1, rebuilt["sous_index"])
+            self.assertEqual(9, rebuilt["rpg_choice_branch_command"])
+            self.assertEqual(1, rebuilt["rpg_choice_branch_parameter_index"])
+            self.assertEqual(selected["traduction_fr"], rebuilt["texte_source"])
+
+    def test_nonzero_choice_refuses_wrong_target_and_changed_choice_structure(self) -> None:
+        for mutation in (
+            "wrong_subindex",
+            "swapped_branches",
+            "missing_branch",
+            "additional_branch",
+            "changed_choice_order",
+            "changed_other_choice_text",
+            "changed_indent",
+            "changed_non_text_parameter",
+            "changed_404",
+            "altered_proof",
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                prefix="pft_test_v21_common_choice_nonzero_changed_"
+            ) as temporary:
+                base = Path(temporary)
+                root, csv_path, _selected = prepare_choice_project(
+                    base,
+                    choice_sub_index=1,
+                )
+                plan = build_v21_1_common_event_choice_validation_plan(root, csv_path)
+                item = next(
+                    candidate
+                    for candidate in plan.items
+                    if candidate.decision == "applicable"
+                )
+                common_path = root / COMMON_EVENTS_FILE
+
+                if mutation == "wrong_subindex":
+                    item.sub_index = "0"
+                elif mutation == "altered_proof":
+                    item.rpg_choice_branch_command = "8"
+                else:
+                    common_events = load(common_path)
+                    commands = common_events[1].ivars["@list"]
+                    if mutation == "swapped_branches":
+                        commands[7], commands[9] = commands[9], commands[7]
+                    elif mutation == "missing_branch":
+                        commands.pop(9)
+                    elif mutation == "additional_branch":
+                        commands.insert(
+                            10,
+                            event_command(
+                                402,
+                                [1, ruby_text("Second synthetic common choice")],
+                            ),
+                        )
+                    elif mutation == "changed_choice_order":
+                        commands[6].ivars["@parameters"][0].reverse()
+                    elif mutation == "changed_other_choice_text":
+                        commands[6].ivars["@parameters"][0][0] = ruby_text(
+                            "Changed other common choice"
+                        )
+                    elif mutation == "changed_indent":
+                        commands[9].ivars["@indent"] = 1
+                    elif mutation == "changed_non_text_parameter":
+                        commands[6].ivars["@parameters"][1] = 99
+                    else:
+                        commands[11].ivars["@code"] = 0
+
+                    payload = dumps(common_events)
+                    common_path.write_bytes(payload)
+                    plan.source_hashes[COMMON_EVENTS_FILE] = hashlib.sha256(
+                        payload
+                    ).hexdigest()
+                    if mutation not in {
+                        "changed_other_choice_text",
+                        "changed_non_text_parameter",
+                    }:
+                        item.rpg_common_event_sha256 = hashlib.sha256(
+                            dumps(common_events[1])
+                        ).hexdigest()
+
+                with self.assertRaisesRegex(
+                    ReconstructionError,
+                    "bloquée|102|402|branche|empreinte|Fin 404",
+                ):
+                    simulate_plan(plan)
 
     def test_choice_scope_refuses_structural_changes_and_altered_proof(self) -> None:
         for mutation in (
