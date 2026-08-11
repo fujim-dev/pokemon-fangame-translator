@@ -221,6 +221,20 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   visuelle humaine a confirmé l'affichage de cette unique description reconstruite
   sur la carte régionale ; les cinq autres occurrences à sept champs, les formes
   à huit champs et `RECONSTRUCT` public restent bloqués.
+- l'audit statique des deux Point réels à huit champs prouve une forme composée
+  de deux coordonnées, un nom, quatre champs optionnels absents et un switch de
+  visibilité entier. Cette signification est corroborée par le schéma
+  `^uusSUUUU` et les accès `point[7]` de l'interface régionale, sans exécution de
+  Ruby ;
+- une portée privée distincte accepte exactement un nom portant cette preuve et
+  refuse forme, ordre, switch, `nil`, type, structure, source ou provenance
+  divergents. Son round-trip réel synchronise les deux fichiers TownMap, conserve
+  30 402 occurrences et le graphe Marshal hors cible, laisse l'original et le
+  travail inchangés, puis démarre le candidat court sans erreur mkxp-z. Une
+  validation visuelle humaine a confirmé l'affichage en jeu de cet unique nom
+  reconstruit après activation du switch de visibilité réel ciblé. La seconde
+  occurrence réelle à huit champs, tout autre corpus et `RECONSTRUCT` public
+  restent bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

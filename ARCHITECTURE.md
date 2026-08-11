@@ -487,6 +487,18 @@ Déjà en place :
   puis démarre le candidat sous un chemin court. Une validation visuelle humaine
   a confirmé l'affichage de cette unique description reconstruite sur la carte
   régionale. Aucune des cinq autres occurrences à sept champs n'en est déduite ;
+- les deux Point réels à huit champs ont une description et une destination
+  absentes, puis un entier final. Le schéma `^uusSUUUU` et les accès statiques
+  `point[7]` de l'interface régionale démontrent que cet entier est le switch de
+  visibilité du Point ; aucun script Ruby n'a été exécuté pour cette preuve ;
+- une huitième portée privée exige exactement deux `Integer`, une `RubyString`,
+  quatre `nil`, puis un `Integer`, et ne cible que le nom d'une occurrence. Son
+  round-trip réel synchronise uniquement les deux fichiers TownMap, conserve les
+  30 402 occurrences, l'original, le travail, le switch et le graphe Marshal hors
+  cible, puis démarre le candidat sous un chemin court sans erreur mkxp-z. Une
+  validation visuelle humaine a confirmé l'affichage en jeu de cet unique nom
+  reconstruit après activation du switch de visibilité réel ciblé. La seconde
+  occurrence à huit champs et tout autre corpus ne sont pas généralisés ;
 
 Encore partiel ou pas encore en place :
 
@@ -502,7 +514,8 @@ Encore partiel ou pas encore en place :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
 - élargissement réel des événements communs à un corpus multi-401 et 102/402 plus
   représentatif au-delà de l'unique choix commun désormais validé, autres formes
-  `Point` (autres descriptions, autres cas à sept champs et formes 8 champs),
+  `Point` (autres descriptions, autres cas à sept champs et autres formes/cas à
+  huit champs),
   PBS modernes et corpus
   réel encore plus large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
   malgré les preuves techniques et les validations visuelles déjà conclues.

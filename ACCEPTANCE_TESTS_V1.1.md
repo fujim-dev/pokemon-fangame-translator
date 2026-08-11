@@ -460,6 +460,36 @@ sur la carte régionale. Cette preuve reste strictement limitée à cette unique
 occurrence réelle à sept champs ; les cinq autres occurrences à sept champs, les
 formes à huit champs et `RECONSTRUCT` v21.1 public restent bloqués.
 
+### AC-127 — Premier Point.Name v21.1 à huit champs
+
+Une huitième portée privée accepte exactement une occurrence `Point.Name` sous
+la forme PBS à huit champs : deux coordonnées régionales, un nom, une
+description absente, trois paramètres de destination absents et un identifiant
+de switch de visibilité. Le schéma statique v21.1 `^uusSUUUU` et les trois
+lectures de `point[7]` dans l'interface de carte prouvent que le dernier entier
+conditionne l'affichage du nom, de la description et de la destination.
+
+La portée exige exactement `Integer`, `Integer`, `RubyString`, quatre `nil`,
+puis `Integer`. Elle conserve les huit positions, les sept séparateurs, le BOM,
+les CRLF, le chemin compilé, les valeurs absentes et le graphe Marshal hors nom
+ciblé. Les fixtures refusent notamment 8→7, l'emploi inverse d'une forme à sept
+champs, un champ supplémentaire, une permutation, un autre switch, un type Ruby
+différent, `nil` devenu valeur ou inversement, des coordonnées, une destination,
+un autre nom, la structure, les sources ou la provenance modifiés.
+
+L'inventaire réel contient deux Point à huit champs de cette forme. Une seule
+occurrence a traversé l'extraction de 30 402 lignes, le verrou et la reprise du
+Studio, la simulation, la reconstruction privée synchronisée et la réextraction
+à la même identité stable. Seuls `PBS/town_map.txt` et `Data/town_map.dat`
+diffèrent parmi les fichiers du jeu ; l'original, la copie de travail, le switch
+et le graphe Marshal hors chaîne ciblée restent identiques. Le candidat sous
+chemin court démarre sans erreur mkxp-z. Une validation visuelle humaine a
+ensuite confirmé dans le jeu l'affichage exact du nom reconstruit sur la carte
+régionale, après activation du switch de visibilité réel ciblé. Cette preuve
+reste strictement limitée à cette unique occurrence réelle à huit champs : la
+seconde occurrence réelle, tout autre corpus et `RECONSTRUCT` v21.1 public ne
+sont pas validés.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

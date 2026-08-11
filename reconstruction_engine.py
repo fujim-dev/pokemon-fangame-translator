@@ -107,6 +107,9 @@ V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE = (
 V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE = (
     "essentials_v21_1_point_description_seven_fields_candidate_v1"
 )
+V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE = (
+    "essentials_v21_1_point_name_eight_fields_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -128,6 +131,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_POINT_VALIDATION_SCOPE,
         V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE,
         V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE,
+        V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE,
     }
 )
 V21_1_POINT_SCOPE_SPECS = {
@@ -141,6 +145,11 @@ V21_1_POINT_SCOPE_SPECS = {
         "PBS v21.1 — Point.Description",
         7,
         3,
+    ),
+    V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE: (
+        "PBS v21.1 — Point.Name",
+        8,
+        2,
     ),
 }
 V21_1_POINT_SCOPE_COMPILED_TYPES = {
@@ -173,6 +182,16 @@ V21_1_POINT_SCOPE_COMPILED_TYPES = {
         "int",
         "int",
         "NoneType",
+    ),
+    V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE: (
+        "int",
+        "int",
+        "RubyString",
+        "NoneType",
+        "NoneType",
+        "NoneType",
+        "NoneType",
+        "int",
     ),
 }
 
@@ -1802,6 +1821,18 @@ def build_v21_1_point_description_seven_fields_validation_plan(
     )
 
 
+def build_v21_1_point_name_eight_fields_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un nom Point à huit champs avec switch."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE,
+    )
+
+
 def _build_v21_1_private_validation_plan(
     game_root: Path,
     csv_path: Path,
@@ -2524,6 +2555,15 @@ def _v21_1_point_source_context(raw: bytes, item: PlanItem) -> dict[str, object]
         raise ReconstructionError(
             "La structure ou le texte source du Point v21.1 ne correspond plus."
         )
+    if expected_field_count == 8 and expected_field_index == 2:
+        fields = [str(field["core"]) for field in layout["fields"]]
+        if fields[3:7] != ["", "", "", ""] or re.fullmatch(
+            r"[1-9]\d*", fields[7]
+        ) is None:
+            raise ReconstructionError(
+                "Le Point v21.1 à huit champs exige quatre valeurs optionnelles "
+                "absentes puis un switch de visibilité strictement positif."
+            )
     return {
         "content": content,
         "encoding": encoding,
