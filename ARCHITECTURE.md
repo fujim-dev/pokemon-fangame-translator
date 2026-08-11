@@ -476,6 +476,17 @@ Déjà en place :
   chemin court. Une validation visuelle humaine a confirmé l'affichage de cette
   unique description à quatre champs sur la carte régionale. Aucune autre
   description, forme 7/8 champs ni capacité publique n'en est déduite ;
+- les six Point réels à sept champs suivent le schéma statique `^uusSUUUU` :
+  coordonnées de carte régionale, nom, description optionnelle, destination
+  `[map ID, x, y]`, puis un switch optionnel absent et compilé en `nil`. Deux
+  occurrences portent une description et quatre un `nil` à sa place ;
+- une septième portée privée cible une seule description à sept champs et exige
+  exactement deux `Integer`, deux `RubyString`, trois `Integer`, puis `nil`. Son
+  round-trip réel synchronise uniquement les deux fichiers TownMap, conserve les
+  30 402 occurrences, l'original, le travail et le graphe Marshal hors cible,
+  puis démarre le candidat sous un chemin court. Une validation visuelle humaine
+  a confirmé l'affichage de cette unique description reconstruite sur la carte
+  régionale. Aucune des cinq autres occurrences à sept champs n'en est déduite ;
 
 Encore partiel ou pas encore en place :
 
@@ -491,7 +502,8 @@ Encore partiel ou pas encore en place :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
 - élargissement réel des événements communs à un corpus multi-401 et 102/402 plus
   représentatif au-delà de l'unique choix commun désormais validé, autres formes
-  `Point` (autres descriptions et formes 7/8 champs), PBS modernes et corpus
+  `Point` (autres descriptions, autres cas à sept champs et formes 8 champs),
+  PBS modernes et corpus
   réel encore plus large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
   malgré les preuves techniques et les validations visuelles déjà conclues.
 

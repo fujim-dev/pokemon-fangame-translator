@@ -208,6 +208,19 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   immédiate. Une validation visuelle humaine a confirmé l'affichage de cette
   unique description reconstruite sur la carte régionale ; toutes les autres
   descriptions, les formes 7/8 champs et `RECONSTRUCT` public restent bloqués.
+- l'audit statique des six Point à sept champs confirme le schéma `^uusSUUUU` :
+  deux coordonnées, un nom, une description optionnelle, la destination
+  `[map ID, x, y]`, puis un switch optionnel absent et compilé en `nil`. Deux
+  occurrences possèdent une description et quatre conservent `nil` ;
+- une portée privée distincte accepte exactement une description à sept champs
+  et refuse toute divergence de champ, ordre, valeur numérique, `nil`, type,
+  structure, source ou provenance. Son premier round-trip réel ne modifie que
+  `PBS/town_map.txt` et `Data/town_map.dat`, retrouve la même identité parmi
+  30 402 occurrences et conserve le graphe Marshal hors cible, l'original et la
+  copie de travail. Le candidat court démarre sans erreur immédiate. Une validation
+  visuelle humaine a confirmé l'affichage de cette unique description reconstruite
+  sur la carte régionale ; les cinq autres occurrences à sept champs, les formes
+  à huit champs et `RECONSTRUCT` public restent bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

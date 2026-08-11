@@ -36,6 +36,7 @@ from project_identity import (
 from reconstruction_engine import (
     V21_1_BANK_CORPUS_VALIDATION_SCOPE,
     V21_1_MAP_VALIDATION_SCOPE,
+    V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE,
     V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE,
     V21_1_POINT_VALIDATION_SCOPE,
     V21_1_VALIDATION_SCOPE,
@@ -45,6 +46,7 @@ from reconstruction_engine import (
     build_plan,
     build_v21_1_bank_corpus_validation_plan,
     build_v21_1_map_validation_plan,
+    build_v21_1_point_description_seven_fields_validation_plan,
     build_v21_1_point_description_validation_plan,
     build_v21_1_point_validation_plan,
     build_v21_1_validation_plan,
@@ -371,7 +373,12 @@ def write_extracted_project_csv(path: Path, rows: list[dict]) -> None:
     path.write_bytes(output.getvalue().encode("utf-8-sig"))
 
 
-def prepare_point_project(base: Path, *, description: bool = False):
+def prepare_point_project(
+    base: Path,
+    *,
+    description: bool = False,
+    description_field_count: int = 4,
+):
     root = base / "game"
     project = base / "project"
     prepare_v21_game(root, point_validation=True)
@@ -387,16 +394,25 @@ def prepare_point_project(base: Path, *, description: bool = False):
             else "PBS v21.1 — Point.Name"
         )
         and row["fichier"] == "PBS/town_map.txt"
-        and row["pbs_field_count"] == (4 if description else 3)
+        and row["pbs_field_count"]
+        == (description_field_count if description else 3)
     )
     selected["traduction_fr"] = selected["texte_source"] + (
-        " [TEST PFT v21.1 POINT DESCRIPTION]"
+        (
+            " [TEST PFT v21.1 POINT DESCRIPTION 7]"
+            if description_field_count == 7
+            else " [TEST PFT v21.1 POINT DESCRIPTION]"
+        )
         if description
         else " [TEST PFT v21.1 POINT]"
     )
     selected["statut"] = "Accepté"
     selected["origine_traduction"] = (
-        "validation_synthetique_v21_1_point_description"
+        (
+            "validation_synthetique_v21_1_point_description_7"
+            if description_field_count == 7
+            else "validation_synthetique_v21_1_point_description"
+        )
         if description
         else "validation_synthetique_v21_1_point"
     )
@@ -947,6 +963,300 @@ class EssentialsV21ProfileTests(unittest.TestCase):
                     ],
                 ),
             )
+
+    def test_v21_private_point_description_seven_fields_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_v21_pt_desc7_rt_") as temporary:
+            base = Path(temporary)
+            root, csv_path, selected = prepare_point_project(
+                base,
+                description=True,
+                description_field_count=7,
+            )
+            target = base / "candidate"
+            reports = base / "reports"
+            pbs_path = root / "PBS" / "town_map.txt"
+            compiled_path = root / "Data" / "town_map.dat"
+            original_pbs = pbs_path.read_bytes()
+            original_compiled = compiled_path.read_bytes()
+            source_before = snapshot_tree(root)
+
+            with self.assertRaisesRegex(ReconstructionError, "Reconstruction bloquée"):
+                build_plan(root, csv_path, mode="accepted")
+
+            plan = build_v21_1_point_description_seven_fields_validation_plan(
+                root,
+                csv_path,
+            )
+            self.assertEqual(
+                V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE,
+                plan.validation_scope,
+            )
+            self.assertEqual(1, plan.counts().get("applicable", 0))
+            item = next(item for item in plan.items if item.decision == "applicable")
+            self.assertEqual("PBS v21.1 — Point.Description", item.type)
+            self.assertEqual("7", str(item.pbs_field_count))
+            self.assertEqual("3", str(item.pbs_field_index))
+            compiled_proof = json.loads(item.pbs_compiled_structure)
+            self.assertEqual([0, "@point", 1, 3], compiled_proof["compiled_path"])
+            self.assertEqual(
+                [
+                    "int",
+                    "int",
+                    "RubyString",
+                    "RubyString",
+                    "int",
+                    "int",
+                    "int",
+                    "NoneType",
+                ],
+                compiled_proof["point_types"],
+            )
+
+            simulate_plan(plan)
+            result = reconstruct_copy(plan, target, reports)
+
+            self.assertEqual(
+                ["Data/town_map.dat", "PBS/town_map.txt"],
+                result.modified_files,
+            )
+            self.assertEqual(1, result.applied)
+            self.assertTrue(result.original_unchanged)
+            self.assertTrue(result.integrity_valid)
+            self.assertTrue(compare_snapshots(source_before, snapshot_tree(root)).passed)
+            expected_pbs = original_pbs.replace(
+                selected["texte_source"].encode("utf-8"),
+                selected["traduction_fr"].encode("utf-8"),
+                1,
+            )
+            self.assertEqual(
+                expected_pbs,
+                (target / "PBS" / "town_map.txt").read_bytes(),
+            )
+
+            rebuilt = {
+                row["id_stable"]: row
+                for row in extract_pbs(
+                    target / "PBS" / "town_map.txt",
+                    "PBS/town_map.txt",
+                )
+            }[selected["id_stable"]]
+            self.assertEqual(selected["traduction_fr"], rebuilt["texte_source"])
+            self.assertEqual(selected["sous_index"], rebuilt["sous_index"])
+            self.assertEqual(7, rebuilt["pbs_field_count"])
+            self.assertEqual(3, rebuilt["pbs_field_index"])
+
+            original_root = load_town_map_bytes(original_compiled)
+            candidate_raw = (target / "Data" / "town_map.dat").read_bytes()
+            candidate_root = load_town_map_bytes(candidate_raw)
+            original_point = original_root[0].ivars["@point"][1]
+            candidate_point = candidate_root[0].ivars["@point"][1]
+            original_target = original_point[3]
+            candidate_target = candidate_point[3]
+            self.assertEqual(selected["texte_source"], original_target.text())
+            self.assertEqual(selected["traduction_fr"], candidate_target.text())
+            self.assertEqual(dumps(original_point[:3]), dumps(candidate_point[:3]))
+            self.assertEqual([1, 2, 3, None], candidate_point[4:])
+            self.assertEqual(dumps(original_point[4:]), dumps(candidate_point[4:]))
+            self.assertEqual(
+                graph_sha256(original_root, masked_string=original_target),
+                graph_sha256(candidate_root, masked_string=candidate_target),
+            )
+            self.assertEqual(
+                dumps(original_root[0].ivars["@point"][0]),
+                dumps(candidate_root[0].ivars["@point"][0]),
+            )
+            self.assertEqual(
+                dumps(original_root[0].ivars["@point"][2]),
+                dumps(candidate_root[0].ivars["@point"][2]),
+            )
+            self.assertEqual(
+                selected["traduction_fr"],
+                extract_compiled_point_text(
+                    candidate_raw,
+                    section="0",
+                    occurrence=2,
+                    field_index=3,
+                    pbs_fields=[
+                        "5",
+                        "8",
+                        "Untouched Town",
+                        selected["traduction_fr"],
+                        "1",
+                        "2",
+                        "3",
+                    ],
+                ),
+            )
+
+    def test_v21_point_description_seven_fields_refuses_pbs_changes(self) -> None:
+        mutations = {
+            "wrong field count": None,
+            "removed field": (
+                b"Untouched Description,1,2,3",
+                b"Untouched Description,1,2",
+            ),
+            "additional field": (
+                b"Untouched Description,1,2,3",
+                b"Untouched Description,1,2,3,4",
+            ),
+            "permuted fields": (
+                b"Untouched Description,1,2,3",
+                b"Untouched Description,2,1,3",
+            ),
+            "numeric value changed": (
+                b"Untouched Description,1,2,3",
+                b"Untouched Description,1,9,3",
+            ),
+            "name changed": (b"Untouched Town", b"Changed Town"),
+            "other description changed": (
+                b"Synthetic Tunnel",
+                b"Changed Other Description",
+            ),
+            "coordinates changed": (b"Point = 5,8,", b"Point = 9,8,"),
+        }
+        for mutation, replacement in mutations.items():
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                prefix="pft_v21_pt_desc7_pbs_bad_"
+            ) as temporary:
+                base = Path(temporary)
+                root, csv_path, _selected = prepare_point_project(
+                    base,
+                    description=True,
+                    description_field_count=7,
+                )
+                plan = build_v21_1_point_description_seven_fields_validation_plan(
+                    root,
+                    csv_path,
+                )
+                item = next(item for item in plan.items if item.decision == "applicable")
+                if mutation == "wrong field count":
+                    item.pbs_field_count = "8"
+                else:
+                    assert replacement is not None
+                    old, new = replacement
+                    pbs_path = root / "PBS" / "town_map.txt"
+                    pbs_path.write_bytes(pbs_path.read_bytes().replace(old, new, 1))
+
+                with self.assertRaisesRegex(
+                    ReconstructionError,
+                    "Point|sources|source|inventaire|métadonnées|forme",
+                ):
+                    simulate_plan(plan)
+
+    def test_v21_point_description_seven_fields_refuses_compiled_changes(self) -> None:
+        for mutation in (
+            "description type",
+            "name changed",
+            "coordinates changed",
+            "numeric value changed",
+            "numeric became nil",
+            "nil became value",
+            "other description changed",
+            "marshal structure changed",
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                prefix="pft_v21_pt_desc7_dat_bad_"
+            ) as temporary:
+                base = Path(temporary)
+                root, csv_path, _selected = prepare_point_project(
+                    base,
+                    description=True,
+                    description_field_count=7,
+                )
+                plan = build_v21_1_point_description_seven_fields_validation_plan(
+                    root,
+                    csv_path,
+                )
+                compiled_path = root / "Data" / "town_map.dat"
+                compiled = load(compiled_path)
+                target = compiled[0].ivars["@point"][1]
+                if mutation == "description type":
+                    target[3] = 3
+                elif mutation == "name changed":
+                    target[2] = ruby_text("Changed Town")
+                elif mutation == "coordinates changed":
+                    target[0] = 9
+                elif mutation == "numeric value changed":
+                    target[5] = 9
+                elif mutation == "numeric became nil":
+                    target[4] = None
+                elif mutation == "nil became value":
+                    target[7] = 4
+                elif mutation == "other description changed":
+                    compiled[0].ivars["@point"][2][3] = ruby_text(
+                        "Changed Other Description"
+                    )
+                else:
+                    del compiled[0].ivars["@flags"]
+                compiled_path.write_bytes(dumps(compiled))
+
+                with self.assertRaisesRegex(
+                    ReconstructionError,
+                    "Point|sources|source|inventaire|compilée|town_map",
+                ):
+                    simulate_plan(plan)
+
+    def test_v21_point_description_seven_fields_refuses_proof_and_provenance_changes(
+        self,
+    ) -> None:
+        for mutation in (
+            "compiled proof",
+            "provenance",
+            "pbs after plan",
+            "compiled after plan",
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                prefix="pft_v21_pt_desc7_guard_"
+            ) as temporary:
+                base = Path(temporary)
+                root, csv_path, _selected = prepare_point_project(
+                    base,
+                    description=True,
+                    description_field_count=7,
+                )
+                plan = build_v21_1_point_description_seven_fields_validation_plan(
+                    root,
+                    csv_path,
+                )
+                target = base / "candidate"
+                if mutation == "compiled proof":
+                    item = next(
+                        item for item in plan.items if item.decision == "applicable"
+                    )
+                    proof = json.loads(item.pbs_compiled_structure)
+                    proof["point_types"][4] = "NoneType"
+                    item.pbs_compiled_structure = json.dumps(proof)
+                    with self.assertRaisesRegex(
+                        ReconstructionError,
+                        "Point|compilée|preuve",
+                    ):
+                        simulate_plan(plan)
+                    continue
+
+                simulate_plan(plan)
+                if mutation == "provenance":
+                    plan.project_provenance_token = "altered-provenance"
+                elif mutation == "pbs after plan":
+                    path = root / "PBS" / "town_map.txt"
+                    path.write_bytes(
+                        path.read_bytes().replace(
+                            b"Untouched Description",
+                            b"Changed after planning",
+                            1,
+                        )
+                    )
+                else:
+                    path = root / "Data" / "town_map.dat"
+                    compiled = load(path)
+                    compiled[0].ivars["@point"][1][5] = 9
+                    path.write_bytes(dumps(compiled))
+
+                with self.assertRaisesRegex(
+                    ReconstructionError,
+                    "provenance|sources|source|inventaire|changé",
+                ):
+                    reconstruct_copy(plan, target, base / "reports")
+                self.assertFalse(target.exists())
 
     def test_v21_point_description_scope_refuses_other_point_forms(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_v21_pt_desc_form_") as temporary:

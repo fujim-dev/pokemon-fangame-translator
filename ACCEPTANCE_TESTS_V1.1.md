@@ -430,6 +430,36 @@ réel sous la forme PBS à quatre champs `x,y,nom,description` ; elle ne couvre 
 les autres descriptions, les formes 7/8 champs ni la reconstruction publique.
 `RECONSTRUCT` v21.1 reste absent.
 
+### AC-126 — Première description Point v21.1 à sept champs
+
+Une septième portée privée accepte exactement une occurrence
+`Point.Description` sous la forme PBS à sept champs : coordonnées régionales,
+nom, description, puis identifiant de carte et coordonnées de destination. Le
+schéma statique v21.1 `^uusSUUUU` et les usages de la carte régionale confirment
+que les trois derniers champs présents forment la destination `[map ID, x, y]` ;
+la huitième position compilée, réservée au switch optionnel, doit rester `nil`.
+
+La portée exige exactement les types Marshal `Integer`, `Integer`, deux
+`RubyString`, trois `Integer`, puis `nil`. Elle lie le sous-champ description à
+sa ligne PBS complète, aux sept champs et à leurs six séparateurs, à l'empreinte des deux
+fichiers, au chemin compilé et au graphe Marshal hors cible. Toute modification
+du nombre ou de l'ordre des champs, des coordonnées, du nom, d'une autre
+description, des trois entiers, du `nil`, d'un type Ruby, de la structure, de la
+preuve ou de la provenance bloque l'opération.
+
+L'inventaire réel contient six Point à sept champs : deux descriptions présentes
+et quatre descriptions absentes, normalisées en `nil`, tous avec trois entiers
+de destination et un switch compilé `nil`. Un seul des deux cas portant une
+description a traversé le Studio, la reprise, la simulation, la reconstruction
+privée et la réextraction parmi 30 402 occurrences. Seuls
+`PBS/town_map.txt` et `Data/town_map.dat` diffèrent dans le candidat ; l'original,
+la copie de travail et le graphe Marshal hors chaîne ciblée restent identiques.
+Le candidat court démarre sans erreur immédiate. La validation visuelle humaine
+a ensuite confirmé dans le jeu l'affichage exact de la description reconstruite
+sur la carte régionale. Cette preuve reste strictement limitée à cette unique
+occurrence réelle à sept champs ; les cinq autres occurrences à sept champs, les
+formes à huit champs et `RECONSTRUCT` v21.1 public restent bloqués.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

@@ -104,6 +104,9 @@ V21_1_POINT_VALIDATION_SCOPE = (
 V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE = (
     "essentials_v21_1_point_description_four_fields_candidate_v1"
 )
+V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE = (
+    "essentials_v21_1_point_description_seven_fields_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -124,6 +127,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE,
         V21_1_POINT_VALIDATION_SCOPE,
         V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE,
+        V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE,
     }
 )
 V21_1_POINT_SCOPE_SPECS = {
@@ -132,6 +136,43 @@ V21_1_POINT_SCOPE_SPECS = {
         "PBS v21.1 — Point.Description",
         4,
         3,
+    ),
+    V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE: (
+        "PBS v21.1 — Point.Description",
+        7,
+        3,
+    ),
+}
+V21_1_POINT_SCOPE_COMPILED_TYPES = {
+    V21_1_POINT_VALIDATION_SCOPE: (
+        "int",
+        "int",
+        "RubyString",
+        "NoneType",
+        "NoneType",
+        "NoneType",
+        "NoneType",
+        "NoneType",
+    ),
+    V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE: (
+        "int",
+        "int",
+        "RubyString",
+        "RubyString",
+        "NoneType",
+        "NoneType",
+        "NoneType",
+        "NoneType",
+    ),
+    V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE: (
+        "int",
+        "int",
+        "RubyString",
+        "RubyString",
+        "int",
+        "int",
+        "int",
+        "NoneType",
     ),
 }
 
@@ -1239,20 +1280,8 @@ def _validate_v21_1_point_scope(
         or compiled_proof.get("target_reference_count") != 1
         or compiled_proof.get("target_value_sha256")
         != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
-        or (
-            plan.validation_scope == V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE
-            and compiled_proof.get("point_types")
-            != [
-                "int",
-                "int",
-                "RubyString",
-                "RubyString",
-                "NoneType",
-                "NoneType",
-                "NoneType",
-                "NoneType",
-            ]
-        )
+        or compiled_proof.get("point_types")
+        != list(V21_1_POINT_SCOPE_COMPILED_TYPES[plan.validation_scope])
         or compiled_path != [section_id, "@point", occurrence - 1, field_index]
         or compiled_proof.get("compiled_path") != compiled_path
     ):
@@ -1758,6 +1787,18 @@ def build_v21_1_point_description_validation_plan(
         game_root,
         csv_path,
         V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_point_description_seven_fields_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'une description Point à sept champs."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE,
     )
 
 
@@ -2387,14 +2428,20 @@ def _detect_text_encoding(path: Path) -> tuple[str, str]:
 
 def _v21_1_point_source_context(raw: bytes, item: PlanItem) -> dict[str, object]:
     """Relit la ligne PBS prouvée et retourne ses limites exactes."""
-    point_specs = {
-        row_type: (field_count, field_index)
+    item_field_count = _integer(item.pbs_field_count, "Nombre de champs Point")
+    item_field_index = _integer(item.pbs_field_index, "Sous-champ Point")
+    matching_specs = [
+        (field_count, field_index)
         for row_type, field_count, field_index in V21_1_POINT_SCOPE_SPECS.values()
-    }
-    try:
-        expected_field_count, expected_field_index = point_specs[item.type]
-    except KeyError as exc:
-        raise ReconstructionError("Type de sous-champ Point v21.1 inattendu.") from exc
+        if row_type == item.type
+        and field_count == item_field_count
+        and field_index == item_field_index
+    ]
+    if len(matching_specs) != 1:
+        raise ReconstructionError(
+            "Type ou forme de sous-champ Point v21.1 inattendu."
+        )
+    expected_field_count, expected_field_index = matching_specs[0]
     try:
         proof = json.loads(item.pbs_point_structure)
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
