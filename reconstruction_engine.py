@@ -42,6 +42,12 @@ from rpg_dialogue import (
 )
 from structured_extractor import (
     ExtractionIntegrityError,
+    PBS_POINT_STRUCTURE_FORMAT,
+    _pbs_assignment_parts,
+    _pbs_format,
+    _split_pbs_line,
+    _strict_point_layout,
+    build_pbs_point_structure_proof,
     build_extraction_inventory,
     extract_common_events,
     extract_map,
@@ -85,9 +91,13 @@ V21_1_COMMON_EVENT_401_VALIDATION_SCOPE = (
 V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE = (
     "essentials_v21_1_common_event_choice_candidate_v1"
 )
+V21_1_POINT_VALIDATION_SCOPE = (
+    "essentials_v21_1_point_name_three_fields_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
+V21_1_POINT_VALIDATION_FILE = "PBS/town_map.txt"
 V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS = 120
 V21_1_BANK_CORPUS_FILES = frozenset(
     {"Data/messages_core.dat", "Data/messages_game.dat"}
@@ -101,6 +111,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_COMMON_EVENT_SINGLE_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE,
+        V21_1_POINT_VALIDATION_SCOPE,
     }
 )
 
@@ -160,6 +171,14 @@ class PlanItem:
     rpg_common_event_sha256: str = ""
     rpg_choice_branch_command: str = ""
     rpg_choice_branch_parameter_index: str = ""
+    pbs_encoding: str = ""
+    pbs_bom: str = ""
+    pbs_newline: str = ""
+    pbs_field_index: str = ""
+    pbs_value_sha256: str = ""
+    pbs_line_number: str = ""
+    pbs_field_count: str = ""
+    pbs_point_structure: str = ""
     decision: str = "pending"  # applicable, skipped, blocked
     reason: str = ""
 
@@ -346,6 +365,8 @@ def _path_matches_item_type(relative: str, row_type: str) -> bool:
         }
     if row_type.startswith("PBS —"):
         return len(lowered) >= 2 and lowered[0] == "pbs" and lowered[-1].endswith(".txt")
+    if row_type.startswith("PBS v21.1 — Point."):
+        return lowered == ("pbs", "town_map.txt")
     return False
 
 
@@ -1069,6 +1090,152 @@ def _validate_v21_1_common_event_choice_scope(
     return applicable
 
 
+def _validate_v21_1_point_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la première preuve Point à un unique nom sur trois champs."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_POINT_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation Point v21.1 exige exactement un sous-champ accepté."
+        )
+    item = applicable[0]
+    if accepted[0].id_stable != item.id_stable:
+        raise ReconstructionError(
+            "L'occurrence acceptée ne correspond pas au sous-champ Point applicable."
+        )
+    relative = item.fichier.replace("\\", "/")
+    if (
+        item.type != "PBS v21.1 — Point.Name"
+        or relative.casefold() != V21_1_POINT_VALIDATION_FILE.casefold()
+        or {path.casefold() for path in plan.source_hashes}
+        != {V21_1_POINT_VALIDATION_FILE.casefold()}
+        or item.command != "Point"
+        or not item.event_id
+        or item.event_name != item.event_id
+        or item.map_id
+        or item.page
+        or any(
+            (
+                item.rpg_command_code,
+                item.rpg_command_indent,
+                item.rpg_parameter_index,
+                item.rpg_continuation_end,
+                item.rpg_dialogue_segments,
+                item.rpg_common_event_array_index,
+                item.rpg_common_event_trigger,
+                item.rpg_common_event_switch_id,
+                item.rpg_common_event_sha256,
+                item.rpg_choice_branch_command,
+                item.rpg_choice_branch_parameter_index,
+            )
+        )
+    ):
+        raise ReconstructionError(
+            "La validation Point est limitée à un Point.Name simple de PBS/town_map.txt."
+        )
+    match = re.fullmatch(r"([1-9]\d*):field:2", item.sub_index)
+    if match is None:
+        raise ReconstructionError("Sous-index du Point v21.1 absent ou incohérent.")
+    occurrence = int(match.group(1))
+    line_number = _integer(item.pbs_line_number, "Ligne PBS Point")
+    field_count = _integer(item.pbs_field_count, "Nombre de champs Point")
+    field_index = _integer(item.pbs_field_index, "Sous-champ Point")
+    if (
+        line_number <= 0
+        or field_count != 3
+        or field_index != 2
+        or item.pbs_encoding != "utf-8-sig"
+        or item.pbs_bom != "utf-8"
+        or item.pbs_newline != "CRLF"
+        or not re.fullmatch(r"[0-9a-f]{64}", item.pbs_value_sha256)
+        or item.id_stable
+        != stable_id(
+            "pbs_structured",
+            V21_1_POINT_VALIDATION_FILE,
+            item.event_id,
+            "Point",
+            occurrence,
+            field_index,
+        )
+    ):
+        raise ReconstructionError("Métadonnées du Point v21.1 absentes ou incohérentes.")
+    try:
+        proof = json.loads(item.pbs_point_structure)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ReconstructionError("Preuve structurelle Point v21.1 illisible.") from exc
+    if not isinstance(proof, dict):
+        raise ReconstructionError("Preuve structurelle Point v21.1 incohérente.")
+    expected_keys = {
+        "format",
+        "line_number",
+        "section",
+        "key_occurrence",
+        "field_count",
+        "field_index",
+        "field_spans",
+        "separator",
+        "separator_offsets",
+        "newline",
+        "prefix_sha256",
+        "trailing_sha256",
+        "value_sha256",
+        "line_sha256",
+        "non_target_fields_sha256",
+        "file_sha256",
+    }
+    hashes = (
+        proof.get("prefix_sha256"),
+        proof.get("trailing_sha256"),
+        proof.get("value_sha256"),
+        proof.get("line_sha256"),
+        proof.get("non_target_fields_sha256"),
+        proof.get("file_sha256"),
+    )
+    spans = proof.get("field_spans")
+    offsets = proof.get("separator_offsets")
+    if (
+        set(proof) != expected_keys
+        or proof.get("format") != PBS_POINT_STRUCTURE_FORMAT
+        or proof.get("line_number") != line_number
+        or proof.get("section") != item.event_id
+        or proof.get("key_occurrence") != occurrence
+        or proof.get("field_count") != field_count
+        or proof.get("field_index") != field_index
+        or proof.get("separator") != ","
+        or proof.get("newline") != "CRLF"
+        or proof.get("value_sha256") != item.pbs_value_sha256
+        or not isinstance(spans, list)
+        or len(spans) != 3
+        or any(
+            not isinstance(span, list)
+            or len(span) != 4
+            or any(not isinstance(value, int) or value < 0 for value in span)
+            for span in spans
+        )
+        or not isinstance(offsets, list)
+        or len(offsets) != 2
+        or any(not isinstance(value, int) or value < 0 for value in offsets)
+        or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes)
+    ):
+        raise ReconstructionError("Preuve structurelle Point v21.1 incohérente.")
+    if (
+        not item.translation
+        or any(character in item.translation for character in (",", '"', "\r", "\n"))
+        or extract_protected(item.source) != extract_protected(item.translation)
+    ):
+        raise ReconstructionError(
+            "La traduction Point v21.1 ne peut pas préserver exactement son sous-champ."
+        )
+    return applicable
+
+
 def _validate_v21_1_private_scope(
     plan: ReconstructionPlan,
     detection,
@@ -1087,6 +1254,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_common_event_401_scope(plan, detection)
     if plan.validation_scope == V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE:
         return _validate_v21_1_common_event_choice_scope(plan, detection)
+    if plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+        return _validate_v21_1_point_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -1153,6 +1322,11 @@ def _integer(value: str, field_name: str) -> int:
 
 
 def _supported_row_type(row_type: str, *, validation_scope: str = "") -> bool:
+    if (
+        validation_scope == V21_1_POINT_VALIDATION_SCOPE
+        and row_type == "PBS v21.1 — Point.Name"
+    ):
+        return True
     if (
         validation_scope == V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE
         and row_type == "Événement commun — Choix"
@@ -1306,6 +1480,14 @@ def _build_plan_verified_body(
             rpg_choice_branch_parameter_index=row.get(
                 "rpg_choice_branch_parameter_index", ""
             ),
+            pbs_encoding=row.get("pbs_encoding", ""),
+            pbs_bom=row.get("pbs_bom", ""),
+            pbs_newline=row.get("pbs_newline", ""),
+            pbs_field_index=row.get("pbs_field_index", ""),
+            pbs_value_sha256=row.get("pbs_value_sha256", ""),
+            pbs_line_number=row.get("pbs_line_number", ""),
+            pbs_field_count=row.get("pbs_field_count", ""),
+            pbs_point_structure=row.get("pbs_point_structure", ""),
         )
 
         if not _supported_row_type(item.type, validation_scope=validation_scope):
@@ -1449,6 +1631,18 @@ def build_v21_1_common_event_choice_validation_plan(
         game_root,
         csv_path,
         V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_point_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un seul Point.Name v21.1 à trois champs."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_POINT_VALIDATION_SCOPE,
     )
 
 
@@ -2076,6 +2270,156 @@ def _detect_text_encoding(path: Path) -> tuple[str, str]:
         return raw.decode("cp1252"), "cp1252"
 
 
+def _build_v21_1_point_payload(
+    raw: bytes,
+    relative: str,
+    items: list[PlanItem],
+) -> bytes:
+    """Remplace un seul Point.Name simple sans reformater le fichier PBS."""
+    if len(items) != 1:
+        raise ReconstructionError(
+            "La preuve Point v21.1 exige exactement un sous-champ."
+        )
+    item = items[0]
+    try:
+        proof = json.loads(item.pbs_point_structure)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ReconstructionError("Preuve structurelle Point v21.1 illisible.") from exc
+    if not isinstance(proof, dict):
+        raise ReconstructionError("Preuve structurelle Point v21.1 incohérente.")
+
+    content, encoding, bom, newline = _pbs_format(raw)
+    if (
+        relative.replace("\\", "/").casefold()
+        != V21_1_POINT_VALIDATION_FILE.casefold()
+        or item.type != "PBS v21.1 — Point.Name"
+        or encoding != item.pbs_encoding
+        or bom != item.pbs_bom
+        or newline != item.pbs_newline
+        or proof.get("file_sha256") != hashlib.sha256(raw).hexdigest()
+    ):
+        raise ReconstructionError(
+            "Format, encodage, BOM, fins de ligne ou empreinte du Point v21.1 modifié."
+        )
+
+    line_number = _integer(item.pbs_line_number, "Ligne PBS Point")
+    expected_occurrence = int(item.sub_index.split(":", 1)[0])
+    field_index = _integer(item.pbs_field_index, "Sous-champ Point")
+    lines = content.splitlines(keepends=True)
+    if not (1 <= line_number <= len(lines)):
+        raise ReconstructionError("Position de ligne du Point v21.1 invalide.")
+
+    section = "GLOBAL"
+    occurrence: Counter[tuple[str, str]] = Counter()
+    target: tuple[str, str, str, str, str] | None = None
+    for current_line_number, raw_line in enumerate(lines, start=1):
+        body, line_ending = _split_pbs_line(raw_line)
+        stripped = body.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        section_match = re.match(r"^\[([^\]]+)\]", stripped)
+        if section_match:
+            section = section_match.group(1).strip()
+            continue
+        assignment = _pbs_assignment_parts(body)
+        if assignment is None:
+            continue
+        prefix, key, value, trailing = assignment
+        if key == "Point":
+            occurrence[(section, key)] += 1
+        if current_line_number != line_number:
+            continue
+        if (
+            key != "Point"
+            or section != item.event_id
+            or occurrence[(section, key)] != expected_occurrence
+        ):
+            raise ReconstructionError(
+                "Section, occurrence ou position du Point v21.1 modifiée."
+            )
+        target = (body, line_ending, prefix, value, trailing)
+        break
+    if target is None:
+        raise ReconstructionError("Ligne Point v21.1 introuvable.")
+
+    body, line_ending, prefix, value, trailing = target
+    current_proof = build_pbs_point_structure_proof(
+        body=body,
+        line_ending=line_ending,
+        encoding=encoding,
+        section=section,
+        key_occurrence=expected_occurrence,
+        line_number=line_number,
+        field_index=field_index,
+        file_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    if not current_proof or current_proof != item.pbs_point_structure:
+        raise ReconstructionError(
+            "La ligne, ses séparateurs, champs, espaces ou commentaires Point ont changé."
+        )
+    layout = _strict_point_layout(value)
+    if (
+        layout is None
+        or len(layout["fields"]) != 3
+        or field_index != 2
+        or layout["fields"][field_index]["core"] != item.source
+    ):
+        raise ReconstructionError(
+            "La structure ou le texte source du Point v21.1 ne correspond plus."
+        )
+    if any(character in item.translation for character in (",", '"', "\r", "\n")):
+        raise ReconstructionError(
+            "La traduction Point contient un séparateur ou une frontière de ligne ambiguë."
+        )
+
+    field = layout["fields"][field_index]
+    rebuilt_value = (
+        value[: field["core_start"]]
+        + item.translation
+        + value[field["core_end"] :]
+    )
+    lines[line_number - 1] = f"{prefix}{rebuilt_value}{trailing}{line_ending}"
+    rebuilt_content = "".join(lines)
+    try:
+        payload = rebuilt_content.encode(encoding)
+    except UnicodeEncodeError as exc:
+        raise ReconstructionError(
+            f"Caractère Point incompatible avec l'encodage {encoding}: {exc}"
+        ) from exc
+    _content_after, encoding_after, bom_after, newline_after = _pbs_format(payload)
+    if (
+        encoding_after != encoding
+        or bom_after != bom
+        or newline_after != newline
+        or len(_content_after.splitlines(keepends=True)) != len(lines)
+    ):
+        raise ReconstructionError(
+            "La reconstruction Point modifierait l'encodage ou les fins de ligne."
+        )
+    return payload
+
+
+def _apply_v21_1_point_items(
+    path: Path,
+    relative: str,
+    items: list[PlanItem],
+) -> None:
+    payload = _build_v21_1_point_payload(read_stable_bytes(path), relative, items)
+
+    def validate(candidate: Path) -> None:
+        extracted = {
+            row["id_stable"]: row["texte_source"]
+            for row in extract_pbs(candidate, relative)
+        }
+        item = items[0]
+        if extracted.get(item.id_stable) != item.translation:
+            raise ReconstructionError(
+                "La relecture du Point v21.1 reconstruit ne retrouve pas la traduction."
+            )
+
+    atomic_write_bytes(path, payload, validator=validate)
+
+
 def _apply_pbs_items(path: Path, relative: str, items: list[PlanItem]) -> None:
     content, encoding = _detect_text_encoding(path)
     lines = content.splitlines(keepends=True)
@@ -2178,6 +2522,9 @@ def _apply_file(
         _atomic_write_marshal(path, root)
         return
     if relative.lower().startswith("pbs/") and relative.lower().endswith(".txt"):
+        if validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+            _apply_v21_1_point_items(path, relative, items)
+            return
         _apply_pbs_items(path, relative, items)
         return
     raise ReconstructionError("Format de fichier non pris en charge")
@@ -2211,6 +2558,17 @@ def _expected_v21_1_private_payloads(
     expected: dict[str, bytes] = {}
     for relative, items in by_file.items():
         path = _resolve_contained_path(source_root, relative)
+        if (
+            plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE
+            and relative.replace("\\", "/").casefold()
+            == V21_1_POINT_VALIDATION_FILE.casefold()
+        ):
+            expected[relative] = _build_v21_1_point_payload(
+                read_stable_bytes(path),
+                relative,
+                items,
+            )
+            continue
         root = load(path)
         if relative.lower().endswith(".rxdata"):
             if _is_v21_1_common_event_validation_scope(plan.validation_scope):
@@ -2341,6 +2699,13 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                     if available.get(item.id_stable) != item.source.strip():
                         raise ReconstructionError(f"Entrée de banque introuvable : {item.id_stable}")
             elif relative.lower().startswith("pbs/"):
+                if plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+                    _build_v21_1_point_payload(
+                        read_stable_bytes(path),
+                        relative,
+                        items,
+                    )
+                    continue
                 # Le moteur PBS complet réalise les mêmes vérifications. On l'exécute sur une copie temporaire en mémoire disque.
                 import tempfile
                 with tempfile.TemporaryDirectory(prefix="pft_sim_") as temp_dir:

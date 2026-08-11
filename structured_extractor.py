@@ -25,6 +25,8 @@ TRANSLATABLE_PBS_KEYS = {
     "IntroAfternoon", "IntroEvening", "MegaMessage", "StorageCreator",
 }
 
+PBS_POINT_STRUCTURE_FORMAT = "pft_pbs_point_structure_v1"
+
 RPG_CODE_RE = re.compile(r"\\(?:[A-Za-z]+\[[^\]]*\]|pn|sh|wu|n|l|g|b|r|[.!|^><]|[0-9]+)|<[^>]+>", re.I)
 
 
@@ -798,6 +800,123 @@ def _point_fields(value: str) -> list[str]:
         return []
 
 
+def _split_pbs_line(raw_line: str) -> tuple[str, str]:
+    if raw_line.endswith("\r\n"):
+        return raw_line[:-2], "\r\n"
+    if raw_line.endswith("\n"):
+        return raw_line[:-1], "\n"
+    return raw_line, ""
+
+
+def _pbs_assignment_parts(body: str) -> tuple[str, str, str, str] | None:
+    """Découpe une affectation PBS sans normaliser ses espaces.
+
+    Le préfixe comprend le signe ``=`` et les espaces qui le suivent. Les
+    espaces finaux restent séparés afin qu'une réinjection puisse remplacer
+    uniquement la valeur sans reformater la ligne.
+    """
+    separator = body.find("=")
+    if separator < 0:
+        return None
+    raw_key = body[:separator]
+    key = raw_key.strip()
+    if not key:
+        return None
+    after = body[separator + 1 :]
+    leading_length = len(after) - len(after.lstrip(" \t"))
+    remaining = after[leading_length:]
+    trailing_length = len(remaining) - len(remaining.rstrip(" \t"))
+    value = remaining[:-trailing_length] if trailing_length else remaining
+    prefix = body[: separator + 1] + after[:leading_length]
+    trailing = remaining[-trailing_length:] if trailing_length else ""
+    return prefix, key, value, trailing
+
+
+def _strict_point_layout(value: str) -> dict | None:
+    """Retourne les limites exactes d'un Point CSV simple et non cité.
+
+    Les formes avec guillemets restent extractibles via ``csv.reader``, mais ne
+    reçoivent aucune preuve de reconstruction privée : les réécrire demanderait
+    une normalisation CSV potentiellement ambiguë.
+    """
+    if any(character in value for character in ('"', "\r", "\n")):
+        return None
+    separator_offsets = [index for index, character in enumerate(value) if character == ","]
+    fields = []
+    start = 0
+    for end in separator_offsets + [len(value)]:
+        raw_field = value[start:end]
+        leading = len(raw_field) - len(raw_field.lstrip(" \t"))
+        remaining = raw_field[leading:]
+        trailing = len(remaining) - len(remaining.rstrip(" \t"))
+        core_end = end - trailing
+        fields.append(
+            {
+                "start": start,
+                "end": end,
+                "core_start": start + leading,
+                "core_end": core_end,
+                "raw": raw_field,
+                "core": value[start + leading : core_end],
+                "leading": leading,
+                "trailing": trailing,
+            }
+        )
+        start = end + 1
+    return {"fields": fields, "separator_offsets": separator_offsets}
+
+
+def build_pbs_point_structure_proof(
+    *,
+    body: str,
+    line_ending: str,
+    encoding: str,
+    section: str,
+    key_occurrence: int,
+    line_number: int,
+    field_index: int,
+    file_sha256: str,
+) -> str:
+    """Crée une preuve sans texte permettant une réinjection Point exacte."""
+    assignment = _pbs_assignment_parts(body)
+    if assignment is None:
+        return ""
+    prefix, key, value, trailing = assignment
+    if key != "Point":
+        return ""
+    layout = _strict_point_layout(value)
+    if layout is None or not (0 <= field_index < len(layout["fields"])):
+        return ""
+    codec = encoding.replace("-sig", "")
+    non_target = "\0".join(
+        f"{index}:{field['raw']}"
+        for index, field in enumerate(layout["fields"])
+        if index != field_index
+    )
+    proof = {
+        "format": PBS_POINT_STRUCTURE_FORMAT,
+        "line_number": line_number,
+        "section": section,
+        "key_occurrence": key_occurrence,
+        "field_count": len(layout["fields"]),
+        "field_index": field_index,
+        "field_spans": [
+            [field["start"], field["end"], field["leading"], field["trailing"]]
+            for field in layout["fields"]
+        ],
+        "separator": ",",
+        "separator_offsets": layout["separator_offsets"],
+        "newline": "CRLF" if line_ending == "\r\n" else ("LF" if line_ending == "\n" else "NONE"),
+        "prefix_sha256": hashlib.sha256(prefix.encode(codec)).hexdigest(),
+        "trailing_sha256": hashlib.sha256(trailing.encode(codec)).hexdigest(),
+        "value_sha256": _pbs_value_sha256(value, encoding),
+        "line_sha256": hashlib.sha256((body + line_ending).encode(codec)).hexdigest(),
+        "non_target_fields_sha256": hashlib.sha256(non_target.encode(codec)).hexdigest(),
+        "file_sha256": file_sha256,
+    }
+    return json.dumps(proof, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
 def _pbs_value_sha256(value: str, encoding: str) -> str:
     codec = encoding.replace("-sig", "")
     return hashlib.sha256(value.encode(codec)).hexdigest()
@@ -805,25 +924,34 @@ def _pbs_value_sha256(value: str, encoding: str) -> str:
 
 def extract_pbs(path: Path, relative: str) -> list[dict]:
     raw = path.read_bytes()
+    file_sha256 = hashlib.sha256(raw).hexdigest()
     content, encoding, bom, newline = _pbs_format(raw)
     rows = []
     section = "GLOBAL"
     occurrence: Counter[tuple[str, str]] = Counter()
-    for line_number, raw_line in enumerate(content.splitlines(), start=1):
-        line = raw_line.strip()
+    for line_number, raw_line in enumerate(content.splitlines(keepends=True), start=1):
+        body, line_ending = _split_pbs_line(raw_line)
+        line = body.strip()
         if not line or line.startswith("#"):
             continue
         section_match = re.match(r"^\[([^\]]+)\]", line)
         if section_match:
             section = section_match.group(1).strip()
             continue
-        if "=" not in line:
+        assignment = _pbs_assignment_parts(body)
+        if assignment is None:
             continue
-        key, value = [part.strip() for part in line.split("=", 1)]
+        _prefix, key, exact_value, _trailing = assignment
+        value = exact_value.strip()
         if key == "Point" and Path(relative).name.casefold() == "town_map.txt":
             occurrence[(section, key)] += 1
             sub_index = occurrence[(section, key)]
-            fields = _point_fields(value)
+            point_layout = _strict_point_layout(exact_value)
+            fields = (
+                [field["core"] for field in point_layout["fields"]]
+                if point_layout is not None
+                else _point_fields(value)
+            )
             for field_index, field_name in ((2, "Name"), (3, "Description")):
                 if field_index >= len(fields):
                     continue
@@ -851,7 +979,19 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
                     "pbs_bom": bom,
                     "pbs_newline": newline,
                     "pbs_field_index": field_index,
-                    "pbs_value_sha256": _pbs_value_sha256(value, encoding),
+                    "pbs_value_sha256": _pbs_value_sha256(exact_value, encoding),
+                    "pbs_line_number": line_number,
+                    "pbs_field_count": len(fields),
+                    "pbs_point_structure": build_pbs_point_structure_proof(
+                        body=body,
+                        line_ending=line_ending,
+                        encoding=encoding,
+                        section=section,
+                        key_occurrence=sub_index,
+                        line_number=line_number,
+                        field_index=field_index,
+                        file_sha256=file_sha256,
+                    ),
                 })
             continue
         if not is_translatable_pbs_key(key) or not looks_visible(value):
@@ -878,6 +1018,9 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
             "pbs_newline": newline,
             "pbs_field_index": "",
             "pbs_value_sha256": _pbs_value_sha256(value, encoding),
+            "pbs_line_number": line_number,
+            "pbs_field_count": "",
+            "pbs_point_structure": "",
         })
     return rows
 
@@ -985,6 +1128,9 @@ def _extract_snapshot(
                 "pbs_newline",
                 "pbs_field_index",
                 "pbs_value_sha256",
+                "pbs_line_number",
+                "pbs_field_count",
+                "pbs_point_structure",
             ):
                 row.setdefault(field_name, "")
             row["adaptateur"] = "pokemon_essentials"
@@ -1058,7 +1204,8 @@ FIELDNAMES = [
     "rpg_choice_branch_parameter_index",
     "texte_source", "traduction_fr", "codes_proteges", "statut",
     "pbs_encoding", "pbs_bom", "pbs_newline", "pbs_field_index",
-    "pbs_value_sha256", "adaptateur", "source_sha256",
+    "pbs_value_sha256", "pbs_line_number", "pbs_field_count",
+    "pbs_point_structure", "adaptateur", "source_sha256",
     "source_manifest_sha256", "profil_essentials",
     "version_essentials_declaree", "methode_version_essentials",
 ]

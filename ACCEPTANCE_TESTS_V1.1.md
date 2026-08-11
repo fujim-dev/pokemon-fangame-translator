@@ -323,6 +323,38 @@ normalement. Cette preuve ne s'étend pas aux autres structures 102/402, au
 multi-401 réel, à `Point`, aux PBS modernes ou à la reconstruction publique.
 `RECONSTRUCT` reste absent.
 
+### AC-123 — Premier sous-champ Point v21.1 strictement borné
+
+L'extraction d'un `Point` de `PBS/town_map.txt` enregistre une preuve immuable et
+sans texte : ligne, section, occurrence de clé, nombre et position des champs,
+limites et espaces de chaque champ, offsets des virgules, fin de ligne et
+empreintes du préfixe, de la valeur, des champs non ciblés, de la ligne et du
+fichier complet. Ces métadonnées font partie de la structure immuable du projet
+Studio.
+
+Une porte privée distincte accepte exactement un `Point.Name` composé de trois
+sous-champs simples (`x`, `y`, texte), le texte étant obligatoirement le troisième.
+Elle exige `PBS/town_map.txt`, UTF-8 avec BOM et CRLF, une provenance v21.1 intacte
+et une traduction sans guillemet, virgule ni retour de ligne. La simulation
+reconstruit le fichier en mémoire ; la copie candidate ne remplace que les octets
+du sous-champ ciblé, puis une réextraction doit retrouver le même identifiant,
+sous-index, nombre de champs et texte traduit.
+
+Les fixtures refusent un sous-champ manquant ou supplémentaire, un ordre ou une
+valeur non textuelle modifiés, un autre séparateur, un commentaire déplacé, un
+espace significatif différent, un BOM ou des CRLF modifiés, une preuve/provenance
+altérée et une source changée après planification. Le round-trip réel a ensuite
+extrait 30 402 occurrences, dont 27 noms et 8 descriptions Point, traversé la
+session Studio exclusive et sa reprise, puis modifié uniquement
+`PBS/town_map.txt` dans le candidat. La référence et la copie de travail sont
+restées identiques et la réextraction a retrouvé exactement l'occurrence ciblée.
+
+Cette preuve est structurelle et limitée à un seul `Point.Name` réel à trois
+champs. Elle ne valide ni `Point.Description`, ni les formes à quatre, sept ou
+huit champs, ni les lignes citées/ambiguës, ni la compilation PBS vers les données
+utilisées en jeu. Aucune validation visuelle n'en est déduite et `RECONSTRUCT`
+v21.1 public reste absent.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

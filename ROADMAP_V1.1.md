@@ -166,6 +166,16 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   modifié, l'exécution de sa branche 402 sans passage par la première branche et
   la fin normale de l'appel. Cette seconde preuve reste strictement limitée à
   cette occurrence et ne valide aucune autre forme 102/402.
+- une portée privée séparée lie désormais un `Point.Name` réel à trois champs à
+  sa ligne et à son fichier `PBS/town_map.txt` complets. La preuve immuable conserve
+  position, sous-index, champs, espaces, virgules, commentaires, BOM, CRLF et
+  empreintes, puis refuse toute divergence avant écriture ;
+- le round-trip réel correspondant a extrait 30 402 occurrences, dont 27 noms et
+  8 descriptions Point, traversé le Studio transactionnel, modifié seulement
+  `PBS/town_map.txt` et réextrait la traduction à la même identité. Original et
+  travail restent inchangés. Cette preuve ne couvre qu'un nom à trois champs et
+  reste fichier/structure : descriptions, formes 4/7/8 champs, compilation PBS,
+  observation en jeu et `RECONSTRUCT` public demeurent bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

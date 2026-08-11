@@ -324,7 +324,8 @@ Déjà en place :
   les mêmes catégories extractibles (cartes, événements communs, banques et PBS) ;
 - les champs PBS modernes confirmés sont lus avec conservation de la casse, des
   commandes, de l'encodage, du BOM et des fins de ligne. Les sous-champs `Point`
-  sont exposés pour traduction mais restent explicitement hors reconstruction ;
+  sont exposés pour traduction ; leur reconstruction publique reste explicitement
+  bloquée ;
 - le profil Essentials et la méthode de version sont liés aux lignes CSV et au
   manifeste privé. Une identité de projet qui annonce un autre profil que son
   manifeste est refusée.
@@ -432,6 +433,18 @@ Déjà en place :
   a confirmé l'affichage du second choix modifié, l'exécution de sa branche 402
   sans passage par la première branche et la fin normale de l'appel ;
   `RECONSTRUCT` public demeure absent ;
+- une cinquième portée privée couvre exactement un `Point.Name` réel à trois
+  sous-champs dans `PBS/town_map.txt`. L'extraction attache une preuve sans texte
+  à la ligne et au fichier complets : position, section/occurrence, champs,
+  espaces, séparateurs, BOM, CRLF et empreintes des parties ciblées/non ciblées.
+  Cette preuve devient une métadonnée immuable du projet Studio ;
+- les tests refusent sous-champ manquant/supplémentaire, ordre, séparateur, valeur
+  non textuelle, commentaire, espace, BOM, fins de ligne, source, preuve ou
+  provenance modifiés. Le round-trip réel a extrait 30 402 occurrences, dont 35
+  sous-champs Point, traversé le Studio et sa reprise, modifié uniquement
+  `PBS/town_map.txt`, puis réextrait le même identifiant et le même sous-index. La
+  référence et la copie de travail sont restées inchangées. La preuve reste
+  structurelle : elle ne compile pas les PBS et n'accorde pas `RECONSTRUCT` ;
 
 Encore partiel ou pas encore en place :
 
@@ -446,9 +459,9 @@ Encore partiel ou pas encore en place :
 - limite de temps des analyses statiques approfondies autres que les sondes :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
 - élargissement réel des événements communs à un corpus multi-401 et 102/402 plus
-  représentatif au-delà de l'unique choix commun désormais validé,
-  réinjection des sous-champs `Point`, PBS modernes et corpus réel encore plus
-  large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
+  représentatif au-delà de l'unique choix commun désormais validé, autres formes
+  `Point` (descriptions, 4/7/8 champs et compilation PBS), PBS modernes et corpus
+  réel encore plus large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
   malgré les preuves techniques et les validations visuelles déjà conclues.
 
 ## 4. Problèmes à éviter dans la v1.1
