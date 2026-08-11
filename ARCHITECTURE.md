@@ -464,6 +464,18 @@ Déjà en place :
   l'affichage du `Point.Name` traduit sur la carte régionale. Cette preuve ne
   s'étend ni aux descriptions, ni aux formes 4/7/8 champs, ni à la capacité
   publique `RECONSTRUCT` ;
+- une sixième portée privée traite séparément exactement une
+  `Point.Description` à quatre champs. Elle exige un tableau compilé de huit
+  positions typées (`Integer`, `Integer`, deux `RubyString`, puis quatre `nil`)
+  et conserve le nom, les coordonnées ainsi que tous les nœuds hors cible ;
+- les huit descriptions réelles ont une correspondance PBS/Marshal bijective :
+  six formes à quatre champs et deux à sept champs. Seule une occurrence de la
+  première forme est admise par la nouvelle porte. Son round-trip réel synchronise
+  uniquement `PBS/town_map.txt` et `Data/town_map.dat`, conserve les 30 402
+  occurrences et le graphe Marshal hors cible, puis démarre le candidat sous un
+  chemin court. Une validation visuelle humaine a confirmé l'affichage de cette
+  unique description à quatre champs sur la carte régionale. Aucune autre
+  description, forme 7/8 champs ni capacité publique n'en est déduite ;
 
 Encore partiel ou pas encore en place :
 
@@ -479,7 +491,7 @@ Encore partiel ou pas encore en place :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
 - élargissement réel des événements communs à un corpus multi-401 et 102/402 plus
   représentatif au-delà de l'unique choix commun désormais validé, autres formes
-  `Point` (descriptions et formes 4/7/8 champs), PBS modernes et corpus
+  `Point` (autres descriptions et formes 7/8 champs), PBS modernes et corpus
   réel encore plus large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
   malgré les preuves techniques et les validations visuelles déjà conclues.
 

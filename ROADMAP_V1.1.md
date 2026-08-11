@@ -194,6 +194,20 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   occurrence simple à trois champs synchronisée entre PBS et donnée compilée ;
   les descriptions, formes 4/7/8 champs, autres PBS modernes et `RECONSTRUCT`
   public restent volontairement bloqués.
+- les huit `Point.Description` réels ont ensuite été reliés sans ambiguïté au
+  compilé : six occurrences à quatre champs et deux à sept champs. Une porte
+  privée distincte n'accepte qu'une occurrence simple à quatre champs et exige
+  deux entiers, deux `RubyString` puis quatre `nil` dans le tableau compilé ;
+- les tests refusent sous-index/nombre de champs, présence de description,
+  nom, coordonnées, paramètres numériques, type/structure Marshal, sources ou
+  provenance modifiés. La forme réelle à sept champs reste volontairement hors
+  reconstruction ;
+- le round-trip réel d'une seule description à quatre champs synchronise les
+  deux fichiers TownMap, conserve les 30 402 occurrences, l'original, le travail
+  et le graphe Marshal hors cible. Le candidat court démarre sans erreur
+  immédiate. Une validation visuelle humaine a confirmé l'affichage de cette
+  unique description reconstruite sur la carte régionale ; toutes les autres
+  descriptions, les formes 7/8 champs et `RECONSTRUCT` public restent bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

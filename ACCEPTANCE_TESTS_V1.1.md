@@ -398,6 +398,38 @@ limitée à cette occurrence réelle simple à trois champs, synchronisée entre
 `Point.Description`, ni les formes PBS à quatre, sept ou huit champs, ni un autre
 PBS moderne. `RECONSTRUCT` v21.1 public reste absent.
 
+### AC-125 — Premier Point.Description v21.1 strictement borné
+
+Une sixième porte privée, distincte de celle du nom, accepte exactement une
+occurrence `Point.Description` simple à quatre champs (`x`, `y`, nom,
+description). Le sous-champ ciblé doit être le quatrième et la représentation
+compilée doit être un tableau de huit positions composé de deux entiers, deux
+`RubyString` UTF-8 `E=true`, puis exactement quatre `nil`. La forme PBS, le nom,
+les coordonnées, les valeurs hors cible et les deux fichiers complets font partie
+de la preuve immuable.
+
+La simulation et la reconstruction synchronisent uniquement
+`PBS/town_map.txt` et `Data/town_map.dat`. Elles refusent un sous-index ou un
+nombre de champs différent, une description ajoutée/supprimée, un nom, une
+coordonnée ou un paramètre numérique modifié, un type ou une structure Marshal
+différents, une source changée après planification et toute divergence de
+provenance. Une description à sept champs reste explicitement hors de cette
+porte, même si son extraction est déterministe.
+
+Le round-trip réel a confirmé la bijection des huit descriptions de la référence
+v21.1 : six formes à quatre champs et deux formes à sept champs, toutes liées à
+une `RubyString` compilée unique. Une seule forme à quatre champs a traversé le
+Studio, la reprise, la simulation, la reconstruction et la réextraction. Les
+30 402 occurrences sont conservées, seuls les deux fichiers TownMap attendus
+diffèrent, le graphe Marshal hors description ciblée est identique, et
+l'original comme la copie de travail restent inchangés. Le candidat sous chemin
+court démarre et reste actif sans erreur immédiate. Une validation visuelle
+humaine a ensuite confirmé l'affichage exact de cette description reconstruite
+sur la carte régionale. Cette preuve ne couvre qu'un seul `Point.Description`
+réel sous la forme PBS à quatre champs `x,y,nom,description` ; elle ne couvre pas
+les autres descriptions, les formes 7/8 champs ni la reconstruction publique.
+`RECONSTRUCT` v21.1 reste absent.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

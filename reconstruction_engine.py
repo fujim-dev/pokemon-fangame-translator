@@ -101,6 +101,9 @@ V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE = (
 V21_1_POINT_VALIDATION_SCOPE = (
     "essentials_v21_1_point_name_three_fields_candidate_v1"
 )
+V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE = (
+    "essentials_v21_1_point_description_four_fields_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -120,8 +123,21 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_COMMON_EVENT_401_VALIDATION_SCOPE,
         V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE,
         V21_1_POINT_VALIDATION_SCOPE,
+        V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE,
     }
 )
+V21_1_POINT_SCOPE_SPECS = {
+    V21_1_POINT_VALIDATION_SCOPE: ("PBS v21.1 — Point.Name", 3, 2),
+    V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE: (
+        "PBS v21.1 — Point.Description",
+        4,
+        3,
+    ),
+}
+
+
+def _is_v21_1_point_validation_scope(scope: str) -> bool:
+    return scope in V21_1_POINT_SCOPE_SPECS
 
 
 def _is_v21_1_common_event_validation_scope(scope: str) -> bool:
@@ -1112,11 +1128,17 @@ def _validate_v21_1_point_scope(
     plan: ReconstructionPlan,
     detection,
 ) -> list[PlanItem]:
-    """Borne la première preuve Point à un unique nom sur trois champs."""
+    """Borne une preuve Point au sous-champ exact autorisé par sa portée."""
+    try:
+        expected_type, expected_field_count, expected_field_index = (
+            V21_1_POINT_SCOPE_SPECS[plan.validation_scope]
+        )
+    except KeyError as exc:
+        raise ReconstructionError("Portée Point v21.1 inconnue.") from exc
     applicable = _validate_v21_1_scope_header(
         plan,
         detection,
-        V21_1_POINT_VALIDATION_SCOPE,
+        plan.validation_scope,
     )
     accepted = [item for item in plan.items if item.status == "Accepté"]
     if len(accepted) != 1 or len(applicable) != 1:
@@ -1130,7 +1152,7 @@ def _validate_v21_1_point_scope(
         )
     relative = item.fichier.replace("\\", "/")
     if (
-        item.type != "PBS v21.1 — Point.Name"
+        item.type != expected_type
         or relative.casefold() != V21_1_POINT_VALIDATION_FILE.casefold()
         or {path.casefold() for path in plan.source_hashes}
         != {
@@ -1159,9 +1181,13 @@ def _validate_v21_1_point_scope(
         )
     ):
         raise ReconstructionError(
-            "La validation Point est limitée à un Point.Name simple de PBS/town_map.txt."
+            "La validation Point est limitée au sous-champ privé attendu de "
+            "PBS/town_map.txt."
         )
-    match = re.fullmatch(r"([1-9]\d*):field:2", item.sub_index)
+    match = re.fullmatch(
+        rf"([1-9]\d*):field:{expected_field_index}",
+        item.sub_index,
+    )
     if match is None:
         raise ReconstructionError("Sous-index du Point v21.1 absent ou incohérent.")
     occurrence = int(match.group(1))
@@ -1170,8 +1196,8 @@ def _validate_v21_1_point_scope(
     field_index = _integer(item.pbs_field_index, "Sous-champ Point")
     if (
         line_number <= 0
-        or field_count != 3
-        or field_index != 2
+        or field_count != expected_field_count
+        or field_index != expected_field_index
         or re.fullmatch(r"0|[1-9]\d*", item.event_id) is None
         or item.pbs_encoding != "utf-8-sig"
         or item.pbs_bom != "utf-8"
@@ -1213,6 +1239,20 @@ def _validate_v21_1_point_scope(
         or compiled_proof.get("target_reference_count") != 1
         or compiled_proof.get("target_value_sha256")
         != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
+        or (
+            plan.validation_scope == V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE
+            and compiled_proof.get("point_types")
+            != [
+                "int",
+                "int",
+                "RubyString",
+                "RubyString",
+                "NoneType",
+                "NoneType",
+                "NoneType",
+                "NoneType",
+            ]
+        )
         or compiled_path != [section_id, "@point", occurrence - 1, field_index]
         or compiled_proof.get("compiled_path") != compiled_path
     ):
@@ -1263,7 +1303,7 @@ def _validate_v21_1_point_scope(
         or proof.get("newline") != "CRLF"
         or proof.get("value_sha256") != item.pbs_value_sha256
         or not isinstance(spans, list)
-        or len(spans) != 3
+        or len(spans) != expected_field_count
         or any(
             not isinstance(span, list)
             or len(span) != 4
@@ -1271,7 +1311,7 @@ def _validate_v21_1_point_scope(
             for span in spans
         )
         or not isinstance(offsets, list)
-        or len(offsets) != 2
+        or len(offsets) != expected_field_count - 1
         or any(not isinstance(value, int) or value < 0 for value in offsets)
         or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes)
     ):
@@ -1305,7 +1345,7 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_common_event_401_scope(plan, detection)
     if plan.validation_scope == V21_1_COMMON_EVENT_CHOICE_VALIDATION_SCOPE:
         return _validate_v21_1_common_event_choice_scope(plan, detection)
-    if plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+    if _is_v21_1_point_validation_scope(plan.validation_scope):
         return _validate_v21_1_point_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
@@ -1374,8 +1414,8 @@ def _integer(value: str, field_name: str) -> int:
 
 def _supported_row_type(row_type: str, *, validation_scope: str = "") -> bool:
     if (
-        validation_scope == V21_1_POINT_VALIDATION_SCOPE
-        and row_type == "PBS v21.1 — Point.Name"
+        _is_v21_1_point_validation_scope(validation_scope)
+        and row_type == V21_1_POINT_SCOPE_SPECS[validation_scope][0]
     ):
         return True
     if (
@@ -1570,7 +1610,7 @@ def _build_plan_verified_body(
 
     for relative in sorted({item.fichier for item in plan.items if item.decision == "applicable"}):
         plan.source_hashes[relative] = sha256_file(_resolve_contained_path(game_root, relative))
-    if validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+    if _is_v21_1_point_validation_scope(validation_scope):
         applicable = [item for item in plan.items if item.decision == "applicable"]
         if len(applicable) == 1:
             compiled_relative = applicable[0].pbs_compiled_file.replace("\\", "/")
@@ -1706,6 +1746,18 @@ def build_v21_1_point_validation_plan(
         game_root,
         csv_path,
         V21_1_POINT_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_point_description_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'une seule description Point à quatre champs."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE,
     )
 
 
@@ -2335,6 +2387,14 @@ def _detect_text_encoding(path: Path) -> tuple[str, str]:
 
 def _v21_1_point_source_context(raw: bytes, item: PlanItem) -> dict[str, object]:
     """Relit la ligne PBS prouvée et retourne ses limites exactes."""
+    point_specs = {
+        row_type: (field_count, field_index)
+        for row_type, field_count, field_index in V21_1_POINT_SCOPE_SPECS.values()
+    }
+    try:
+        expected_field_count, expected_field_index = point_specs[item.type]
+    except KeyError as exc:
+        raise ReconstructionError("Type de sous-champ Point v21.1 inattendu.") from exc
     try:
         proof = json.loads(item.pbs_point_structure)
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -2410,8 +2470,8 @@ def _v21_1_point_source_context(raw: bytes, item: PlanItem) -> dict[str, object]
     layout = _strict_point_layout(value)
     if (
         layout is None
-        or len(layout["fields"]) != 3
-        or field_index != 2
+        or len(layout["fields"]) != expected_field_count
+        or field_index != expected_field_index
         or layout["fields"][field_index]["core"] != item.source
     ):
         raise ReconstructionError(
@@ -2440,7 +2500,7 @@ def _build_v21_1_point_payload(
     relative: str,
     items: list[PlanItem],
 ) -> bytes:
-    """Remplace un seul Point.Name simple sans reformater le fichier PBS."""
+    """Remplace un seul sous-champ Point privé sans reformater le PBS."""
     if len(items) != 1:
         raise ReconstructionError(
             "La preuve Point v21.1 exige exactement un sous-champ."
@@ -2449,7 +2509,9 @@ def _build_v21_1_point_payload(
     if (
         relative.replace("\\", "/").casefold()
         != V21_1_POINT_VALIDATION_FILE.casefold()
-        or item.type != "PBS v21.1 — Point.Name"
+        or item.type not in {
+            spec[0] for spec in V21_1_POINT_SCOPE_SPECS.values()
+        }
     ):
         raise ReconstructionError("Fichier Point v21.1 inattendu.")
     context = _v21_1_point_source_context(raw, item)
@@ -2649,7 +2711,7 @@ def _apply_file(
     validation_scope: str = "",
 ) -> None:
     if (
-        validation_scope == V21_1_POINT_VALIDATION_SCOPE
+        _is_v21_1_point_validation_scope(validation_scope)
         and relative.replace("\\", "/").casefold()
         == V21_1_POINT_COMPILED_FILE.casefold()
     ):
@@ -2692,7 +2754,7 @@ def _apply_file(
         _atomic_write_marshal(path, root)
         return
     if relative.lower().startswith("pbs/") and relative.lower().endswith(".txt"):
-        if validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+        if _is_v21_1_point_validation_scope(validation_scope):
             _apply_v21_1_point_items(path, relative, items)
             return
         _apply_pbs_items(path, relative, items)
@@ -2729,7 +2791,7 @@ def _expected_v21_1_private_payloads(
     for relative, items in by_file.items():
         path = _resolve_contained_path(source_root, relative)
         if (
-            plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE
+            _is_v21_1_point_validation_scope(plan.validation_scope)
             and relative.replace("\\", "/").casefold()
             == V21_1_POINT_VALIDATION_FILE.casefold()
         ):
@@ -2790,7 +2852,7 @@ def _validate_file(
     validation_scope: str = "",
 ) -> list[str]:
     is_compiled_point = (
-        validation_scope == V21_1_POINT_VALIDATION_SCOPE
+        _is_v21_1_point_validation_scope(validation_scope)
         and relative.replace("\\", "/").casefold()
         == V21_1_POINT_COMPILED_FILE.casefold()
     )
@@ -2915,7 +2977,7 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                     if available.get(item.id_stable) != item.source.strip():
                         raise ReconstructionError(f"Entrée de banque introuvable : {item.id_stable}")
             elif relative.lower().startswith("pbs/"):
-                if plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+                if _is_v21_1_point_validation_scope(plan.validation_scope):
                     _build_v21_1_point_payload(
                         read_stable_bytes(path),
                         relative,
@@ -3113,7 +3175,7 @@ def _reconstruct_copy_verified_body(
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
     for item in applicable:
         by_file[item.fichier].append(item)
-    if plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+    if _is_v21_1_point_validation_scope(plan.validation_scope):
         by_file[V21_1_POINT_COMPILED_FILE] = list(validation_items)
 
     modified_files: list[str] = []
@@ -3155,7 +3217,7 @@ def _reconstruct_copy_verified_body(
                     )
             modified_files.append(relative)
             if not (
-                plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE
+                _is_v21_1_point_validation_scope(plan.validation_scope)
                 and relative.replace("\\", "/").casefold()
                 == V21_1_POINT_COMPILED_FILE.casefold()
             ):
