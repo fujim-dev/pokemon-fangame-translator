@@ -176,6 +176,24 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   travail restent inchangés. Cette preuve ne couvre qu'un nom à trois champs et
   reste fichier/structure : descriptions, formes 4/7/8 champs, compilation PBS,
   observation en jeu et `RECONSTRUCT` public demeurent bloqués.
+- l'audit compilé suivant a prouvé que la N-ième ligne Point d'une section PBS
+  correspond exactement à `Data/town_map.dat[section].@point[N-1]`. Le Marshal
+  contient un Hash de `GameData::TownMap` et chaque Point compilé est un tableau
+  typé de huit positions ; les champs PBS absents/vides deviennent `nil` sans
+  perdre l'identité section/occurrence ;
+- l'extraction lie maintenant les 35 sous-champs réels à une preuve compilée
+  immuable et refuse toute divergence de sections, métadonnées, nombre de Point,
+  types, valeurs ou alias. La porte privée du nom simple synchronise PBS et
+  `Data/town_map.dat`, recontrôle les deux sources après planification et préserve
+  le graphe Marshal entier hors chaîne ciblée ;
+- le nouveau round-trip réel ne change que ces deux fichiers, réextrait la même
+  traduction depuis chacun et laisse original, travail et tous les autres
+  fichiers identiques. Le candidat démarre sans erreur immédiate et reste
+  réactif. Une validation visuelle humaine a confirmé l'affichage du
+  `Point.Name` traduit sur la carte régionale. Cette preuve reste limitée à une
+  occurrence simple à trois champs synchronisée entre PBS et donnée compilée ;
+  les descriptions, formes 4/7/8 champs, autres PBS modernes et `RECONSTRUCT`
+  public restent volontairement bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

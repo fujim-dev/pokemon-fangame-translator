@@ -11,6 +11,12 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from essentials_town_map import (
+    COMPILED_TOWN_MAP_FILE,
+    TownMapIntegrityError,
+    build_compiled_point_proof,
+    validate_compiled_town_map_sections,
+)
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -289,6 +295,8 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
             return "map"
         if name in {"messages.dat", "messages_game.dat", "messages_core.dat"}:
             return "bank"
+        if name == "town_map.dat":
+            return "compiled_town_map"
     if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
         if any("backup" in part.casefold() for part in path.parts[1:]):
             return None
@@ -1025,6 +1033,127 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
     return rows
 
 
+def _bind_compiled_point_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie chaque sous-champ Point extrait à son emplacement Marshal exact."""
+    point_rows = [
+        row
+        for row in rows
+        if str(row.get("type") or "").startswith("PBS v21.1 — Point.")
+        and str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == "pbs/town_map.txt"
+    ]
+    if not point_rows:
+        return
+    by_kind = {source.kind: source for source in inventory.sources}
+    compiled_source = by_kind.get("compiled_town_map")
+    pbs_source = next(
+        (
+            source
+            for source in inventory.sources
+            if source.relative_path.casefold() == "pbs/town_map.txt"
+        ),
+        None,
+    )
+    if compiled_source is None or pbs_source is None:
+        raise ExtractionIntegrityError(
+            "Les Point PBS ne peuvent pas être liés à Data/town_map.dat."
+        )
+    compiled_path = snapshot_root.joinpath(*Path(compiled_source.relative_path).parts)
+    pbs_path = snapshot_root.joinpath(*Path(pbs_source.relative_path).parts)
+    compiled_raw = compiled_path.read_bytes()
+    pbs_raw = pbs_path.read_bytes()
+    content, _encoding, _bom, _newline = _pbs_format(pbs_raw)
+    lines = content.splitlines(keepends=True)
+    sections: dict[int, dict[str, object]] = {}
+    current_section: int | None = None
+    try:
+        for raw_line in lines:
+            body, _line_ending = _split_pbs_line(raw_line)
+            stripped = body.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            section_match = re.fullmatch(r"\[([^\]]+)\]", stripped)
+            if section_match:
+                section_text = section_match.group(1)
+                if not re.fullmatch(r"0|[1-9]\d*", section_text):
+                    raise ValueError("identifiant de section non canonique")
+                current_section = int(section_text)
+                if current_section in sections:
+                    raise ValueError("section dupliquée")
+                sections[current_section] = {"Name": None, "Filename": None, "Point": 0}
+                continue
+            assignment = _pbs_assignment_parts(body)
+            if assignment is None or current_section is None:
+                continue
+            _prefix, key, exact_value, _trailing = assignment
+            if key in {"Name", "Filename"}:
+                if sections[current_section][key] is not None:
+                    raise ValueError(f"{key} dupliqué")
+                if not exact_value or exact_value != exact_value.strip():
+                    raise ValueError(f"{key} ambigu")
+                sections[current_section][key] = exact_value
+            elif key == "Point":
+                sections[current_section]["Point"] = (
+                    int(sections[current_section]["Point"]) + 1
+                )
+        normalized_sections = {}
+        for section_id, metadata in sections.items():
+            name = metadata["Name"]
+            filename = metadata["Filename"]
+            if not isinstance(name, str) or not isinstance(filename, str):
+                raise ValueError("métadonnées de section absentes")
+            normalized_sections[section_id] = (
+                name,
+                filename,
+                int(metadata["Point"]),
+            )
+        validate_compiled_town_map_sections(
+            compiled_raw,
+            pbs_sections=normalized_sections,
+        )
+    except (TypeError, ValueError, TownMapIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "Les sections PBS et compilées de TownMap sont incohérentes."
+        ) from exc
+    for row in point_rows:
+        try:
+            line_number = int(row["pbs_line_number"])
+            field_index = int(row["pbs_field_index"])
+            occurrence = int(str(row["sous_index"]).split(":", 1)[0])
+            if not (1 <= line_number <= len(lines)):
+                raise ValueError("ligne Point absente")
+            body, _line_ending = _split_pbs_line(lines[line_number - 1])
+            assignment = _pbs_assignment_parts(body)
+            if assignment is None or assignment[1] != "Point":
+                raise ValueError("affectation Point absente")
+            layout = _strict_point_layout(assignment[2])
+            if layout is None:
+                raise ValueError("Point cité ou ambigu")
+            fields = [str(field["core"]) for field in layout["fields"]]
+            proof_json = build_compiled_point_proof(
+                compiled_raw,
+                section=str(row["evenement_id"]),
+                occurrence=occurrence,
+                field_index=field_index,
+                pbs_fields=fields,
+            )
+            proof = json.loads(proof_json)
+        except (KeyError, TypeError, ValueError, TownMapIntegrityError) as exc:
+            raise ExtractionIntegrityError(
+                "La correspondance entre un Point PBS et Data/town_map.dat est ambiguë."
+            ) from exc
+        row["pbs_compiled_file"] = compiled_source.relative_path
+        row["pbs_compiled_sha256"] = compiled_source.sha256
+        row["pbs_compiled_path"] = json.dumps(
+            proof["compiled_path"], ensure_ascii=True, separators=(",", ":")
+        )
+        row["pbs_compiled_structure"] = proof_json
+
+
 def _is_same_or_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1131,6 +1260,10 @@ def _extract_snapshot(
                 "pbs_line_number",
                 "pbs_field_count",
                 "pbs_point_structure",
+                "pbs_compiled_file",
+                "pbs_compiled_sha256",
+                "pbs_compiled_path",
+                "pbs_compiled_structure",
             ):
                 row.setdefault(field_name, "")
             row["adaptateur"] = "pokemon_essentials"
@@ -1139,6 +1272,8 @@ def _extract_snapshot(
         rows.extend(extracted)
         if progress:
             progress(index, total, source.relative_path)
+
+    _bind_compiled_point_proofs(snapshot_root, inventory, rows)
 
     duplicates = [
         row_id
@@ -1205,7 +1340,8 @@ FIELDNAMES = [
     "texte_source", "traduction_fr", "codes_proteges", "statut",
     "pbs_encoding", "pbs_bom", "pbs_newline", "pbs_field_index",
     "pbs_value_sha256", "pbs_line_number", "pbs_field_count",
-    "pbs_point_structure", "adaptateur", "source_sha256",
+    "pbs_point_structure", "pbs_compiled_file", "pbs_compiled_sha256",
+    "pbs_compiled_path", "pbs_compiled_structure", "adaptateur", "source_sha256",
     "source_manifest_sha256", "profil_essentials",
     "version_essentials_declaree", "methode_version_essentials",
 ]

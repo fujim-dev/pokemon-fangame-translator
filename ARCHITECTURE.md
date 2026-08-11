@@ -445,6 +445,25 @@ Déjà en place :
   `PBS/town_map.txt`, puis réextrait le même identifiant et le même sous-index. La
   référence et la copie de travail sont restées inchangées. La preuve reste
   structurelle : elle ne compile pas les PBS et n'accorde pas `RECONSTRUCT` ;
+- `essentials_town_map.py` corrèle maintenant sans Ruby chaque Point PBS à
+  `Hash[section].@point[occurrence-1]` dans le Marshal 4.8 compilé. Il accepte
+  uniquement des objets `GameData::TownMap` aux six attributs attendus et des
+  tableaux Point de huit positions typées. L'extraction exige aussi l'égalité
+  globale des sections, identifiants, noms, fichiers graphiques et nombres de
+  Point, ainsi qu'un aller-retour Marshal byte-identical ;
+- la preuve Point immuable contient désormais le chemin compilé, l'empreinte de
+  `Data/town_map.dat`, les types, l'ordre, le graphe complet et le graphe masqué
+  hors chaîne ciblée. Une chaîne partagée ou une divergence PBS/compilé bloque
+  l'extraction au lieu de produire un CSV apparemment cohérent ;
+- la portée privée du `Point.Name` à trois champs publie maintenant de manière
+  coordonnée `PBS/town_map.txt` et `Data/town_map.dat`. Les deux sources sont
+  recontrôlées après simulation et les deux candidats sont relus avant succès.
+  Le round-trip réel ne modifie que ces deux fichiers, conserve le graphe Marshal
+  hors cible et réextrait la même traduction depuis PBS et compilé. Le candidat
+  démarre et reste réactif. Une validation visuelle humaine a confirmé
+  l'affichage du `Point.Name` traduit sur la carte régionale. Cette preuve ne
+  s'étend ni aux descriptions, ni aux formes 4/7/8 champs, ni à la capacité
+  publique `RECONSTRUCT` ;
 
 Encore partiel ou pas encore en place :
 
@@ -460,7 +479,7 @@ Encore partiel ou pas encore en place :
   leur durée n'est pas encore bornée par le service d'isolation des adaptateurs.
 - élargissement réel des événements communs à un corpus multi-401 et 102/402 plus
   représentatif au-delà de l'unique choix commun désormais validé, autres formes
-  `Point` (descriptions, 4/7/8 champs et compilation PBS), PBS modernes et corpus
+  `Point` (descriptions et formes 4/7/8 champs), PBS modernes et corpus
   réel encore plus large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
   malgré les preuves techniques et les validations visuelles déjà conclues.
 

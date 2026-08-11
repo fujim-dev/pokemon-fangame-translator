@@ -20,6 +20,12 @@ from adapters import (
     create_default_registry,
 )
 from extraction_project import EXTRACTION_MANIFEST_NAME, build_extraction_manifest_bytes
+from essentials_town_map import (
+    COMPILED_POINT_PROOF_FORMAT,
+    extract_compiled_point_text,
+    graph_sha256,
+    load_town_map_bytes,
+)
 from analysis.integrity import compare_snapshots, snapshot_tree
 from project_identity import (
     PROJECT_METADATA_NAME,
@@ -46,6 +52,7 @@ from reconstruction_engine import (
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from structured_extractor import (
+    ExtractionIntegrityError,
     PBS_POINT_STRUCTURE_FORMAT,
     extract_map,
     extract_message_bank,
@@ -296,6 +303,41 @@ def prepare_v21_game(
             b"# keep this comment exactly here\r\n"
             b"Point = 5,8,Untouched Town,Untouched Description,1,2,3\r\n"
         )
+        town_map = {
+            0: RubyObject(
+                "GameData::TownMap",
+                {
+                    "@id": 0,
+                    "@real_name": ruby_text("Synthetic Region"),
+                    "@filename": ruby_text("synthetic.png"),
+                    "@point": [
+                        [
+                            4,
+                            7,
+                            ruby_text("Synthetic Route"),
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ],
+                        [
+                            5,
+                            8,
+                            ruby_text("Untouched Town"),
+                            ruby_text("Untouched Description"),
+                            1,
+                            2,
+                            3,
+                            None,
+                        ],
+                    ],
+                    "@flags": [],
+                    "@pbs_file_suffix": ruby_text(""),
+                },
+            )
+        }
+        (data / "town_map.dat").write_bytes(dumps(town_map))
 
 
 def write_extracted_project_csv(path: Path, rows: list[dict]) -> None:
@@ -561,6 +603,85 @@ class EssentialsV21ProfileTests(unittest.TestCase):
         self.assertEqual("utf-8", row["pbs_bom"])
         self.assertEqual("CRLF", row["pbs_newline"])
 
+    def test_point_extraction_binds_every_row_to_the_compiled_town_map(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_v21_pt_link_") as temporary:
+            root = Path(temporary) / "game"
+            prepare_v21_game(root, point_validation=True)
+            extraction = PokemonEssentialsAdapter().extract_with_provenance(root)
+            point_rows = [
+                row
+                for row in extraction.rows
+                if row["type"].startswith("PBS v21.1 — Point.")
+            ]
+
+        self.assertEqual(3, len(point_rows))
+        self.assertTrue(
+            any(source.relative_path == "Data/town_map.dat" for source in extraction.sources)
+        )
+        for row in point_rows:
+            proof = json.loads(row["pbs_compiled_structure"])
+            self.assertEqual(COMPILED_POINT_PROOF_FORMAT, proof["format"])
+            self.assertEqual("Data/town_map.dat", row["pbs_compiled_file"])
+            self.assertEqual(proof["file_sha256"], row["pbs_compiled_sha256"])
+            self.assertEqual(proof["compiled_path"], json.loads(row["pbs_compiled_path"]))
+            self.assertNotIn(row["texte_source"], row["pbs_compiled_structure"])
+
+    def test_point_extraction_refuses_a_pbs_compiled_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_v21_pt_mismatch_") as temporary:
+            root = Path(temporary) / "game"
+            prepare_v21_game(root, point_validation=True)
+            compiled_path = root / "Data" / "town_map.dat"
+            compiled = load(compiled_path)
+            compiled[0].ivars["@point"][0][0] = 9
+            compiled_path.write_bytes(dumps(compiled))
+
+            with self.assertRaisesRegex(
+                ExtractionIntegrityError,
+                "correspondance|ambiguë",
+            ):
+                PokemonEssentialsAdapter().extract_with_provenance(root)
+
+    def test_point_extraction_refuses_global_town_map_section_mismatches(self) -> None:
+        mutations = {
+            "section name": lambda root: setattr(
+                root[0].ivars["@real_name"], "data", b"Other Region"
+            ),
+            "section filename": lambda root: setattr(
+                root[0].ivars["@filename"], "data", b"other.png"
+            ),
+            "extra compiled point": lambda root: root[0].ivars["@point"].append(
+                [9, 9, ruby_text("Extra"), None, None, None, None, None]
+            ),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory(
+                prefix="pft_v21_pt_section_"
+            ) as temporary:
+                root = Path(temporary) / "game"
+                prepare_v21_game(root, point_validation=True)
+                compiled_path = root / "Data" / "town_map.dat"
+                compiled = load(compiled_path)
+                mutate(compiled)
+                compiled_path.write_bytes(dumps(compiled))
+
+                with self.assertRaisesRegex(
+                    ExtractionIntegrityError,
+                    "sections PBS et compilées|TownMap",
+                ):
+                    PokemonEssentialsAdapter().extract_with_provenance(root)
+
+    def test_point_extraction_refuses_a_missing_compiled_town_map(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="pft_v21_pt_missing_" ) as temporary:
+            root = Path(temporary) / "game"
+            prepare_v21_game(root, point_validation=True)
+            (root / "Data" / "town_map.dat").unlink()
+
+            with self.assertRaisesRegex(
+                ExtractionIntegrityError,
+                "liés|town_map",
+            ):
+                PokemonEssentialsAdapter().extract_with_provenance(root)
+
     def test_point_structure_proof_is_immutable_during_studio_save(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pft_v21_pt_studio_") as temporary:
             base = Path(temporary)
@@ -571,7 +692,7 @@ class EssentialsV21ProfileTests(unittest.TestCase):
                 fields = list(reader.fieldnames or [])
                 rows = list(reader)
             target = next(row for row in rows if row["id_stable"] == selected["id_stable"])
-            target["pbs_point_structure"] = "{}"
+            target["pbs_compiled_structure"] = "{}"
             output = io.StringIO(newline="")
             writer = csv.DictWriter(output, fieldnames=fields, delimiter=";")
             writer.writeheader()
@@ -599,7 +720,9 @@ class EssentialsV21ProfileTests(unittest.TestCase):
             target = base / "candidate"
             reports = base / "reports"
             point_path = root / "PBS" / "town_map.txt"
+            compiled_path = root / "Data" / "town_map.dat"
             original_payload = point_path.read_bytes()
+            original_compiled = compiled_path.read_bytes()
             source_before = snapshot_tree(root)
 
             with self.assertRaisesRegex(ReconstructionError, "Reconstruction bloquée"):
@@ -612,11 +735,17 @@ class EssentialsV21ProfileTests(unittest.TestCase):
             self.assertEqual("PBS v21.1 — Point.Name", item.type)
             self.assertEqual("3", str(item.pbs_field_count))
             self.assertEqual("2", str(item.pbs_field_index))
+            compiled_proof = json.loads(item.pbs_compiled_structure)
+            self.assertEqual(COMPILED_POINT_PROOF_FORMAT, compiled_proof["format"])
+            self.assertEqual([0, "@point", 0, 2], compiled_proof["compiled_path"])
 
             simulate_plan(plan)
             result = reconstruct_copy(plan, target, reports)
 
-            self.assertEqual(["PBS/town_map.txt"], result.modified_files)
+            self.assertEqual(
+                ["Data/town_map.dat", "PBS/town_map.txt"],
+                result.modified_files,
+            )
             self.assertEqual(1, result.applied)
             self.assertTrue(result.original_unchanged)
             self.assertTrue(result.integrity_valid)
@@ -640,10 +769,36 @@ class EssentialsV21ProfileTests(unittest.TestCase):
             self.assertEqual(3, rebuilt["pbs_field_count"])
             self.assertEqual(2, rebuilt["pbs_field_index"])
 
+            original_root = load_town_map_bytes(original_compiled)
+            candidate_raw = (target / "Data" / "town_map.dat").read_bytes()
+            candidate_root = load_town_map_bytes(candidate_raw)
+            original_target = original_root[0].ivars["@point"][0][2]
+            candidate_target = candidate_root[0].ivars["@point"][0][2]
+            self.assertEqual(selected["texte_source"], original_target.text())
+            self.assertEqual(selected["traduction_fr"], candidate_target.text())
+            self.assertEqual(
+                graph_sha256(original_root, masked_string=original_target),
+                graph_sha256(candidate_root, masked_string=candidate_target),
+            )
+            self.assertEqual(
+                dumps(original_root[0].ivars["@point"][1]),
+                dumps(candidate_root[0].ivars["@point"][1]),
+            )
+            self.assertEqual(
+                selected["traduction_fr"],
+                extract_compiled_point_text(
+                    candidate_raw,
+                    section="0",
+                    occurrence=1,
+                    field_index=2,
+                    pbs_fields=["4", "7", selected["traduction_fr"]],
+                ),
+            )
+
             comparison = compare_snapshots(
                 source_before,
                 snapshot_tree(target),
-                allowed_changed={"PBS/town_map.txt"},
+                allowed_changed={"Data/town_map.dat", "PBS/town_map.txt"},
             )
             self.assertFalse(comparison.missing_files)
             self.assertFalse(comparison.changed_files)
@@ -732,8 +887,57 @@ class EssentialsV21ProfileTests(unittest.TestCase):
                 ):
                     simulate_plan(plan)
 
+    def test_v21_point_refuses_compiled_index_type_and_structure_changes(self) -> None:
+        for mutation in (
+            "wrong_index",
+            "wrong_section",
+            "wrong_path",
+            "changed_non_text_value",
+            "changed_target_type",
+            "changed_marshal_structure",
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                prefix="pft_v21_pt_compiled_bad_"
+            ) as temporary:
+                base = Path(temporary)
+                root, csv_path, _selected = prepare_point_project(base)
+                plan = build_v21_1_point_validation_plan(root, csv_path)
+                item = next(
+                    item for item in plan.items if item.decision == "applicable"
+                )
+                if mutation in {"wrong_index", "wrong_section"}:
+                    proof = json.loads(item.pbs_compiled_structure)
+                    if mutation == "wrong_index":
+                        proof["point_index"] = 1
+                    else:
+                        proof["section"] = 1
+                    item.pbs_compiled_structure = json.dumps(
+                        proof,
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                elif mutation == "wrong_path":
+                    item.pbs_compiled_path = '[0,"@point",1,2]'
+                else:
+                    compiled_path = root / "Data" / "town_map.dat"
+                    compiled = load(compiled_path)
+                    if mutation == "changed_non_text_value":
+                        compiled[0].ivars["@point"][0][0] = 9
+                    elif mutation == "changed_target_type":
+                        compiled[0].ivars["@point"][0][2] = 123
+                    else:
+                        del compiled[0].ivars["@flags"]
+                    compiled_path.write_bytes(dumps(compiled))
+
+                with self.assertRaisesRegex(
+                    ReconstructionError,
+                    "Point|compilée|town_map|sources",
+                ):
+                    simulate_plan(plan)
+
     def test_v21_point_refuses_changed_provenance_and_source_after_plan(self) -> None:
-        for mutation in ("provenance", "source_after_plan"):
+        for mutation in ("provenance", "source_after_plan", "compiled_after_plan"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
                 prefix="pft_v21_pt_guard_"
             ) as temporary:
@@ -744,7 +948,7 @@ class EssentialsV21ProfileTests(unittest.TestCase):
                 target = base / "candidate"
                 if mutation == "provenance":
                     plan.project_provenance_token = "altered-provenance"
-                else:
+                elif mutation == "source_after_plan":
                     path = root / "PBS" / "town_map.txt"
                     path.write_bytes(
                         path.read_bytes().replace(
@@ -753,6 +957,11 @@ class EssentialsV21ProfileTests(unittest.TestCase):
                             1,
                         )
                     )
+                else:
+                    path = root / "Data" / "town_map.dat"
+                    compiled = load(path)
+                    compiled[0].ivars["@point"][0][0] = 9
+                    path.write_bytes(dumps(compiled))
                 with self.assertRaisesRegex(
                     ReconstructionError,
                     "provenance|sources|source|inventaire|changé",

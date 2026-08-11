@@ -355,6 +355,49 @@ huit champs, ni les lignes citées/ambiguës, ni la compilation PBS vers les don
 utilisées en jeu. Aucune validation visuelle n'en est déduite et `RECONSTRUCT`
 v21.1 public reste absent.
 
+### AC-124 — Synchronisation privée de TownMap PBS et compilé
+
+L'analyse statique de la référence v21.1 relie de manière déterministe la
+N-ième affectation `Point` d'une section PBS à
+`Hash[section].@point[N-1]` dans `Data/town_map.dat`. La racine Marshal 4.8 est un
+`Hash<Integer, GameData::TownMap>` ; chaque objet conserve exactement `@id`,
+`@real_name`, `@filename`, `@point`, `@flags` et `@pbs_file_suffix`. Chaque Point
+compilé est un `Array` de huit positions : coordonnées entières, nom et
+description optionnelle sous forme de `RubyString` UTF-8 `E=true`, puis paramètres
+optionnels entiers ou `nil`. Les champs PBS absents ou vides sont normalisés en
+`nil` par la compilation ; cette normalisation ne change ni la section ni l'ordre
+des occurrences.
+
+Avant d'attacher une preuve à une occurrence, l'extraction exige l'égalité de
+l'ensemble des sections, des identifiants, noms, fichiers graphiques et nombres
+de Point entre PBS et donnée compilée. Elle prouve également que la lecture puis
+l'écriture Marshal reproduit le fichier original octet pour octet. Une preuve
+sans texte lie ensuite les empreintes des deux fichiers, le chemin compilé, les
+types, l'ordre, le graphe complet et le nombre de références de la chaîne ciblée.
+Ces métadonnées sont immuables dans le Studio.
+
+La porte privée AC-123 synchronise désormais exactement une occurrence
+`Point.Name` réelle à trois champs dans `PBS/town_map.txt` et
+`Data/town_map.dat`. Elle recontrôle les deux empreintes après planification,
+construit les deux fichiers en mémoire, relit le Marshal et refuse la publication
+si le graphe masqué hors cible, les types, la valeur source ou la provenance ont
+changé. Les fixtures refusent notamment section/index/type erroné, section ou
+Point ajouté/manquant, paramètre non textuel modifié, source PBS ou compilée
+changée après simulation et preuve/provenance altérée.
+
+Le round-trip réel a extrait 30 402 occurrences et lié les 35 sous-champs Point
+aux données compilées. Après Studio, reprise, simulation, reconstruction et
+réextraction, seuls `PBS/town_map.txt` et `Data/town_map.dat` diffèrent dans le
+candidat ; l'original et la copie de travail sont inchangés, tous les autres
+fichiers sont identiques et le graphe Marshal hors texte ciblé est strictement
+identique. Le candidat démarre sans erreur immédiate et reste réactif. Une
+validation visuelle humaine a ensuite confirmé dans le jeu l'affichage exact du
+`Point.Name` traduit sur la carte régionale. Cette preuve reste strictement
+limitée à cette occurrence réelle simple à trois champs, synchronisée entre
+`PBS/town_map.txt` et `Data/town_map.dat` ; elle ne couvre ni
+`Point.Description`, ni les formes PBS à quatre, sept ou huit champs, ni un autre
+PBS moderne. `RECONSTRUCT` v21.1 public reste absent.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

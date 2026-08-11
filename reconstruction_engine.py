@@ -30,6 +30,13 @@ from analysis.integrity import (
     compare_snapshots,
     snapshot_tree,
 )
+from essentials_town_map import (
+    COMPILED_POINT_PROOF_FORMAT,
+    COMPILED_TOWN_MAP_FILE,
+    TownMapIntegrityError,
+    extract_compiled_point_text,
+    rebuild_compiled_point,
+)
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
@@ -98,6 +105,7 @@ V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
 V21_1_POINT_VALIDATION_FILE = "PBS/town_map.txt"
+V21_1_POINT_COMPILED_FILE = COMPILED_TOWN_MAP_FILE
 V21_1_MKXP_MAX_CANDIDATE_ROOT_CHARS = 120
 V21_1_BANK_CORPUS_FILES = frozenset(
     {"Data/messages_core.dat", "Data/messages_game.dat"}
@@ -179,6 +187,10 @@ class PlanItem:
     pbs_line_number: str = ""
     pbs_field_count: str = ""
     pbs_point_structure: str = ""
+    pbs_compiled_file: str = ""
+    pbs_compiled_sha256: str = ""
+    pbs_compiled_path: str = ""
+    pbs_compiled_structure: str = ""
     decision: str = "pending"  # applicable, skipped, blocked
     reason: str = ""
 
@@ -510,9 +522,12 @@ def _validate_v21_1_validation_scope(
         raise ReconstructionError(
             "La traduction de validation v21.1 ne conserve pas exactement les commandes."
         )
-    if any(item.decision == "blocked" for item in plan.items):
+    blocked = [item for item in plan.items if item.decision == "blocked"]
+    if blocked:
+        detail = blocked[0].reason or "raison non disponible"
         raise ReconstructionError(
-            "Le plan de validation v21.1 contient une occurrence bloquée."
+            "Le plan de validation v21.1 contient une occurrence bloquée : "
+            f"{detail}"
         )
     if set(plan.source_hashes) != {V21_1_VALIDATION_FILE}:
         raise ReconstructionError(
@@ -539,9 +554,12 @@ def _validate_v21_1_scope_header(
         raise ReconstructionError(
             "Le plan de validation v21.1 ne correspond plus au profil détecté."
         )
-    if any(item.decision == "blocked" for item in plan.items):
+    blocked = [item for item in plan.items if item.decision == "blocked"]
+    if blocked:
+        detail = blocked[0].reason or "raison non disponible"
         raise ReconstructionError(
-            "Le plan de validation v21.1 contient une occurrence bloquée."
+            "Le plan de validation v21.1 contient une occurrence bloquée : "
+            f"{detail}"
         )
     return [item for item in plan.items if item.decision == "applicable"]
 
@@ -1115,7 +1133,10 @@ def _validate_v21_1_point_scope(
         item.type != "PBS v21.1 — Point.Name"
         or relative.casefold() != V21_1_POINT_VALIDATION_FILE.casefold()
         or {path.casefold() for path in plan.source_hashes}
-        != {V21_1_POINT_VALIDATION_FILE.casefold()}
+        != {
+            V21_1_POINT_VALIDATION_FILE.casefold(),
+            V21_1_POINT_COMPILED_FILE.casefold(),
+        }
         or item.command != "Point"
         or not item.event_id
         or item.event_name != item.event_id
@@ -1151,6 +1172,7 @@ def _validate_v21_1_point_scope(
         line_number <= 0
         or field_count != 3
         or field_index != 2
+        or re.fullmatch(r"0|[1-9]\d*", item.event_id) is None
         or item.pbs_encoding != "utf-8-sig"
         or item.pbs_bom != "utf-8"
         or item.pbs_newline != "CRLF"
@@ -1166,6 +1188,35 @@ def _validate_v21_1_point_scope(
         )
     ):
         raise ReconstructionError("Métadonnées du Point v21.1 absentes ou incohérentes.")
+    section_id = int(item.event_id)
+    try:
+        compiled_proof = json.loads(item.pbs_compiled_structure)
+        compiled_path = json.loads(item.pbs_compiled_path)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ReconstructionError("Preuve compilée Point v21.1 illisible.") from exc
+    if (
+        item.pbs_compiled_file.replace("\\", "/").casefold()
+        != V21_1_POINT_COMPILED_FILE.casefold()
+        or not re.fullmatch(r"[0-9a-f]{64}", item.pbs_compiled_sha256)
+        or plan.source_hashes.get(V21_1_POINT_COMPILED_FILE)
+        != item.pbs_compiled_sha256
+        or not isinstance(compiled_proof, dict)
+        or compiled_proof.get("format") != COMPILED_POINT_PROOF_FORMAT
+        or compiled_proof.get("compiled_file") != V21_1_POINT_COMPILED_FILE
+        or compiled_proof.get("file_sha256") != item.pbs_compiled_sha256
+        or compiled_proof.get("section") != section_id
+        or compiled_proof.get("occurrence") != occurrence
+        or compiled_proof.get("point_index") != occurrence - 1
+        or compiled_proof.get("field_index") != field_index
+        or compiled_proof.get("point_length") != 8
+        or compiled_proof.get("target_type") != "RubyString"
+        or compiled_proof.get("target_reference_count") != 1
+        or compiled_proof.get("target_value_sha256")
+        != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
+        or compiled_path != [section_id, "@point", occurrence - 1, field_index]
+        or compiled_proof.get("compiled_path") != compiled_path
+    ):
+        raise ReconstructionError("Preuve compilée Point v21.1 incohérente.")
     try:
         proof = json.loads(item.pbs_point_structure)
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -1271,17 +1322,17 @@ def _assert_reserved_copy_outputs_absent(source_root: Path) -> None:
 
 def _assert_plan_sources_unchanged(plan: ReconstructionPlan, source_root: Path) -> None:
     """Refuse un plan incomplet ou devenu obsolète avant son application."""
-    expected_files = {
+    applicable_files = {
         item.fichier
         for item in plan.items
         if item.decision == "applicable"
     }
-    if not expected_files.issubset(plan.source_hashes):
+    if not applicable_files.issubset(plan.source_hashes):
         raise ReconstructionError(
             "Le plan de reconstruction est incomplet. Relancez la simulation."
         )
 
-    for relative in sorted(expected_files):
+    for relative in sorted(plan.source_hashes):
         expected_hash = plan.source_hashes[relative]
         source_path = _resolve_contained_path(source_root, relative)
         if not source_path.is_file() or sha256_file(source_path) != expected_hash:
@@ -1488,6 +1539,10 @@ def _build_plan_verified_body(
             pbs_line_number=row.get("pbs_line_number", ""),
             pbs_field_count=row.get("pbs_field_count", ""),
             pbs_point_structure=row.get("pbs_point_structure", ""),
+            pbs_compiled_file=row.get("pbs_compiled_file", ""),
+            pbs_compiled_sha256=row.get("pbs_compiled_sha256", ""),
+            pbs_compiled_path=row.get("pbs_compiled_path", ""),
+            pbs_compiled_structure=row.get("pbs_compiled_structure", ""),
         )
 
         if not _supported_row_type(item.type, validation_scope=validation_scope):
@@ -1515,6 +1570,14 @@ def _build_plan_verified_body(
 
     for relative in sorted({item.fichier for item in plan.items if item.decision == "applicable"}):
         plan.source_hashes[relative] = sha256_file(_resolve_contained_path(game_root, relative))
+    if validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+        applicable = [item for item in plan.items if item.decision == "applicable"]
+        if len(applicable) == 1:
+            compiled_relative = applicable[0].pbs_compiled_file.replace("\\", "/")
+            if compiled_relative.casefold() == V21_1_POINT_COMPILED_FILE.casefold():
+                plan.source_hashes[V21_1_POINT_COMPILED_FILE] = sha256_file(
+                    _resolve_contained_path(game_root, V21_1_POINT_COMPILED_FILE)
+                )
     return plan
 
 
@@ -2270,17 +2333,8 @@ def _detect_text_encoding(path: Path) -> tuple[str, str]:
         return raw.decode("cp1252"), "cp1252"
 
 
-def _build_v21_1_point_payload(
-    raw: bytes,
-    relative: str,
-    items: list[PlanItem],
-) -> bytes:
-    """Remplace un seul Point.Name simple sans reformater le fichier PBS."""
-    if len(items) != 1:
-        raise ReconstructionError(
-            "La preuve Point v21.1 exige exactement un sous-champ."
-        )
-    item = items[0]
+def _v21_1_point_source_context(raw: bytes, item: PlanItem) -> dict[str, object]:
+    """Relit la ligne PBS prouvée et retourne ses limites exactes."""
     try:
         proof = json.loads(item.pbs_point_structure)
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -2290,10 +2344,7 @@ def _build_v21_1_point_payload(
 
     content, encoding, bom, newline = _pbs_format(raw)
     if (
-        relative.replace("\\", "/").casefold()
-        != V21_1_POINT_VALIDATION_FILE.casefold()
-        or item.type != "PBS v21.1 — Point.Name"
-        or encoding != item.pbs_encoding
+        encoding != item.pbs_encoding
         or bom != item.pbs_bom
         or newline != item.pbs_newline
         or proof.get("file_sha256") != hashlib.sha256(raw).hexdigest()
@@ -2301,7 +2352,6 @@ def _build_v21_1_point_payload(
         raise ReconstructionError(
             "Format, encodage, BOM, fins de ligne ou empreinte du Point v21.1 modifié."
         )
-
     line_number = _integer(item.pbs_line_number, "Ligne PBS Point")
     expected_occurrence = int(item.sub_index.split(":", 1)[0])
     field_index = _integer(item.pbs_field_index, "Sous-champ Point")
@@ -2367,19 +2417,63 @@ def _build_v21_1_point_payload(
         raise ReconstructionError(
             "La structure ou le texte source du Point v21.1 ne correspond plus."
         )
+    return {
+        "content": content,
+        "encoding": encoding,
+        "bom": bom,
+        "newline": newline,
+        "line_number": line_number,
+        "occurrence": expected_occurrence,
+        "field_index": field_index,
+        "lines": lines,
+        "prefix": prefix,
+        "value": value,
+        "trailing": trailing,
+        "line_ending": line_ending,
+        "layout": layout,
+        "fields": [str(field["core"]) for field in layout["fields"]],
+    }
+
+
+def _build_v21_1_point_payload(
+    raw: bytes,
+    relative: str,
+    items: list[PlanItem],
+) -> bytes:
+    """Remplace un seul Point.Name simple sans reformater le fichier PBS."""
+    if len(items) != 1:
+        raise ReconstructionError(
+            "La preuve Point v21.1 exige exactement un sous-champ."
+        )
+    item = items[0]
+    if (
+        relative.replace("\\", "/").casefold()
+        != V21_1_POINT_VALIDATION_FILE.casefold()
+        or item.type != "PBS v21.1 — Point.Name"
+    ):
+        raise ReconstructionError("Fichier Point v21.1 inattendu.")
+    context = _v21_1_point_source_context(raw, item)
     if any(character in item.translation for character in (",", '"', "\r", "\n")):
         raise ReconstructionError(
             "La traduction Point contient un séparateur ou une frontière de ligne ambiguë."
         )
-
+    layout = context["layout"]
+    assert isinstance(layout, dict)
+    field_index = int(context["field_index"])
+    value = str(context["value"])
     field = layout["fields"][field_index]
     rebuilt_value = (
         value[: field["core_start"]]
         + item.translation
         + value[field["core_end"] :]
     )
-    lines[line_number - 1] = f"{prefix}{rebuilt_value}{trailing}{line_ending}"
+    lines = list(context["lines"])
+    line_number = int(context["line_number"])
+    lines[line_number - 1] = (
+        f"{context['prefix']}{rebuilt_value}{context['trailing']}{context['line_ending']}"
+    )
     rebuilt_content = "".join(lines)
+    encoding = str(context["encoding"])
     try:
         payload = rebuilt_content.encode(encoding)
     except UnicodeEncodeError as exc:
@@ -2389,14 +2483,38 @@ def _build_v21_1_point_payload(
     _content_after, encoding_after, bom_after, newline_after = _pbs_format(payload)
     if (
         encoding_after != encoding
-        or bom_after != bom
-        or newline_after != newline
+        or bom_after != context["bom"]
+        or newline_after != context["newline"]
         or len(_content_after.splitlines(keepends=True)) != len(lines)
     ):
         raise ReconstructionError(
             "La reconstruction Point modifierait l'encodage ou les fins de ligne."
         )
     return payload
+
+
+def _build_v21_1_compiled_point_payload(
+    compiled_raw: bytes,
+    pbs_raw: bytes,
+    items: list[PlanItem],
+) -> bytes:
+    if len(items) != 1:
+        raise ReconstructionError("La preuve compilée Point exige une seule occurrence.")
+    item = items[0]
+    context = _v21_1_point_source_context(pbs_raw, item)
+    try:
+        return rebuild_compiled_point(
+            compiled_raw,
+            proof_json=item.pbs_compiled_structure,
+            section=item.event_id,
+            occurrence=int(context["occurrence"]),
+            field_index=int(context["field_index"]),
+            pbs_fields=list(context["fields"]),
+            source=item.source,
+            translation=item.translation,
+        )
+    except TownMapIntegrityError as exc:
+        raise ReconstructionError(f"Data/town_map.dat refusé : {exc}") from exc
 
 
 def _apply_v21_1_point_items(
@@ -2415,6 +2533,44 @@ def _apply_v21_1_point_items(
         if extracted.get(item.id_stable) != item.translation:
             raise ReconstructionError(
                 "La relecture du Point v21.1 reconstruit ne retrouve pas la traduction."
+            )
+
+    atomic_write_bytes(path, payload, validator=validate)
+
+
+def _apply_v21_1_compiled_point_items(
+    target_root: Path,
+    path: Path,
+    items: list[PlanItem],
+) -> None:
+    pbs_path = _resolve_contained_path(target_root, V21_1_POINT_VALIDATION_FILE)
+    pbs_raw = read_stable_bytes(pbs_path)
+    payload = _build_v21_1_compiled_point_payload(
+        read_stable_bytes(path),
+        pbs_raw,
+        items,
+    )
+    item = items[0]
+    context = _v21_1_point_source_context(pbs_raw, item)
+    translated_fields = list(context["fields"])
+    translated_fields[int(context["field_index"])] = item.translation
+
+    def validate(candidate: Path) -> None:
+        try:
+            value = extract_compiled_point_text(
+                read_stable_bytes(candidate),
+                section=item.event_id,
+                occurrence=int(context["occurrence"]),
+                field_index=int(context["field_index"]),
+                pbs_fields=translated_fields,
+            )
+        except TownMapIntegrityError as exc:
+            raise ReconstructionError(
+                "La relecture de Data/town_map.dat reconstruit a échoué."
+            ) from exc
+        if value != item.translation:
+            raise ReconstructionError(
+                "La relecture compilée ne retrouve pas la traduction Point."
             )
 
     atomic_write_bytes(path, payload, validator=validate)
@@ -2492,6 +2648,20 @@ def _apply_file(
     *,
     validation_scope: str = "",
 ) -> None:
+    if (
+        validation_scope == V21_1_POINT_VALIDATION_SCOPE
+        and relative.replace("\\", "/").casefold()
+        == V21_1_POINT_COMPILED_FILE.casefold()
+    ):
+        if any(
+            item.pbs_compiled_file.replace("\\", "/").casefold()
+            != V21_1_POINT_COMPILED_FILE.casefold()
+            for item in items
+        ):
+            raise ReconstructionError("Le plan compilé Point mélange plusieurs fichiers.")
+        path = _resolve_contained_path(target_root, relative)
+        _apply_v21_1_compiled_point_items(target_root, path, items)
+        return
     path = _resolve_group_path(target_root, relative, items)
     if relative.lower().endswith(".rxdata"):
         root = load(path)
@@ -2568,6 +2738,16 @@ def _expected_v21_1_private_payloads(
                 relative,
                 items,
             )
+            compiled_path = _resolve_contained_path(
+                source_root, V21_1_POINT_COMPILED_FILE
+            )
+            expected[V21_1_POINT_COMPILED_FILE] = (
+                _build_v21_1_compiled_point_payload(
+                    read_stable_bytes(compiled_path),
+                    read_stable_bytes(path),
+                    items,
+                )
+            )
             continue
         root = load(path)
         if relative.lower().endswith(".rxdata"):
@@ -2602,10 +2782,46 @@ def _expected_v21_1_private_payloads(
     return expected
 
 
-def _validate_file(target_root: Path, relative: str, items: list[PlanItem]) -> list[str]:
-    path = _resolve_group_path(target_root, relative, items)
+def _validate_file(
+    target_root: Path,
+    relative: str,
+    items: list[PlanItem],
+    *,
+    validation_scope: str = "",
+) -> list[str]:
+    is_compiled_point = (
+        validation_scope == V21_1_POINT_VALIDATION_SCOPE
+        and relative.replace("\\", "/").casefold()
+        == V21_1_POINT_COMPILED_FILE.casefold()
+    )
+    path = (
+        _resolve_contained_path(target_root, relative)
+        if is_compiled_point
+        else _resolve_group_path(target_root, relative, items)
+    )
     expected = {item.id_stable: item.translation for item in items}
-    if relative.lower().endswith(".rxdata"):
+    if is_compiled_point:
+        item = items[0]
+        pbs_raw = read_stable_bytes(
+            _resolve_contained_path(target_root, V21_1_POINT_VALIDATION_FILE)
+        )
+        context = _v21_1_point_source_context(pbs_raw, item)
+        translated_fields = list(context["fields"])
+        translated_fields[int(context["field_index"])] = item.translation
+        try:
+            compiled_text = extract_compiled_point_text(
+                read_stable_bytes(path),
+                section=item.event_id,
+                occurrence=int(context["occurrence"]),
+                field_index=int(context["field_index"]),
+                pbs_fields=translated_fields,
+            )
+        except TownMapIntegrityError as exc:
+            raise ReconstructionError(
+                "La validation de Data/town_map.dat a échoué."
+            ) from exc
+        actual = {item.id_stable: compiled_text}
+    elif relative.lower().endswith(".rxdata"):
         if items and items[0].type.startswith("Événement commun —"):
             extracted = extract_common_events(path, relative, strict=True)
         else:
@@ -2703,6 +2919,15 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                     _build_v21_1_point_payload(
                         read_stable_bytes(path),
                         relative,
+                        items,
+                    )
+                    _build_v21_1_compiled_point_payload(
+                        read_stable_bytes(
+                            _resolve_contained_path(
+                                game_root, V21_1_POINT_COMPILED_FILE
+                            )
+                        ),
+                        read_stable_bytes(path),
                         items,
                     )
                     continue
@@ -2888,6 +3113,8 @@ def _reconstruct_copy_verified_body(
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
     for item in applicable:
         by_file[item.fichier].append(item)
+    if plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE:
+        by_file[V21_1_POINT_COMPILED_FILE] = list(validation_items)
 
     modified_files: list[str] = []
     validation_errors: list[str] = []
@@ -2908,7 +3135,12 @@ def _reconstruct_copy_verified_body(
                 )
             else:
                 _apply_file(target_root, relative, items)
-            errors = _validate_file(target_root, relative, items)
+            errors = _validate_file(
+                target_root,
+                relative,
+                items,
+                validation_scope=plan.validation_scope,
+            )
             if errors:
                 validation_errors.extend(errors)
                 raise ReconstructionError(errors[0])
@@ -2922,7 +3154,12 @@ def _reconstruct_copy_verified_body(
                         "en mémoire ; la copie est refusée."
                     )
             modified_files.append(relative)
-            applied += len(items)
+            if not (
+                plan.validation_scope == V21_1_POINT_VALIDATION_SCOPE
+                and relative.replace("\\", "/").casefold()
+                == V21_1_POINT_COMPILED_FILE.casefold()
+            ):
+                applied += len(items)
         # Une seconde vérification détecte toute modification des fichiers
         # originaux pendant la reconstruction avant d'annoncer un succès.
         _assert_plan_sources_unchanged(plan, source_root)
