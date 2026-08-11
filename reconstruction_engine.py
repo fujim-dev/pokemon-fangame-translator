@@ -49,6 +49,18 @@ from essentials_phone import (
     extract_phone_target_texts,
     rebuild_phone_payloads,
 )
+from essentials_trainer import (
+    COMPILED_TRAINER_FILE,
+    COMPILED_TRAINER_PROOF_FORMAT,
+    TRAINER_MESSAGES_FILE,
+    TRAINER_PBS_FILE,
+    TRAINER_PBS_PROOF_FORMAT,
+    TRAINER_RUNTIME_PROOF_FORMAT,
+    TrainerIntegrityError,
+    build_trainer_entry_proofs,
+    extract_trainer_target_texts,
+    rebuild_trainer_payloads,
+)
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
@@ -130,6 +142,9 @@ V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE = (
 V21_1_PHONE_VALIDATION_SCOPE = (
     "essentials_v21_1_phone_message_candidate_v1"
 )
+V21_1_TRAINER_LOSE_VALIDATION_SCOPE = (
+    "essentials_v21_1_trainer_lose_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -153,6 +168,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE,
         V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE,
         V21_1_PHONE_VALIDATION_SCOPE,
+        V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
     }
 )
 V21_1_POINT_SCOPE_SPECS = {
@@ -1546,6 +1562,155 @@ def _validate_v21_1_phone_scope(
     return applicable
 
 
+def _validate_v21_1_trainer_lose_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve à un unique LoseText non partagé de trainers.txt."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation LoseText v21.1 exige exactement un message accepté."
+        )
+    item = applicable[0]
+    expected_files = {
+        TRAINER_PBS_FILE,
+        COMPILED_TRAINER_FILE,
+        TRAINER_MESSAGES_FILE,
+    }
+    if (
+        accepted[0].id_stable != item.id_stable
+        or item.type != "PBS — LoseText"
+        or item.fichier.replace("\\", "/").casefold()
+        != TRAINER_PBS_FILE.casefold()
+        or item.command != "LoseText"
+        or not item.event_id
+        or item.event_name != item.event_id
+        or item.map_id
+        or item.page
+        or {path.replace("\\", "/").casefold() for path in plan.source_hashes}
+        != {path.casefold() for path in expected_files}
+    ):
+        raise ReconstructionError(
+            "La validation dresseur est limitée à un unique LoseText de PBS/trainers.txt."
+        )
+    occurrence = _integer(item.sub_index, "Occurrence LoseText")
+    line_number = _integer(item.pbs_line_number, "Ligne PBS LoseText")
+    if (
+        occurrence != 1
+        or line_number <= 0
+        or item.pbs_encoding != "utf-8-sig"
+        or item.pbs_bom != "utf-8"
+        or item.pbs_newline != "CRLF"
+        or item.pbs_field_index
+        or item.pbs_field_count
+        or item.pbs_point_structure
+        or item.id_stable
+        != stable_id(
+            "pbs",
+            TRAINER_PBS_FILE,
+            item.event_id,
+            item.command,
+            occurrence,
+        )
+        or item.pbs_value_sha256
+        != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
+    ):
+        raise ReconstructionError(
+            "Métadonnées PBS du LoseText absentes ou incohérentes."
+        )
+    unrelated_rpg = (
+        item.rpg_command_code,
+        item.rpg_command_indent,
+        item.rpg_parameter_index,
+        item.rpg_continuation_end,
+        item.rpg_dialogue_segments,
+        item.rpg_common_event_array_index,
+        item.rpg_common_event_trigger,
+        item.rpg_common_event_switch_id,
+        item.rpg_common_event_sha256,
+        item.rpg_choice_branch_command,
+        item.rpg_choice_branch_parameter_index,
+    )
+    if any(unrelated_rpg):
+        raise ReconstructionError("Le LoseText porte des métadonnées RPG sans rapport.")
+    if (
+        item.pbs_compiled_file.replace("\\", "/").casefold()
+        != COMPILED_TRAINER_FILE.casefold()
+        or item.pbs_runtime_file.replace("\\", "/").casefold()
+        != TRAINER_MESSAGES_FILE.casefold()
+        or item.pbs_compiled_sha256 != plan.source_hashes.get(COMPILED_TRAINER_FILE)
+        or item.pbs_runtime_sha256 != plan.source_hashes.get(TRAINER_MESSAGES_FILE)
+        or plan.source_hashes.get(TRAINER_PBS_FILE) is None
+    ):
+        raise ReconstructionError(
+            "Les trois empreintes LoseText ne correspondent pas au plan."
+        )
+    try:
+        root = Path(plan.game_root)
+        proofs = build_trainer_entry_proofs(
+            read_stable_bytes(_resolve_contained_path(root, TRAINER_PBS_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, COMPILED_TRAINER_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, TRAINER_MESSAGES_FILE)),
+        )
+        expected = proofs[(item.event_id, item.command, occurrence)]
+        pbs_proof = json.loads(item.pbs_structure)
+        compiled_proof = json.loads(item.pbs_compiled_structure)
+        runtime_proof = json.loads(item.pbs_runtime_structure)
+        compiled_path = json.loads(item.pbs_compiled_path)
+        runtime_path = json.loads(item.pbs_runtime_path)
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        TrainerIntegrityError,
+    ) as exc:
+        raise ReconstructionError(
+            "La preuve structurelle LoseText est illisible ou ne cible plus la source."
+        ) from exc
+    if (
+        expected.source != item.source
+        or expected.pbs_structure != item.pbs_structure
+        or expected.compiled_path != item.pbs_compiled_path
+        or expected.compiled_structure != item.pbs_compiled_structure
+        or expected.runtime_path != item.pbs_runtime_path
+        or expected.runtime_structure != item.pbs_runtime_structure
+        or pbs_proof.get("format") != TRAINER_PBS_PROOF_FORMAT
+        or pbs_proof.get("file_sha256") != plan.source_hashes[TRAINER_PBS_FILE]
+        or pbs_proof.get("source_usage_count") != 1
+        or compiled_proof.get("format") != COMPILED_TRAINER_PROOF_FORMAT
+        or compiled_proof.get("file_sha256") != item.pbs_compiled_sha256
+        or runtime_proof.get("format") != TRAINER_RUNTIME_PROOF_FORMAT
+        or runtime_proof.get("file_sha256") != item.pbs_runtime_sha256
+        or runtime_proof.get("target_value_equals_source") is not True
+        or runtime_proof.get("source_usage_count") != 1
+        or compiled_proof.get("target_reference_count") != 1
+        or runtime_proof.get("target_key_reference_count") != 1
+        or runtime_proof.get("target_value_reference_count") != 1
+        or compiled_proof.get("compiled_path") != compiled_path
+        or runtime_proof.get("runtime_path") != runtime_path
+    ):
+        raise ReconstructionError(
+            "La preuve PBS/trainers.dat/TRAINER_SPEECHES_LOSE ne correspond plus exactement."
+        )
+    if (
+        not item.translation
+        or any(character in item.translation for character in ("\r", "\n"))
+        or extract_protected(item.source) != extract_protected(item.translation)
+    ):
+        raise ReconstructionError(
+            "La traduction LoseText ne préserve pas exactement sa ligne et ses commandes."
+        )
+    return applicable
+
+
 def _validate_v21_1_private_scope(
     plan: ReconstructionPlan,
     detection,
@@ -1568,6 +1733,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_point_scope(plan, detection)
     if plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
         return _validate_v21_1_phone_scope(plan, detection)
+    if plan.validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE:
+        return _validate_v21_1_trainer_lose_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -1858,6 +2025,20 @@ def _build_plan_verified_body(
                     plan.source_hashes[relative] = sha256_file(
                         _resolve_contained_path(game_root, relative)
                     )
+    if validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE:
+        applicable = [item for item in plan.items if item.decision == "applicable"]
+        if len(applicable) == 1:
+            item = applicable[0]
+            if (
+                item.pbs_compiled_file.replace("\\", "/").casefold()
+                == COMPILED_TRAINER_FILE.casefold()
+                and item.pbs_runtime_file.replace("\\", "/").casefold()
+                == TRAINER_MESSAGES_FILE.casefold()
+            ):
+                for relative in (COMPILED_TRAINER_FILE, TRAINER_MESSAGES_FILE):
+                    plan.source_hashes[relative] = sha256_file(
+                        _resolve_contained_path(game_root, relative)
+                    )
     return plan
 
 
@@ -2034,6 +2215,18 @@ def build_v21_1_phone_validation_plan(
         game_root,
         csv_path,
         V21_1_PHONE_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_trainer_lose_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un unique LoseText non partagé v21.1."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
     )
 
 
@@ -3099,6 +3292,34 @@ def _build_v21_1_phone_payloads(
         ) from exc
 
 
+def _build_v21_1_trainer_lose_payloads(
+    source_root: Path,
+    item: PlanItem,
+) -> dict[str, bytes]:
+    try:
+        return rebuild_trainer_payloads(
+            read_stable_bytes(_resolve_contained_path(source_root, TRAINER_PBS_FILE)),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, COMPILED_TRAINER_FILE)
+            ),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, TRAINER_MESSAGES_FILE)
+            ),
+            section=item.event_id,
+            source=item.source,
+            translation=item.translation,
+            pbs_structure=item.pbs_structure,
+            compiled_path=item.pbs_compiled_path,
+            compiled_structure=item.pbs_compiled_structure,
+            runtime_path=item.pbs_runtime_path,
+            runtime_structure=item.pbs_runtime_structure,
+        )
+    except (OSError, TrainerIntegrityError) as exc:
+        raise ReconstructionError(
+            "La reconstruction privée du LoseText a été refusée."
+        ) from exc
+
+
 def _expected_v21_1_private_payloads(
     source_root: Path,
     plan: ReconstructionPlan,
@@ -3111,6 +3332,14 @@ def _expected_v21_1_private_payloads(
                 "La reconstruction téléphone exige une occurrence unique."
             )
         return _build_v21_1_phone_payloads(source_root, validation_items[0])
+    if plan.validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE:
+        if len(validation_items) != 1:
+            raise ReconstructionError(
+                "La reconstruction LoseText exige une occurrence unique."
+            )
+        return _build_v21_1_trainer_lose_payloads(
+            source_root, validation_items[0]
+        )
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
     for item in validation_items:
         by_file[item.fichier].append(item)
@@ -3310,6 +3539,13 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                             "La simulation téléphone exige une occurrence unique."
                         )
                     _build_v21_1_phone_payloads(game_root, items[0])
+                    continue
+                if plan.validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE:
+                    if len(items) != 1:
+                        raise ReconstructionError(
+                            "La simulation LoseText exige une occurrence unique."
+                        )
+                    _build_v21_1_trainer_lose_payloads(game_root, items[0])
                     continue
                 if _is_v21_1_point_validation_scope(plan.validation_scope):
                     _build_v21_1_point_payload(
@@ -3515,6 +3751,9 @@ def _reconstruct_copy_verified_body(
     if plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
         allowed_changed[COMPILED_PHONE_FILE] = list(validation_items)
         allowed_changed[PHONE_MESSAGES_FILE] = list(validation_items)
+    if plan.validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE:
+        allowed_changed[COMPILED_TRAINER_FILE] = list(validation_items)
+        allowed_changed[TRAINER_MESSAGES_FILE] = list(validation_items)
 
     modified_files: list[str] = []
     validation_errors: list[str] = []
@@ -3526,10 +3765,16 @@ def _reconstruct_copy_verified_body(
         for file_index, (relative, items) in enumerate(sorted(by_file.items()), start=1):
             if progress:
                 progress(file_index, total_files, f"Réinjection : {relative}")
-            if plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
-                if len(items) != 1 or relative.casefold() != PHONE_PBS_FILE.casefold():
+            if plan.validation_scope in {
+                V21_1_PHONE_VALIDATION_SCOPE,
+                V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
+            }:
+                is_phone = plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE
+                expected_pbs = PHONE_PBS_FILE if is_phone else TRAINER_PBS_FILE
+                label = "téléphone" if is_phone else "LoseText"
+                if len(items) != 1 or relative.casefold() != expected_pbs.casefold():
                     raise ReconstructionError(
-                        "Le lot téléphone privé ne cible plus son unique occurrence PBS."
+                        f"Le lot {label} privé ne cible plus son unique occurrence PBS."
                     )
                 destinations = {
                     _resolve_contained_path(target_root, item_relative): payload
@@ -3547,7 +3792,7 @@ def _reconstruct_copy_verified_body(
                     )
                 except OSError as exc:
                     raise ReconstructionError(
-                        "La publication transactionnelle des trois fichiers téléphone "
+                        f"La publication transactionnelle des trois fichiers {label} "
                         "a échoué ; le candidat est refusé."
                     ) from exc
                 for item_relative, payload in expected_validation_payloads.items():
@@ -3555,25 +3800,39 @@ def _reconstruct_copy_verified_body(
                         _resolve_contained_path(target_root, item_relative)
                     ) != payload:
                         raise ReconstructionError(
-                            "Un fichier téléphone publié diffère du candidat calculé."
+                            f"Un fichier {label} publié diffère du candidat calculé."
                         )
-                translated = extract_phone_target_texts(
-                    read_stable_bytes(
-                        _resolve_contained_path(target_root, PHONE_PBS_FILE)
-                    ),
-                    read_stable_bytes(
-                        _resolve_contained_path(target_root, COMPILED_PHONE_FILE)
-                    ),
-                    read_stable_bytes(
-                        _resolve_contained_path(target_root, PHONE_MESSAGES_FILE)
-                    ),
-                    section=items[0].event_id,
-                    key=items[0].command,
-                    occurrence=_integer(items[0].sub_index, "Occurrence téléphone"),
-                )
+                if is_phone:
+                    translated = extract_phone_target_texts(
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, PHONE_PBS_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, COMPILED_PHONE_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, PHONE_MESSAGES_FILE)
+                        ),
+                        section=items[0].event_id,
+                        key=items[0].command,
+                        occurrence=_integer(items[0].sub_index, "Occurrence téléphone"),
+                    )
+                else:
+                    translated = extract_trainer_target_texts(
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, TRAINER_PBS_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, COMPILED_TRAINER_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, TRAINER_MESSAGES_FILE)
+                        ),
+                        section=items[0].event_id,
+                    )
                 if translated != (items[0].translation,) * 3:
                     raise ReconstructionError(
-                        "La réextraction téléphone ne retrouve pas la traduction exacte."
+                        f"La réextraction {label} ne retrouve pas la traduction exacte."
                     )
                 modified_files.extend(sorted(expected_validation_payloads))
                 applied = 1

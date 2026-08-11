@@ -645,7 +645,12 @@ class AdapterDetectionTests(unittest.TestCase):
                 "essentials_legacy_rxmp",
                 result[0][0]["profil_essentials"],
             )
-            extractor.assert_called_once_with(root, progress=None, logger=None)
+            extractor.assert_called_once_with(
+                root,
+                progress=None,
+                logger=None,
+                essentials_profile="essentials_legacy_rxmp",
+            )
 
     def test_direct_essentials_extraction_respects_an_ambiguous_registry_decision(self):
         ambiguous = DetectionResult(

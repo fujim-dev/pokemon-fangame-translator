@@ -518,6 +518,23 @@ Déjà en place :
   validation visuelle humaine a confirmé le marqueur complet et la fin normale
   de l'appel. Cette preuve ne s'étend à aucun autre message ou contact et ne
   change aucune capacité publique ;
+- `essentials_trainer.py` corrèle désormais, sans exécuter Ruby, les `LoseText`
+  visibles de `PBS/trainers.txt` avec les objets `GameData::Trainer` de
+  `Data/trainers.dat`, puis avec la banque `TRAINER_SPEECHES_LOSE` à l'index 23
+  de `Data/messages_game.dat`. Les preuves immuables lient l'identité
+  type/nom/version, les ivars, les chemins, types, références, cardinalités et
+  graphes Marshal hors cible. La valeur spéciale `...` est conservée mais reste
+  hors extraction traduisible ; `MegaMessage`, confirmé comme sélecteur entier
+  par le schéma statique, n'est plus présenté comme texte ;
+- une dixième portée privée accepte exactement un `LoseText` réel, unique et
+  non partagé. Elle recalcule les trois représentations en mémoire et les publie
+  transactionnellement avec rollback. La preuve réelle a recensé 20 occurrences
+  structurelles, 19 visibles et 7 uniques admissibles, conservé les 30 402
+  occurrences extraites, laissé la référence et le travail inchangés, puis
+  réextrait la traduction sous la même identité stable dans les trois fichiers.
+  Une validation visuelle humaine a confirmé le marqueur complet après un combat
+  réel, la fin normale du dialogue et le retour au jeu. Cette preuve reste
+  limitée à cette seule occurrence et ne change aucune capacité publique ;
 
 Encore partiel ou pas encore en place :
 

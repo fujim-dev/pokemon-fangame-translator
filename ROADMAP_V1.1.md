@@ -248,6 +248,20 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   visuelle humaine a confirmé le marqueur complet et la fin normale de l'appel.
   Les autres messages et contacts téléphone, les autres PBS modernes et
   `RECONSTRUCT` v21.1 public restent volontairement bloqués.
+- le lot suivant couvre la chaîne réelle des textes de défaite des dresseurs :
+  les `LoseText` visibles de `PBS/trainers.txt` sont reliés aux objets
+  `GameData::Trainer` de `Data/trainers.dat` et à la banque d'exécution
+  `TRAINER_SPEECHES_LOSE` de `Data/messages_game.dat`. L'inventaire réel compte
+  20 occurrences structurelles, 19 visibles et 7 uniques admissibles à la porte
+  privée ; la valeur spéciale `...` reste conservée hors traduction et
+  `MegaMessage`, sélecteur numérique, n'est plus traité comme texte ;
+- une portée privée strictement unitaire recalcule ces trois fichiers en mémoire
+  et les publie transactionnellement avec rollback. Le round-trip réel conserve
+  les 30 402 occurrences et tous les fichiers hors plan, puis réextrait la même
+  identité stable. Une validation visuelle humaine a confirmé le marqueur après
+  un combat réel, la fin normale du dialogue et le retour au jeu. Les autres
+  dresseurs, textes partagés, banques de combat, PBS modernes et `RECONSTRUCT`
+  v21.1 public restent volontairement bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

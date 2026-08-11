@@ -191,6 +191,7 @@ def prepare_v21_game(
     common_event_corpus: bool = False,
     point_validation: bool = False,
     phone_validation: bool = False,
+    trainer_validation: bool = False,
     point_eight_switch: int = 51,
     dangerous_marker: Path | None = None,
 ) -> None:
@@ -336,6 +337,51 @@ def prepare_v21_game(
             ruby_text(message): ruby_text(message)
             for message in runtime_phone_messages
         }
+    elif trainer_validation:
+        def trainer_object(trainer_type: str, name: str, lose_text: str) -> RubyObject:
+            return RubyObject(
+                "GameData::Trainer",
+                {
+                    "@id": [trainer_type, ruby_text(name), 0],
+                    "@trainer_type": trainer_type,
+                    "@real_name": ruby_text(name),
+                    "@version": 0,
+                    "@items": [],
+                    "@real_lose_text": ruby_text(lose_text),
+                    "@pokemon": [
+                        {
+                            "species": "BULBASAUR",
+                            "level": 5,
+                            "synthetic_metadata": ruby_text("preserve trainer metadata"),
+                        }
+                    ],
+                    "@pbs_file_suffix": ruby_text(""),
+                },
+            )
+
+        target_lose = "Synthetic unique trainer defeat"
+        shared_lose = "Synthetic shared trainer defeat"
+        trainer_root = {
+            RubyHashKey(
+                ["YOUNGSTER", ruby_text("Synthetic Battler"), 0]
+            ): trainer_object("YOUNGSTER", "Synthetic Battler", target_lose),
+            RubyHashKey(
+                ["CAMPER", ruby_text("Synthetic Shared One"), 0]
+            ): trainer_object("CAMPER", "Synthetic Shared One", shared_lose),
+            RubyHashKey(
+                ["CAMPER", ruby_text("Synthetic Shared Two"), 0]
+            ): trainer_object("CAMPER", "Synthetic Shared Two", shared_lose),
+            RubyHashKey(
+                ["RIVAL", ruby_text("Synthetic Placeholder"), 0]
+            ): trainer_object("RIVAL", "Synthetic Placeholder", "..."),
+        }
+        (data / "trainers.dat").write_bytes(dumps(trainer_root))
+        bank = [{} for _index in range(31)]
+        bank[23] = {
+            ruby_text(target_lose): ruby_text(target_lose),
+            ruby_text(shared_lose): ruby_text(shared_lose),
+            ruby_text("..."): ruby_text("..."),
+        }
     (data / "messages_game.dat").write_bytes(dumps(bank))
     (data / "messages_core.dat").write_bytes(dumps(core_bank))
     dangerous = (
@@ -372,6 +418,25 @@ def prepare_v21_game(
             b"[YOUNGSTER,Synthetic Contact]\r\n"
             b"Intro = Synthetic trainer intro\r\n"
             b"End = Synthetic trainer end\r\n"
+        )
+    if trainer_validation:
+        (pbs.parent / "trainers.txt").write_bytes(
+            b"\xef\xbb\xbf# synthetic trainer fixture\r\n"
+            b"[YOUNGSTER,Synthetic Battler]\r\n"
+            b"LoseText = Synthetic unique trainer defeat\r\n"
+            b"Pokemon = BULBASAUR,5\r\n"
+            b"\r\n"
+            b"[CAMPER,Synthetic Shared One]\r\n"
+            b"LoseText = Synthetic shared trainer defeat\r\n"
+            b"Pokemon = CHARMANDER,5\r\n"
+            b"\r\n"
+            b"[CAMPER,Synthetic Shared Two]\r\n"
+            b"LoseText = Synthetic shared trainer defeat\r\n"
+            b"Pokemon = SQUIRTLE,5\r\n"
+            b"\r\n"
+            b"[RIVAL,Synthetic Placeholder]\r\n"
+            b"LoseText = ...\r\n"
+            b"Pokemon = PIKACHU,5\r\n"
         )
     if point_validation:
         (pbs.parent / "town_map.txt").write_bytes(
@@ -695,7 +760,7 @@ class EssentialsV21ProfileTests(unittest.TestCase):
             phone.write_bytes(
                 b"[CONTACT]\r\nIntroMorning = Good morning.\r\n"
                 b"Body1 = First body.\r\nBattleRequest = Battle me.\r\n"
-                b"MegaMessage = Mega ready.\r\n"
+                b"MegaMessage = 1\r\n"
             )
             town_map = root / "town_map.txt"
             town_map.write_bytes(
@@ -712,7 +777,7 @@ class EssentialsV21ProfileTests(unittest.TestCase):
                 {row["commande"] for row in facility_rows},
             )
             self.assertEqual(
-                {"IntroMorning", "Body1", "BattleRequest", "MegaMessage"},
+                {"IntroMorning", "Body1", "BattleRequest"},
                 {row["commande"] for row in phone_rows},
             )
             self.assertEqual(

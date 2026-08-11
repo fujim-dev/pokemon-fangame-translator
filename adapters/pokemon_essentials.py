@@ -65,7 +65,12 @@ class PokemonEssentialsAdapter:
             capability=GameCapability.EXTRACT,
             adapter=self,
         )
-        result = extract_structured_verified(root, progress=progress, logger=logger)
+        result = extract_structured_verified(
+            root,
+            progress=progress,
+            logger=logger,
+            essentials_profile=detection_before.structural_profile,
+        )
         detection_after = authorize_adapter_operation(
             root,
             expected_adapter_id=self.adapter_id,

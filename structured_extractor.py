@@ -23,6 +23,13 @@ from essentials_phone import (
     PhoneIntegrityError,
     build_phone_entry_proofs,
 )
+from essentials_trainer import (
+    COMPILED_TRAINER_FILE,
+    TRAINER_MESSAGES_FILE,
+    TRAINER_PBS_FILE,
+    TrainerIntegrityError,
+    build_trainer_entry_proofs,
+)
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -34,7 +41,7 @@ TRANSLATABLE_PBS_KEYS = {
     "VictorySpeech", "IntroText", "EndSpeech", "Title", "DisplayName",
     "BeginSpeech", "EndSpeechWin", "EndSpeechLose", "BattleRemind",
     "BattleRequest", "Body", "End", "Intro", "IntroMorning",
-    "IntroAfternoon", "IntroEvening", "MegaMessage", "StorageCreator",
+    "IntroAfternoon", "IntroEvening", "StorageCreator",
 }
 
 PBS_POINT_STRUCTURE_FORMAT = "pft_pbs_point_structure_v1"
@@ -305,6 +312,8 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
             return "compiled_town_map"
         if name == "phone.dat":
             return "compiled_phone"
+        if name == "trainers.dat":
+            return "compiled_trainer"
     if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
         if any("backup" in part.casefold() for part in path.parts[1:]):
             return None
@@ -1229,6 +1238,74 @@ def _bind_compiled_phone_proofs(
         ) from exc
 
 
+def _bind_compiled_trainer_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie chaque LoseText aux représentations compilée et exécutée v21.1."""
+    trainer_rows = [
+        row
+        for row in rows
+        if str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == TRAINER_PBS_FILE.casefold()
+        and row.get("type") == "PBS — LoseText"
+    ]
+    if not trainer_rows:
+        return
+    by_relative = {
+        source.relative_path.replace("\\", "/").casefold(): source
+        for source in inventory.sources
+    }
+    pbs_source = by_relative.get(TRAINER_PBS_FILE.casefold())
+    compiled_source = by_relative.get(COMPILED_TRAINER_FILE.casefold())
+    runtime_source = by_relative.get(TRAINER_MESSAGES_FILE.casefold())
+    if pbs_source is None or compiled_source is None or runtime_source is None:
+        raise ExtractionIntegrityError(
+            "Les LoseText ne peuvent pas être reliés à trainers.dat et à leur "
+            "banque d'exécution v21.1."
+        )
+
+    def snapshot_bytes(source: ExtractionSource) -> bytes:
+        return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
+
+    try:
+        proofs = build_trainer_entry_proofs(
+            snapshot_bytes(pbs_source),
+            snapshot_bytes(compiled_source),
+            snapshot_bytes(runtime_source),
+        )
+        for row in trainer_rows:
+            lookup = (
+                str(row.get("evenement_id") or ""),
+                str(row.get("commande") or ""),
+                int(row.get("sous_index") or 0),
+            )
+            proof = proofs.pop(lookup)
+            if proof.source != str(row.get("texte_source") or ""):
+                raise TrainerIntegrityError(
+                    "Le texte PBS ne correspond pas à la preuve LoseText."
+                )
+            row["pbs_structure"] = proof.pbs_structure
+            row["pbs_compiled_file"] = compiled_source.relative_path
+            row["pbs_compiled_sha256"] = compiled_source.sha256
+            row["pbs_compiled_path"] = proof.compiled_path
+            row["pbs_compiled_structure"] = proof.compiled_structure
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_path"] = proof.runtime_path
+            row["pbs_runtime_structure"] = proof.runtime_structure
+        if any(looks_visible(proof.source) for proof in proofs.values()):
+            raise TrainerIntegrityError(
+                "Certaines occurrences LoseText visibles compilées ne sont pas extraites."
+            )
+    except (KeyError, TypeError, ValueError, OSError, TrainerIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "La correspondance PBS/trainers.dat/TRAINER_SPEECHES_LOSE est "
+            "ambiguë ou incohérente."
+        ) from exc
+
+
 def _is_same_or_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1267,6 +1344,7 @@ def _extract_snapshot(
     snapshot_root: Path,
     inventory: ExtractionInventory,
     *,
+    essentials_profile: str = "",
     progress=None,
 ) -> list[dict]:
     records = {source.relative_path: source for source in inventory.sources}
@@ -1355,6 +1433,8 @@ def _extract_snapshot(
 
     _bind_compiled_point_proofs(snapshot_root, inventory, rows)
     _bind_compiled_phone_proofs(snapshot_root, inventory, rows)
+    if essentials_profile == "essentials_v21_1_readonly":
+        _bind_compiled_trainer_proofs(snapshot_root, inventory, rows)
 
     duplicates = [
         row_id
@@ -1374,6 +1454,8 @@ def extract_structured_verified(
     root: Path,
     progress=None,
     logger=None,
+    *,
+    essentials_profile: str = "",
 ) -> StructuredExtractionResult:
     del logger  # Les erreurs sont bloquantes et remontées sans résultat partiel.
     before = build_extraction_inventory(root)
@@ -1382,7 +1464,12 @@ def extract_structured_verified(
             snapshot_root = Path(temp_dir) / "snapshot"
             snapshot_root.mkdir()
             _snapshot_sources(before, snapshot_root)
-            rows = _extract_snapshot(snapshot_root, before, progress=progress)
+            rows = _extract_snapshot(
+                snapshot_root,
+                before,
+                essentials_profile=essentials_profile,
+                progress=progress,
+            )
     except ExtractionIntegrityError:
         raise
     except OSError as exc:

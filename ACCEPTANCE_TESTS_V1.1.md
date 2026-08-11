@@ -518,6 +518,35 @@ marqueur `[TEST PFT v21.1 PHONE END]` sur cette occurrence réelle et la fin
 normale de l'appel. Cette preuve ne couvre aucun autre message, contact ou
 schéma téléphone et n'active pas `RECONSTRUCT` v21.1 public.
 
+### AC-129 — Premier LoseText de dresseur v21.1 synchronisé
+
+L'analyse strictement statique relie les `LoseText` visibles de
+`PBS/trainers.txt` aux objets `GameData::Trainer` de `Data/trainers.dat`, puis
+à la banque d'exécution `TRAINER_SPEECHES_LOSE` située à l'index 23 de
+`Data/messages_game.dat`. Elle préserve l'identité type/nom/version du
+dresseur, les ivars et types Marshal, l'ordre des sections, les références de
+chaînes et les graphes hors cible. La valeur spéciale non visible `...` est
+conservée mais n'est pas présentée comme un texte traduisible.
+
+Une portée privée accepte exactement un `LoseText` réel, unique et non partagé.
+Elle vérifie la provenance, les trois empreintes sources, les preuves PBS,
+compilée et d'exécution, puis calcule les trois fichiers en mémoire avant une
+publication transactionnelle unique. Une occurrence partagée, une identité ou
+une structure modifiée, un contrôle protégé divergent ou une panne de
+publication entraîne un refus ou le rollback exact des fichiers déjà remplacés.
+
+La preuve réelle a inventorié 20 occurrences structurelles, dont 19 visibles et
+7 uniques admissibles à cette porte privée. Le round-trip a conservé les
+30 402 occurrences extraites, traversé le Studio, sa sauvegarde et sa reprise,
+puis modifié uniquement `PBS/trainers.txt`, `Data/trainers.dat` et
+`Data/messages_game.dat`. La réextraction retrouve la traduction sous la même
+identité stable dans les trois représentations ; la référence et la copie de
+travail restent inchangées. Une validation visuelle humaine a confirmé dans un
+combat réel l'affichage complet du marqueur
+`[TEST PFT v21.1 TRAINER LOSE]`, puis la fin normale du dialogue et le retour au
+jeu. Cette preuve ne couvre aucun autre dresseur, texte partagé, schéma de
+dresseur ou banque de combat et n'active pas `RECONSTRUCT` v21.1 public.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté
