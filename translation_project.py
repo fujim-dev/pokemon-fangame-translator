@@ -76,10 +76,15 @@ IMMUTABLE_ROW_FIELDS = (
     "pbs_line_number",
     "pbs_field_count",
     "pbs_point_structure",
+    "pbs_structure",
     "pbs_compiled_file",
     "pbs_compiled_sha256",
     "pbs_compiled_path",
     "pbs_compiled_structure",
+    "pbs_runtime_file",
+    "pbs_runtime_sha256",
+    "pbs_runtime_path",
+    "pbs_runtime_structure",
 )
 REQUIRED_ROW_FIELDS = {
     "id_stable",

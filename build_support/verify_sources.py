@@ -9,6 +9,7 @@ python_files = [
     "reconstruction_studio.py",
     "reconstruction_engine.py",
     "structured_extractor.py",
+    "essentials_phone.py",
     "rpg_dialogue.py",
     "ruby_marshal_reader.py",
     "ruby_marshal_writer.py",
@@ -41,6 +42,7 @@ python_files = [
     "repair/rollback.py",
     "repair/safe_fixes.py",
     "build_support/validate_private_flux_working_copy.py",
+    "build_support/validate_private_essentials_phone.py",
 ]
 required_files = [
     "README.md",

@@ -235,6 +235,19 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   reconstruit après activation du switch de visibilité réel ciblé. La seconde
   occurrence réelle à huit champs, tout autre corpus et `RECONSTRUCT` public
   restent bloqués.
+- la comparaison de la seconde occurrence Point à huit champs confirme qu'elle
+  est structurellement identique à la première : mêmes types, mêmes quatre
+  `nil` et même switch entier final. Aucun lot redondant n'a été créé ;
+- le lot PBS moderne suivant couvre la chaîne téléphone v21.1. Les 41 messages
+  réels de `PBS/phone.txt` sont liés bijectivement à `Data/phone.dat` et à la
+  banque `PHONE_MESSAGES` de `Data/messages_game.dat`, sans exécuter Ruby ;
+- une porte privée n'accepte qu'un unique message `End`, recalcule les trois
+  représentations en mémoire et les publie transactionnellement avec rollback.
+  Le round-trip réel conserve les 30 402 occurrences et tous les fichiers hors
+  plan, puis réextrait le même texte aux trois emplacements. Une validation
+  visuelle humaine a confirmé le marqueur complet et la fin normale de l'appel.
+  Les autres messages et contacts téléphone, les autres PBS modernes et
+  `RECONSTRUCT` v21.1 public restent volontairement bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

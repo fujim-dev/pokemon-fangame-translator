@@ -37,6 +37,18 @@ from essentials_town_map import (
     extract_compiled_point_text,
     rebuild_compiled_point,
 )
+from essentials_phone import (
+    COMPILED_PHONE_FILE,
+    COMPILED_PHONE_PROOF_FORMAT,
+    PHONE_MESSAGES_FILE,
+    PHONE_PBS_FILE,
+    PHONE_PBS_PROOF_FORMAT,
+    PHONE_RUNTIME_PROOF_FORMAT,
+    PhoneIntegrityError,
+    build_phone_entry_proofs,
+    extract_phone_target_texts,
+    rebuild_phone_payloads,
+)
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
@@ -65,7 +77,12 @@ from structured_extractor import (
     stable_id,
     text_value,
 )
-from safe_io import atomic_write_bytes, atomic_write_text, read_stable_bytes
+from safe_io import (
+    atomic_write_bundle,
+    atomic_write_bytes,
+    atomic_write_text,
+    read_stable_bytes,
+)
 from translation_project import TranslationProjectError, open_verified_project
 
 RPG_CODE_RE = re.compile(
@@ -110,6 +127,9 @@ V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE = (
 V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE = (
     "essentials_v21_1_point_name_eight_fields_candidate_v1"
 )
+V21_1_PHONE_VALIDATION_SCOPE = (
+    "essentials_v21_1_phone_message_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -132,6 +152,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_POINT_DESCRIPTION_VALIDATION_SCOPE,
         V21_1_POINT_DESCRIPTION_SEVEN_FIELDS_VALIDATION_SCOPE,
         V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE,
+        V21_1_PHONE_VALIDATION_SCOPE,
     }
 )
 V21_1_POINT_SCOPE_SPECS = {
@@ -263,10 +284,15 @@ class PlanItem:
     pbs_line_number: str = ""
     pbs_field_count: str = ""
     pbs_point_structure: str = ""
+    pbs_structure: str = ""
     pbs_compiled_file: str = ""
     pbs_compiled_sha256: str = ""
     pbs_compiled_path: str = ""
     pbs_compiled_structure: str = ""
+    pbs_runtime_file: str = ""
+    pbs_runtime_sha256: str = ""
+    pbs_runtime_path: str = ""
+    pbs_runtime_structure: str = ""
     decision: str = "pending"  # applicable, skipped, blocked
     reason: str = ""
 
@@ -1375,6 +1401,151 @@ def _validate_v21_1_point_scope(
     return applicable
 
 
+def _validate_v21_1_phone_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la première preuve téléphone à un unique message ``End`` réel."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_PHONE_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation téléphone v21.1 exige exactement un message accepté."
+        )
+    item = applicable[0]
+    expected_files = {PHONE_PBS_FILE, COMPILED_PHONE_FILE, PHONE_MESSAGES_FILE}
+    if (
+        accepted[0].id_stable != item.id_stable
+        or item.type != "PBS — End"
+        or item.fichier.replace("\\", "/").casefold()
+        != PHONE_PBS_FILE.casefold()
+        or item.command != "End"
+        or not item.event_id
+        or item.event_name != item.event_id
+        or item.map_id
+        or item.page
+        or {path.replace("\\", "/").casefold() for path in plan.source_hashes}
+        != {path.casefold() for path in expected_files}
+    ):
+        raise ReconstructionError(
+            "La validation téléphone est limitée à un unique End de PBS/phone.txt."
+        )
+    occurrence = _integer(item.sub_index, "Occurrence téléphone")
+    line_number = _integer(item.pbs_line_number, "Ligne PBS téléphone")
+    if (
+        occurrence <= 0
+        or line_number <= 0
+        or item.pbs_encoding != "utf-8-sig"
+        or item.pbs_bom != "utf-8"
+        or item.pbs_newline != "CRLF"
+        or item.pbs_field_index
+        or item.pbs_field_count
+        or item.pbs_point_structure
+        or item.id_stable
+        != stable_id(
+            "pbs",
+            PHONE_PBS_FILE,
+            item.event_id,
+            item.command,
+            occurrence,
+        )
+        or item.pbs_value_sha256
+        != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
+    ):
+        raise ReconstructionError(
+            "Métadonnées PBS du message téléphone absentes ou incohérentes."
+        )
+    unrelated_rpg = (
+        item.rpg_command_code,
+        item.rpg_command_indent,
+        item.rpg_parameter_index,
+        item.rpg_continuation_end,
+        item.rpg_dialogue_segments,
+        item.rpg_common_event_array_index,
+        item.rpg_common_event_trigger,
+        item.rpg_common_event_switch_id,
+        item.rpg_common_event_sha256,
+        item.rpg_choice_branch_command,
+        item.rpg_choice_branch_parameter_index,
+    )
+    if any(unrelated_rpg):
+        raise ReconstructionError(
+            "Le message téléphone porte des métadonnées RPG sans rapport."
+        )
+    if (
+        item.pbs_compiled_file.replace("\\", "/").casefold()
+        != COMPILED_PHONE_FILE.casefold()
+        or item.pbs_runtime_file.replace("\\", "/").casefold()
+        != PHONE_MESSAGES_FILE.casefold()
+        or item.pbs_compiled_sha256 != plan.source_hashes.get(COMPILED_PHONE_FILE)
+        or item.pbs_runtime_sha256 != plan.source_hashes.get(PHONE_MESSAGES_FILE)
+        or plan.source_hashes.get(PHONE_PBS_FILE) is None
+    ):
+        raise ReconstructionError(
+            "Les trois empreintes téléphone ne correspondent pas au plan."
+        )
+    try:
+        root = Path(plan.game_root)
+        proofs = build_phone_entry_proofs(
+            read_stable_bytes(_resolve_contained_path(root, PHONE_PBS_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, COMPILED_PHONE_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, PHONE_MESSAGES_FILE)),
+        )
+        expected = proofs[(item.event_id, item.command, occurrence)]
+        pbs_proof = json.loads(item.pbs_structure)
+        compiled_proof = json.loads(item.pbs_compiled_structure)
+        runtime_proof = json.loads(item.pbs_runtime_structure)
+        compiled_path = json.loads(item.pbs_compiled_path)
+        runtime_path = json.loads(item.pbs_runtime_path)
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        PhoneIntegrityError,
+    ) as exc:
+        raise ReconstructionError(
+            "La preuve structurelle téléphone est illisible ou ne cible plus la source."
+        ) from exc
+    if (
+        expected.source != item.source
+        or expected.pbs_structure != item.pbs_structure
+        or expected.compiled_path != item.pbs_compiled_path
+        or expected.compiled_structure != item.pbs_compiled_structure
+        or expected.runtime_path != item.pbs_runtime_path
+        or expected.runtime_structure != item.pbs_runtime_structure
+        or pbs_proof.get("format") != PHONE_PBS_PROOF_FORMAT
+        or pbs_proof.get("file_sha256") != plan.source_hashes[PHONE_PBS_FILE]
+        or compiled_proof.get("format") != COMPILED_PHONE_PROOF_FORMAT
+        or compiled_proof.get("file_sha256") != item.pbs_compiled_sha256
+        or runtime_proof.get("format") != PHONE_RUNTIME_PROOF_FORMAT
+        or runtime_proof.get("file_sha256") != item.pbs_runtime_sha256
+        or runtime_proof.get("target_value_equals_source") is not True
+        or compiled_proof.get("target_reference_count") != 1
+        or runtime_proof.get("target_key_reference_count") != 1
+        or runtime_proof.get("target_value_reference_count") != 1
+        or compiled_proof.get("compiled_path") != compiled_path
+        or runtime_proof.get("runtime_path") != runtime_path
+    ):
+        raise ReconstructionError(
+            "La preuve PBS/phone.dat/PHONE_MESSAGES ne correspond plus exactement."
+        )
+    if (
+        not item.translation
+        or any(character in item.translation for character in ("\r", "\n"))
+        or extract_protected(item.source) != extract_protected(item.translation)
+    ):
+        raise ReconstructionError(
+            "La traduction téléphone ne préserve pas exactement sa ligne et ses commandes."
+        )
+    return applicable
+
+
 def _validate_v21_1_private_scope(
     plan: ReconstructionPlan,
     detection,
@@ -1395,6 +1566,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_common_event_choice_scope(plan, detection)
     if _is_v21_1_point_validation_scope(plan.validation_scope):
         return _validate_v21_1_point_scope(plan, detection)
+    if plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
+        return _validate_v21_1_phone_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -1627,10 +1800,15 @@ def _build_plan_verified_body(
             pbs_line_number=row.get("pbs_line_number", ""),
             pbs_field_count=row.get("pbs_field_count", ""),
             pbs_point_structure=row.get("pbs_point_structure", ""),
+            pbs_structure=row.get("pbs_structure", ""),
             pbs_compiled_file=row.get("pbs_compiled_file", ""),
             pbs_compiled_sha256=row.get("pbs_compiled_sha256", ""),
             pbs_compiled_path=row.get("pbs_compiled_path", ""),
             pbs_compiled_structure=row.get("pbs_compiled_structure", ""),
+            pbs_runtime_file=row.get("pbs_runtime_file", ""),
+            pbs_runtime_sha256=row.get("pbs_runtime_sha256", ""),
+            pbs_runtime_path=row.get("pbs_runtime_path", ""),
+            pbs_runtime_structure=row.get("pbs_runtime_structure", ""),
         )
 
         if not _supported_row_type(item.type, validation_scope=validation_scope):
@@ -1666,6 +1844,20 @@ def _build_plan_verified_body(
                 plan.source_hashes[V21_1_POINT_COMPILED_FILE] = sha256_file(
                     _resolve_contained_path(game_root, V21_1_POINT_COMPILED_FILE)
                 )
+    if validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
+        applicable = [item for item in plan.items if item.decision == "applicable"]
+        if len(applicable) == 1:
+            item = applicable[0]
+            if (
+                item.pbs_compiled_file.replace("\\", "/").casefold()
+                == COMPILED_PHONE_FILE.casefold()
+                and item.pbs_runtime_file.replace("\\", "/").casefold()
+                == PHONE_MESSAGES_FILE.casefold()
+            ):
+                for relative in (COMPILED_PHONE_FILE, PHONE_MESSAGES_FILE):
+                    plan.source_hashes[relative] = sha256_file(
+                        _resolve_contained_path(game_root, relative)
+                    )
     return plan
 
 
@@ -1830,6 +2022,18 @@ def build_v21_1_point_name_eight_fields_validation_plan(
         game_root,
         csv_path,
         V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_phone_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un unique message téléphone v21.1."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_PHONE_VALIDATION_SCOPE,
     )
 
 
@@ -2865,12 +3069,48 @@ def _expected_v21_1_message_bank_payload(
     return payload
 
 
+def _build_v21_1_phone_payloads(
+    source_root: Path,
+    item: PlanItem,
+) -> dict[str, bytes]:
+    try:
+        return rebuild_phone_payloads(
+            read_stable_bytes(_resolve_contained_path(source_root, PHONE_PBS_FILE)),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, COMPILED_PHONE_FILE)
+            ),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, PHONE_MESSAGES_FILE)
+            ),
+            section=item.event_id,
+            key=item.command,
+            occurrence=_integer(item.sub_index, "Occurrence téléphone"),
+            source=item.source,
+            translation=item.translation,
+            pbs_structure=item.pbs_structure,
+            compiled_path=item.pbs_compiled_path,
+            compiled_structure=item.pbs_compiled_structure,
+            runtime_path=item.pbs_runtime_path,
+            runtime_structure=item.pbs_runtime_structure,
+        )
+    except (OSError, PhoneIntegrityError) as exc:
+        raise ReconstructionError(
+            "La reconstruction privée du message téléphone a été refusée."
+        ) from exc
+
+
 def _expected_v21_1_private_payloads(
     source_root: Path,
     plan: ReconstructionPlan,
     validation_items: list[PlanItem],
 ) -> dict[str, bytes]:
     """Calcule chaque fichier privé attendu sans écrire sur disque."""
+    if plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
+        if len(validation_items) != 1:
+            raise ReconstructionError(
+                "La reconstruction téléphone exige une occurrence unique."
+            )
+        return _build_v21_1_phone_payloads(source_root, validation_items[0])
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
     for item in validation_items:
         by_file[item.fichier].append(item)
@@ -3064,6 +3304,13 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                     if available.get(item.id_stable) != item.source.strip():
                         raise ReconstructionError(f"Entrée de banque introuvable : {item.id_stable}")
             elif relative.lower().startswith("pbs/"):
+                if plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
+                    if len(items) != 1:
+                        raise ReconstructionError(
+                            "La simulation téléphone exige une occurrence unique."
+                        )
+                    _build_v21_1_phone_payloads(game_root, items[0])
+                    continue
                 if _is_v21_1_point_validation_scope(plan.validation_scope):
                     _build_v21_1_point_payload(
                         read_stable_bytes(path),
@@ -3264,6 +3511,10 @@ def _reconstruct_copy_verified_body(
         by_file[item.fichier].append(item)
     if _is_v21_1_point_validation_scope(plan.validation_scope):
         by_file[V21_1_POINT_COMPILED_FILE] = list(validation_items)
+    allowed_changed: dict[str, list[PlanItem]] = dict(by_file)
+    if plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
+        allowed_changed[COMPILED_PHONE_FILE] = list(validation_items)
+        allowed_changed[PHONE_MESSAGES_FILE] = list(validation_items)
 
     modified_files: list[str] = []
     validation_errors: list[str] = []
@@ -3275,6 +3526,58 @@ def _reconstruct_copy_verified_body(
         for file_index, (relative, items) in enumerate(sorted(by_file.items()), start=1):
             if progress:
                 progress(file_index, total_files, f"Réinjection : {relative}")
+            if plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE:
+                if len(items) != 1 or relative.casefold() != PHONE_PBS_FILE.casefold():
+                    raise ReconstructionError(
+                        "Le lot téléphone privé ne cible plus son unique occurrence PBS."
+                    )
+                destinations = {
+                    _resolve_contained_path(target_root, item_relative): payload
+                    for item_relative, payload in expected_validation_payloads.items()
+                }
+                expected_hashes = {
+                    _resolve_contained_path(target_root, item_relative):
+                    plan.source_hashes[item_relative]
+                    for item_relative in expected_validation_payloads
+                }
+                try:
+                    atomic_write_bundle(
+                        destinations,
+                        expected_existing_sha256=expected_hashes,
+                    )
+                except OSError as exc:
+                    raise ReconstructionError(
+                        "La publication transactionnelle des trois fichiers téléphone "
+                        "a échoué ; le candidat est refusé."
+                    ) from exc
+                for item_relative, payload in expected_validation_payloads.items():
+                    if read_stable_bytes(
+                        _resolve_contained_path(target_root, item_relative)
+                    ) != payload:
+                        raise ReconstructionError(
+                            "Un fichier téléphone publié diffère du candidat calculé."
+                        )
+                translated = extract_phone_target_texts(
+                    read_stable_bytes(
+                        _resolve_contained_path(target_root, PHONE_PBS_FILE)
+                    ),
+                    read_stable_bytes(
+                        _resolve_contained_path(target_root, COMPILED_PHONE_FILE)
+                    ),
+                    read_stable_bytes(
+                        _resolve_contained_path(target_root, PHONE_MESSAGES_FILE)
+                    ),
+                    section=items[0].event_id,
+                    key=items[0].command,
+                    occurrence=_integer(items[0].sub_index, "Occurrence téléphone"),
+                )
+                if translated != (items[0].translation,) * 3:
+                    raise ReconstructionError(
+                        "La réextraction téléphone ne retrouve pas la traduction exacte."
+                    )
+                modified_files.extend(sorted(expected_validation_payloads))
+                applied = 1
+                break
             if plan.validation_scope:
                 _apply_file(
                     target_root,
@@ -3320,7 +3623,7 @@ def _reconstruct_copy_verified_body(
         copy_integrity = compare_snapshots(
             source_before,
             copy_after,
-            allowed_changed=by_file,
+            allowed_changed=allowed_changed,
         )
         if not original_integrity.passed:
             raise ReconstructionError(

@@ -17,6 +17,12 @@ from essentials_town_map import (
     build_compiled_point_proof,
     validate_compiled_town_map_sections,
 )
+from essentials_phone import (
+    COMPILED_PHONE_FILE,
+    PHONE_MESSAGES_FILE,
+    PhoneIntegrityError,
+    build_phone_entry_proofs,
+)
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -297,6 +303,8 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
             return "bank"
         if name == "town_map.dat":
             return "compiled_town_map"
+        if name == "phone.dat":
+            return "compiled_phone"
     if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
         if any("backup" in part.casefold() for part in path.parts[1:]):
             return None
@@ -1154,6 +1162,73 @@ def _bind_compiled_point_proofs(
         row["pbs_compiled_structure"] = proof_json
 
 
+def _bind_compiled_phone_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie les messages phone.txt aux deux représentations chargées par v21.1."""
+    phone_rows = [
+        row
+        for row in rows
+        if str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == "pbs/phone.txt"
+        and str(row.get("type") or "").startswith("PBS — ")
+    ]
+    if not phone_rows:
+        return
+    by_relative = {
+        source.relative_path.replace("\\", "/").casefold(): source
+        for source in inventory.sources
+    }
+    pbs_source = by_relative.get("pbs/phone.txt")
+    compiled_source = by_relative.get(COMPILED_PHONE_FILE.casefold())
+    runtime_source = by_relative.get(PHONE_MESSAGES_FILE.casefold())
+    if pbs_source is None or compiled_source is None or runtime_source is None:
+        raise ExtractionIntegrityError(
+            "Les messages téléphone ne peuvent pas être reliés à leurs deux "
+            "représentations compilées v21.1."
+        )
+
+    def snapshot_bytes(source: ExtractionSource) -> bytes:
+        return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
+
+    try:
+        proofs = build_phone_entry_proofs(
+            snapshot_bytes(pbs_source),
+            snapshot_bytes(compiled_source),
+            snapshot_bytes(runtime_source),
+        )
+        for row in phone_rows:
+            lookup = (
+                str(row.get("evenement_id") or ""),
+                str(row.get("commande") or ""),
+                int(row.get("sous_index") or 0),
+            )
+            proof = proofs.pop(lookup)
+            if proof.source != str(row.get("texte_source") or ""):
+                raise PhoneIntegrityError(
+                    "Le texte PBS ne correspond pas à la preuve téléphone."
+                )
+            row["pbs_structure"] = proof.pbs_structure
+            row["pbs_compiled_file"] = compiled_source.relative_path
+            row["pbs_compiled_sha256"] = compiled_source.sha256
+            row["pbs_compiled_path"] = proof.compiled_path
+            row["pbs_compiled_structure"] = proof.compiled_structure
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_path"] = proof.runtime_path
+            row["pbs_runtime_structure"] = proof.runtime_structure
+        if proofs:
+            raise PhoneIntegrityError(
+                "Certaines occurrences téléphone compilées ne sont pas extraites."
+            )
+    except (KeyError, TypeError, ValueError, OSError, PhoneIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "La correspondance PBS/phone.dat/PHONE_MESSAGES est ambiguë ou incohérente."
+        ) from exc
+
+
 def _is_same_or_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1260,10 +1335,15 @@ def _extract_snapshot(
                 "pbs_line_number",
                 "pbs_field_count",
                 "pbs_point_structure",
+                "pbs_structure",
                 "pbs_compiled_file",
                 "pbs_compiled_sha256",
                 "pbs_compiled_path",
                 "pbs_compiled_structure",
+                "pbs_runtime_file",
+                "pbs_runtime_sha256",
+                "pbs_runtime_path",
+                "pbs_runtime_structure",
             ):
                 row.setdefault(field_name, "")
             row["adaptateur"] = "pokemon_essentials"
@@ -1274,6 +1354,7 @@ def _extract_snapshot(
             progress(index, total, source.relative_path)
 
     _bind_compiled_point_proofs(snapshot_root, inventory, rows)
+    _bind_compiled_phone_proofs(snapshot_root, inventory, rows)
 
     duplicates = [
         row_id
@@ -1340,8 +1421,10 @@ FIELDNAMES = [
     "texte_source", "traduction_fr", "codes_proteges", "statut",
     "pbs_encoding", "pbs_bom", "pbs_newline", "pbs_field_index",
     "pbs_value_sha256", "pbs_line_number", "pbs_field_count",
-    "pbs_point_structure", "pbs_compiled_file", "pbs_compiled_sha256",
-    "pbs_compiled_path", "pbs_compiled_structure", "adaptateur", "source_sha256",
+    "pbs_point_structure", "pbs_structure", "pbs_compiled_file", "pbs_compiled_sha256",
+    "pbs_compiled_path", "pbs_compiled_structure", "pbs_runtime_file",
+    "pbs_runtime_sha256", "pbs_runtime_path", "pbs_runtime_structure",
+    "adaptateur", "source_sha256",
     "source_manifest_sha256", "profil_essentials",
     "version_essentials_declaree", "methode_version_essentials",
 ]

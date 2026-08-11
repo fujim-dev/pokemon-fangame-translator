@@ -490,6 +490,34 @@ reste strictement limitée à cette unique occurrence réelle à huit champs : l
 seconde occurrence réelle, tout autre corpus et `RECONSTRUCT` v21.1 public ne
 sont pas validés.
 
+### AC-128 — Premier message téléphone v21.1 synchronisé
+
+L'analyse strictement statique relie les 41 occurrences réelles de
+`PBS/phone.txt` aux objets `GameData::PhoneMessage` de `Data/phone.dat`, puis à
+la banque `PHONE_MESSAGES` située à l'index 22 de
+`Data/messages_game.dat`. Elle exige une correspondance bijective, l'ordre et
+les types Marshal exacts, les tableaux et `nil` attendus, des chaînes non
+partagées et un aller-retour Marshal byte-identical. Aucun script Ruby n'est
+exécuté.
+
+Une portée privée accepte exactement une occurrence `End`, avec sa provenance,
+sa ligne PBS avec BOM UTF-8 et CRLF, son chemin dans `phone.dat` et son entrée
+de banque d'exécution. Les trois fichiers sont calculés en mémoire puis publiés
+dans le candidat par un lot transactionnel unique. Toute divergence de source,
+preuve, type, ordre, empreinte ou occurrence annule l'opération ; une panne de
+publication injectée restaure exactement les trois fichiers précédents.
+
+Le round-trip réel a conservé 30 402 occurrences, dont les 41 messages
+téléphone, traversé le Studio, sa sauvegarde et sa reprise, puis modifié
+uniquement `PBS/phone.txt`, `Data/phone.dat` et
+`Data/messages_game.dat`. La réextraction retrouve la traduction exacte dans
+les trois représentations ; la référence et la copie de travail restent
+identiques sur 7 606 fichiers. Le candidat sous chemin court démarre sans erreur
+immédiate. Une validation visuelle humaine a confirmé l'affichage complet du
+marqueur `[TEST PFT v21.1 PHONE END]` sur cette occurrence réelle et la fin
+normale de l'appel. Cette preuve ne couvre aucun autre message, contact ou
+schéma téléphone et n'active pas `RECONSTRUCT` v21.1 public.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

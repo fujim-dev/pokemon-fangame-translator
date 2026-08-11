@@ -55,7 +55,7 @@ from reconstruction_engine import (
     reconstruct_copy,
     simulate_plan,
 )
-from ruby_marshal_reader import RubyObject, RubyString, load
+from ruby_marshal_reader import RubyHashKey, RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from structured_extractor import (
     ExtractionIntegrityError,
@@ -190,6 +190,7 @@ def prepare_v21_game(
     internal_line_control: bool = False,
     common_event_corpus: bool = False,
     point_validation: bool = False,
+    phone_validation: bool = False,
     point_eight_switch: int = 51,
     dangerous_marker: Path | None = None,
 ) -> None:
@@ -276,6 +277,65 @@ def prepare_v21_game(
         ]
     else:
         bank = {ruby_text("Synthetic bank text"): ruby_text("Synthetic bank text")}
+    if phone_validation:
+        default_messages = RubyObject(
+            "GameData::PhoneMessage",
+            {
+                "@id": ruby_text("default"),
+                "@trainer_type": ruby_text("default"),
+                "@real_name": None,
+                "@version": 0,
+                "@intro": [ruby_text("Synthetic default intro one"), ruby_text("Synthetic default intro two")],
+                "@intro_morning": None,
+                "@intro_afternoon": None,
+                "@intro_evening": None,
+                "@body": [ruby_text("Synthetic default body")],
+                "@body1": None,
+                "@body2": None,
+                "@battle_request": None,
+                "@battle_remind": None,
+                "@end": [ruby_text("Synthetic default end")],
+                "@pbs_file_suffix": ruby_text(""),
+            },
+        )
+        trainer_messages = RubyObject(
+            "GameData::PhoneMessage",
+            {
+                "@id": ["YOUNGSTER", ruby_text("Synthetic Contact"), 0],
+                "@trainer_type": "YOUNGSTER",
+                "@real_name": ruby_text("Synthetic Contact"),
+                "@version": 0,
+                "@intro": [ruby_text("Synthetic trainer intro")],
+                "@intro_morning": None,
+                "@intro_afternoon": None,
+                "@intro_evening": None,
+                "@body": None,
+                "@body1": None,
+                "@body2": None,
+                "@battle_request": None,
+                "@battle_remind": None,
+                "@end": [ruby_text("Synthetic trainer end")],
+                "@pbs_file_suffix": ruby_text(""),
+            },
+        )
+        phone_root = {
+            ruby_text("default"): default_messages,
+            RubyHashKey(["YOUNGSTER", ruby_text("Synthetic Contact"), 0]): trainer_messages,
+        }
+        (data / "phone.dat").write_bytes(dumps(phone_root))
+        runtime_phone_messages = [
+            "Synthetic default intro one",
+            "Synthetic default intro two",
+            "Synthetic default body",
+            "Synthetic default end",
+            "Synthetic trainer intro",
+            "Synthetic trainer end",
+        ]
+        bank = [{} for _index in range(31)]
+        bank[22] = {
+            ruby_text(message): ruby_text(message)
+            for message in runtime_phone_messages
+        }
     (data / "messages_game.dat").write_bytes(dumps(bank))
     (data / "messages_core.dat").write_bytes(dumps(core_bank))
     dangerous = (
@@ -300,6 +360,19 @@ def prepare_v21_game(
     pbs = root / "PBS" / "pokemon.txt"
     pbs.parent.mkdir()
     pbs.write_text("[TEST]\nName = Syntheticmon\n", encoding="utf-8")
+    if phone_validation:
+        (pbs.parent / "phone.txt").write_bytes(
+            b"\xef\xbb\xbf# synthetic phone fixture\r\n"
+            b"[default]\r\n"
+            b"Intro = Synthetic default intro one\r\n"
+            b"End = Synthetic default end\r\n"
+            b"Intro = Synthetic default intro two\r\n"
+            b"Body = Synthetic default body\r\n"
+            b"\r\n"
+            b"[YOUNGSTER,Synthetic Contact]\r\n"
+            b"Intro = Synthetic trainer intro\r\n"
+            b"End = Synthetic trainer end\r\n"
+        )
     if point_validation:
         (pbs.parent / "town_map.txt").write_bytes(
             b"\xef\xbb\xbf# synthetic point fixture\r\n"

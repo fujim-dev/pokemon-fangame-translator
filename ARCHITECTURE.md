@@ -499,6 +499,25 @@ Déjà en place :
   validation visuelle humaine a confirmé l'affichage en jeu de cet unique nom
   reconstruit après activation du switch de visibilité réel ciblé. La seconde
   occurrence à huit champs et tout autre corpus ne sont pas généralisés ;
+- la seconde occurrence Point à huit champs possède exactement le même schéma
+  compilé et les mêmes quatre positions `nil` que la première ; seules ses
+  valeurs métier diffèrent. Elle n'apporte donc aucune couverture structurelle
+  supplémentaire et ne justifie pas une nouvelle porte privée ;
+- `essentials_phone.py` corrèle désormais, sans exécuter Ruby, chaque message
+  de `PBS/phone.txt` avec son tableau dans un objet
+  `GameData::PhoneMessage` de `Data/phone.dat`, puis avec sa clé et sa valeur
+  dans `PHONE_MESSAGES` à l'index 22 de `Data/messages_game.dat`. Les preuves
+  immuables conservent empreintes, chemins, types, ordre, cardinalité,
+  références et graphes Marshal hors cible ;
+- une neuvième portée privée reste bornée à un seul message `End`. Elle calcule
+  les trois fichiers en mémoire et les publie par `atomic_write_bundle`, avec
+  contrôle concurrent et rollback des fichiers déjà remplacés. Le round-trip
+  réel a conservé 30 402 occurrences, n'a modifié que les trois fichiers
+  annoncés parmi 7 606 fichiers et a réextrait la traduction dans les trois
+  représentations. La référence et le travail sont restés inchangés. Une
+  validation visuelle humaine a confirmé le marqueur complet et la fin normale
+  de l'appel. Cette preuve ne s'étend à aucun autre message ou contact et ne
+  change aucune capacité publique ;
 
 Encore partiel ou pas encore en place :
 
@@ -515,7 +534,7 @@ Encore partiel ou pas encore en place :
 - élargissement réel des événements communs à un corpus multi-401 et 102/402 plus
   représentatif au-delà de l'unique choix commun désormais validé, autres formes
   `Point` (autres descriptions, autres cas à sept champs et autres formes/cas à
-  huit champs),
+  huit champs), autres formes de messages téléphone,
   PBS modernes et corpus
   réel encore plus large de cartes/banques. La capacité publique `RECONSTRUCT` reste absente
   malgré les preuves techniques et les validations visuelles déjà conclues.
