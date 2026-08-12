@@ -37,6 +37,14 @@ from essentials_ability import (
     AbilityIntegrityError,
     build_ability_description_proofs,
 )
+from essentials_species import (
+    COMPILED_SPECIES_FILE,
+    SPECIES_FORMS_PBS_FILE,
+    SPECIES_MESSAGES_FILE,
+    SPECIES_PBS_FILE,
+    SpeciesIntegrityError,
+    build_species_pokedex_proofs,
+)
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -323,6 +331,8 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
             return "compiled_trainer"
         if name == "abilities.dat":
             return "compiled_ability"
+        if name == "species.dat":
+            return "compiled_species"
     if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
         if any("backup" in part.casefold() for part in path.parts[1:]):
             return None
@@ -1383,6 +1393,81 @@ def _bind_compiled_ability_proofs(
         ) from exc
 
 
+def _bind_compiled_species_pokedex_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie les Pokédex de base au registre espèces et à la banque v21.1."""
+    species_rows = [
+        row
+        for row in rows
+        if str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == SPECIES_PBS_FILE.casefold()
+        and row.get("type") == "PBS — Pokedex"
+    ]
+    if not species_rows:
+        return
+    by_relative = {
+        source.relative_path.replace("\\", "/").casefold(): source
+        for source in inventory.sources
+    }
+    pbs_source = by_relative.get(SPECIES_PBS_FILE.casefold())
+    forms_source = by_relative.get(SPECIES_FORMS_PBS_FILE.casefold())
+    compiled_source = by_relative.get(COMPILED_SPECIES_FILE.casefold())
+    runtime_source = by_relative.get(SPECIES_MESSAGES_FILE.casefold())
+    if (
+        pbs_source is None
+        or forms_source is None
+        or compiled_source is None
+        or runtime_source is None
+    ):
+        raise ExtractionIntegrityError(
+            "Les entrées Pokédex ne peuvent pas être reliées aux deux PBS, à "
+            "species.dat et à leur banque core v21.1."
+        )
+
+    def snapshot_bytes(source: ExtractionSource) -> bytes:
+        return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
+
+    try:
+        proofs = build_species_pokedex_proofs(
+            snapshot_bytes(pbs_source),
+            snapshot_bytes(forms_source),
+            snapshot_bytes(compiled_source),
+            snapshot_bytes(runtime_source),
+        )
+        for row in species_rows:
+            lookup = (
+                str(row.get("evenement_id") or ""),
+                str(row.get("commande") or ""),
+                int(row.get("sous_index") or 0),
+            )
+            proof = proofs.pop(lookup)
+            if proof.source != str(row.get("texte_source") or ""):
+                raise SpeciesIntegrityError(
+                    "Le texte PBS ne correspond pas à la preuve Pokédex."
+                )
+            row["pbs_structure"] = proof.pbs_structure
+            row["pbs_compiled_file"] = compiled_source.relative_path
+            row["pbs_compiled_sha256"] = compiled_source.sha256
+            row["pbs_compiled_path"] = proof.compiled_path
+            row["pbs_compiled_structure"] = proof.compiled_structure
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_path"] = proof.runtime_path
+            row["pbs_runtime_structure"] = proof.runtime_structure
+        if any(looks_visible(proof.source) for proof in proofs.values()):
+            raise SpeciesIntegrityError(
+                "Certaines entrées Pokédex de base visibles ne sont pas extraites."
+            )
+    except (KeyError, TypeError, ValueError, OSError, SpeciesIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "La correspondance pokemon/pokemon_forms/species.dat/POKEDEX_ENTRIES "
+            "est ambiguë ou incohérente."
+        ) from exc
+
+
 def _is_same_or_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1513,6 +1598,7 @@ def _extract_snapshot(
     if essentials_profile == "essentials_v21_1_readonly":
         _bind_compiled_trainer_proofs(snapshot_root, inventory, rows)
         _bind_compiled_ability_proofs(snapshot_root, inventory, rows)
+        _bind_compiled_species_pokedex_proofs(snapshot_root, inventory, rows)
 
     duplicates = [
         row_id

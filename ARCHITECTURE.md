@@ -552,6 +552,24 @@ Déjà en place :
   normale de la fiche. La fin du marqueur est tronquée par l'interface et n'est
   donc pas considérée comme observée visuellement. Cette preuve reste limitée à
   cette occurrence et ne change aucune capacité publique ;
+- `essentials_species.py` corrèle désormais, sans exécuter Ruby, les 898 entrées
+  `Pokedex` de base de `PBS/pokemon.txt` avec les 339 formes déclarées dans
+  `PBS/pokemon_forms.txt`, les 1 237 objets `GameData::Species` de
+  `Data/species.dat`, puis la banque `POKEDEX_ENTRIES` à l'index 3 de
+  `Data/messages_core.dat`. L'ordre composé espèce/forme, les 136 redéfinitions,
+  les 203 héritages réels et les références Marshal font partie de la preuve ;
+- une douzième portée privée accepte exactement une entrée Pokédex de base,
+  unique et non héritée. Les deux PBS sont revalidés, mais seuls
+  `PBS/pokemon.txt`, `Data/species.dat` et `Data/messages_core.dat` peuvent être
+  publiés transactionnellement ; `pokemon_forms.txt` reste byte-identical. Le
+  round-trip réel a conservé les 30 402 occurrences, laissé la référence et la
+  copie de travail inchangées, puis réextrait le même texte dans les trois
+  représentations. Une validation humaine a confirmé l'affichage intégral du
+  marqueur `[TEST PFT v21.1 POKEDEX]`, la continuation immédiate du texte normal
+  de l'entrée, puis la fermeture du Pokédex et le retour au jeu sans erreur.
+  Cette preuve reste limitée à cette occurrence : les entrées partagées ou
+  héritées, les catégories, noms/formes et autres champs d'espèce ne sont pas
+  généralisés et aucune capacité publique ne change ;
 
 Encore partiel ou pas encore en place :
 

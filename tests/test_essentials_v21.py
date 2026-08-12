@@ -193,6 +193,7 @@ def prepare_v21_game(
     phone_validation: bool = False,
     trainer_validation: bool = False,
     ability_validation: bool = False,
+    species_validation: bool = False,
     point_eight_switch: int = 51,
     dangerous_marker: Path | None = None,
 ) -> None:
@@ -423,6 +424,104 @@ def prepare_v21_game(
             ruby_text(target_description): ruby_text(target_description),
             ruby_text(shared_description): ruby_text(shared_description),
         }
+    if species_validation:
+        from essentials_species import SPECIES_IVARS
+
+        def species_object(
+            identifier: str,
+            species: str,
+            form: int,
+            name: str,
+            pokedex_value: RubyString,
+        ) -> RubyObject:
+            values = {
+                "@id": identifier,
+                "@species": species,
+                "@form": form,
+                "@real_name": ruby_text(name),
+                "@real_form_name": None,
+                "@real_category": ruby_text("Synthetic"),
+                "@real_pokedex_entry": pokedex_value,
+                "@pokedex_form": form,
+                "@types": ["NORMAL"],
+                "@base_stats": {"HP": 45},
+                "@evs": {},
+                "@base_exp": 64,
+                "@growth_rate": "Medium",
+                "@gender_ratio": "Female50Percent",
+                "@catch_rate": 45,
+                "@happiness": 70,
+                "@moves": [[1, "TACKLE"]],
+                "@tutor_moves": [],
+                "@egg_moves": [],
+                "@abilities": ["OVERGROW"],
+                "@hidden_abilities": [],
+                "@wild_item_common": [],
+                "@wild_item_uncommon": [],
+                "@wild_item_rare": [],
+                "@egg_groups": ["Monster"],
+                "@hatch_steps": 5120,
+                "@incense": None,
+                "@offspring": [],
+                "@evolutions": [],
+                "@height": 7,
+                "@weight": 69,
+                "@color": "Green",
+                "@shape": "Quadruped",
+                "@habitat": "Grassland",
+                "@generation": 1,
+                "@flags": [],
+                "@mega_stone": None,
+                "@mega_move": None,
+                "@unmega_form": 0,
+                "@mega_message": 0,
+                "@pbs_file_suffix": ruby_text(""),
+            }
+            return RubyObject(
+                "GameData::Species",
+                {ivar: values[ivar] for ivar in SPECIES_IVARS},
+            )
+
+        target_pokedex = ruby_text("Synthetic unique Bulbasaur Pokédex entry.")
+        inherited_pokedex = ruby_text("Synthetic inherited Cubone Pokédex entry.")
+        charmander_pokedex = ruby_text("Synthetic Charmander Pokédex entry.")
+        explicit_form_pokedex = ruby_text("Synthetic explicit form Pokédex entry.")
+        species_root = {
+            "BULBASAUR": species_object(
+                "BULBASAUR", "BULBASAUR", 0, "Synthetic Bulbasaur", target_pokedex
+            ),
+            "CUBONE": species_object(
+                "CUBONE", "CUBONE", 0, "Synthetic Cubone", inherited_pokedex
+            ),
+            "CHARMANDER": species_object(
+                "CHARMANDER",
+                "CHARMANDER",
+                0,
+                "Synthetic Charmander",
+                charmander_pokedex,
+            ),
+            "CUBONE_1": species_object(
+                "CUBONE_1", "CUBONE", 1, "Synthetic Cubone", inherited_pokedex
+            ),
+            "CHARMANDER_1": species_object(
+                "CHARMANDER_1",
+                "CHARMANDER",
+                1,
+                "Synthetic Charmander",
+                explicit_form_pokedex,
+            ),
+        }
+        (data / "species.dat").write_bytes(dumps(species_root))
+        core_bank = [{} for _index in range(31)]
+        core_bank[3] = {
+            ruby_text(message): ruby_text(message)
+            for message in (
+                target_pokedex.text(),
+                inherited_pokedex.text(),
+                charmander_pokedex.text(),
+                explicit_form_pokedex.text(),
+            )
+        }
     (data / "messages_game.dat").write_bytes(dumps(bank))
     (data / "messages_core.dat").write_bytes(dumps(core_bank))
     dangerous = (
@@ -447,6 +546,30 @@ def prepare_v21_game(
     pbs = root / "PBS" / "pokemon.txt"
     pbs.parent.mkdir()
     pbs.write_text("[TEST]\nName = Syntheticmon\n", encoding="utf-8")
+    if species_validation:
+        pbs.write_bytes(
+            b"\xef\xbb\xbf# synthetic species fixture\r\n"
+            b"[BULBASAUR]\r\n"
+            b"Name = Synthetic Bulbasaur\r\n"
+            b"Pokedex = Synthetic unique Bulbasaur Pok\xc3\xa9dex entry.\r\n"
+            b"\r\n"
+            b"[CUBONE]\r\n"
+            b"Name = Synthetic Cubone\r\n"
+            b"Pokedex = Synthetic inherited Cubone Pok\xc3\xa9dex entry.\r\n"
+            b"\r\n"
+            b"[CHARMANDER]\r\n"
+            b"Name = Synthetic Charmander\r\n"
+            b"Pokedex = Synthetic Charmander Pok\xc3\xa9dex entry.\r\n"
+        )
+        (pbs.parent / "pokemon_forms.txt").write_bytes(
+            b"\xef\xbb\xbf# synthetic species forms fixture\r\n"
+            b"[CUBONE,1]\r\n"
+            b"FormName = Synthetic inherited form\r\n"
+            b"\r\n"
+            b"[CHARMANDER,1]\r\n"
+            b"FormName = Synthetic explicit form\r\n"
+            b"Pokedex = Synthetic explicit form Pok\xc3\xa9dex entry.\r\n"
+        )
     if phone_validation:
         (pbs.parent / "phone.txt").write_bytes(
             b"\xef\xbb\xbf# synthetic phone fixture\r\n"

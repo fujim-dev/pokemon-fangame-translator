@@ -275,6 +275,20 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   visible `[TEST PFT ...` du marqueur ; la fin, tronquée par l'interface, n'est
   pas déclarée visuellement observée. Les autres capacités, textes partagés,
   registres `GameData` et `RECONSTRUCT` public restent bloqués.
+- le lot suivant couvre la structure composée du registre des espèces : les 898
+  entrées `Pokedex` de base et les 339 formes issues de deux PBS sont reliées
+  aux 1 237 objets `GameData::Species` de `Data/species.dat`, puis aux 1 028
+  textes uniques de `POKEDEX_ENTRIES` dans `Data/messages_core.dat`. Les 136
+  redéfinitions de formes et 203 héritages sont validés sans exécuter Ruby ; une
+  cible héritée, partagée ou ambiguë reste bloquée ;
+- une porte privée strictement unitaire surveille les quatre sources, mais ne
+  synchronise que `PBS/pokemon.txt`, `Data/species.dat` et
+  `Data/messages_core.dat`. Le round-trip réel conserve les 30 402 occurrences,
+  tous les fichiers hors plan, la référence et le travail, puis réextrait la
+  traduction exacte. La validation humaine a confirmé le marqueur complet au
+  début de l'entrée Pokédex, la suite normale du texte et le retour au jeu sans
+  erreur après fermeture. Les autres entrées/champs d'espèce, les textes
+  hérités ou partagés et `RECONSTRUCT` public restent volontairement bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

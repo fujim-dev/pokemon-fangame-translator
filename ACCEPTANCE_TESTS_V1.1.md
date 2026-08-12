@@ -580,6 +580,39 @@ Cette preuve ne couvre aucun autre texte ou objet de capacité, aucune descripti
 partagée, aucun autre registre `GameData` et n'active pas `RECONSTRUCT` v21.1
 public.
 
+### AC-131 — Première Species.Pokedex v21.1 synchronisée
+
+L'analyse strictement statique relie les 898 `Pokedex` de base de
+`PBS/pokemon.txt` et les 339 formes de `PBS/pokemon_forms.txt` aux 1 237 objets
+`GameData::Species` de `Data/species.dat`, puis à la banque core
+`POKEDEX_ENTRIES` située à l'index 3 de `Data/messages_core.dat`. La preuve exige
+l'ordre exact des deux PBS dans le registre compilé, les identités `id/species/form`,
+les ivars et types Marshal, les 136 textes de forme explicites et les 203 textes
+hérités par partage d'objet. Les 48 entrées de base partageant leur texte restent
+extractibles mais sont refusées ; 850 entrées uniques satisfont cette première
+preuve structurelle.
+
+Une portée privée accepte exactement une entrée de base unique, non héritée et
+non partagée. Elle surveille les empreintes des deux PBS, de `species.dat` et de
+la banque core, mais calcule et publie uniquement les trois fichiers réellement
+ciblés dans un lot transactionnel. Une identité composée, un ordre, un héritage,
+une métadonnée hors cible, une preuve ou une source modifiés bloque l'opération ;
+une panne de publication injectée restaure les fichiers déjà remplacés.
+
+Le round-trip réel a conservé les 30 402 occurrences, traversé le Studio, sa
+sauvegarde et sa reprise, puis modifié uniquement `PBS/pokemon.txt`,
+`Data/species.dat` et `Data/messages_core.dat`. `PBS/pokemon_forms.txt` est resté
+byte-identical ; la référence et la copie de travail sont inchangées. La
+réextraction retrouve la chaîne complète sous la même identité stable dans les
+trois représentations et le candidat démarre sans modifier ses fichiers.
+
+Une validation humaine a confirmé l'affichage clair et intégral du marqueur
+`[TEST PFT v21.1 POKEDEX]`, immédiatement suivi du texte normal de l'entrée, puis
+la fermeture fonctionnelle du Pokédex et le retour au jeu sans erreur. Cette
+preuve reste limitée à cette occurrence réelle : elle ne couvre aucune entrée
+héritée ou partagée, aucun autre texte ou champ d'espèce, aucun autre corpus et
+n'active pas `RECONSTRUCT` v21.1 public.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté
