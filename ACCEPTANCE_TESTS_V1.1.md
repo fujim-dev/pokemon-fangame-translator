@@ -613,6 +613,45 @@ preuve reste limitée à cette occurrence réelle : elle ne couvre aucune entré
 héritée ou partagée, aucun autre texte ou champ d'espèce, aucun autre corpus et
 n'active pas `RECONSTRUCT` v21.1 public.
 
+### AC-132 — Premier MapMetadata.Name v21.1 synchronisé
+
+L'analyse strictement statique relie les 69 champs `Name` de
+`PBS/map_metadata.txt` aux clés numériques et objets `GameData::MapMetadata` de
+`Data/map_metadata.dat`, puis à la banque `MAP_NAMES` située à l'index 21 de
+`Data/messages_game.dat`. Elle exige l'identifiant numérique canonique, l'ordre
+exact des sections et du Hash compilé, les 25 ivars et types Marshal attendus,
+les chemins et empreintes des trois sources ainsi qu'un aller-retour Marshal
+byte-identical. Aucun script Ruby n'est exécuté.
+
+Une portée privée accepte exactement une occurrence `Name` réelle, unique et
+non partagée entre les sections de cartes. Elle vérifie la provenance, les trois
+empreintes, l'identité numérique, les preuves PBS, compilée et d'exécution, puis
+calcule les trois fichiers en mémoire avant leur publication transactionnelle.
+Un nom partagé, une collision de banque, un identifiant ou une structure
+modifiés, une preuve obsolète ou une panne de publication entraîne un refus ou
+le rollback exact des fichiers déjà remplacés.
+
+La clé Ruby réelle ciblée dans `MAP_NAMES` est aussi référencée comme clé dans
+une autre banque du même graphe Marshal. La porte ne modifie pas cet objet
+partagé : elle remplace seulement la paire ciblée dans `MAP_NAMES` et compare le
+graphe entier privé de cette paire avant/après. Les fixtures synthétiques
+reproduisent cet alias et vérifient que l'autre banque reste structurellement
+identique, tout en refusant une preuve, une source ou une provenance altérée.
+
+Le round-trip réel a conservé les 30 402 occurrences, traversé le Studio, sa
+sauvegarde et sa reprise, puis modifié uniquement `PBS/map_metadata.txt`,
+`Data/map_metadata.dat` et `Data/messages_game.dat`. La réextraction retrouve la
+traduction exacte sous le même identifiant stable dans les trois
+représentations ; la référence et la copie de travail restent inchangées sur
+7 606 fichiers et le candidat atteint l'écran titre sans erreur mkxp-z.
+
+Une validation humaine a ensuite confirmé, lors de l'entrée sur la carte réelle
+ciblée, l'affichage clair et intégral du bandeau
+`Route 2 [TEST PFT v21.1 MAP]`. Cette preuve reste strictement limitée à cette
+occurrence réelle de `MapMetadata.Name` : elle ne couvre aucun nom partagé,
+aucun autre nom ou champ `MapMetadata`, aucun autre corpus et n'active pas
+`RECONSTRUCT` v21.1 public.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

@@ -194,6 +194,7 @@ def prepare_v21_game(
     trainer_validation: bool = False,
     ability_validation: bool = False,
     species_validation: bool = False,
+    map_metadata_validation: bool = False,
     point_eight_switch: int = 51,
     dangerous_marker: Path | None = None,
 ) -> None:
@@ -522,6 +523,72 @@ def prepare_v21_game(
                 explicit_form_pokedex.text(),
             )
         }
+    if map_metadata_validation:
+        from essentials_map_metadata import MAP_METADATA_IVARS
+
+        def map_metadata_object(
+            map_id: int,
+            name: str,
+            *,
+            outdoor: bool | None = None,
+            announce: bool | None = None,
+            position: list[int] | None = None,
+        ) -> RubyObject:
+            values = {
+                "@id": map_id,
+                "@real_name": ruby_text(name),
+                "@outdoor_map": outdoor,
+                "@announce_location": announce,
+                "@can_bicycle": None,
+                "@always_bicycle": None,
+                "@teleport_destination": None,
+                "@weather": None,
+                "@town_map_position": position,
+                "@dive_map_id": None,
+                "@dark_map": None,
+                "@safari_map": None,
+                "@snap_edges": None,
+                "@still_reflections": None,
+                "@random_dungeon": None,
+                "@battle_background": ruby_text("field") if outdoor else None,
+                "@wild_battle_BGM": None,
+                "@trainer_battle_BGM": None,
+                "@wild_victory_BGM": None,
+                "@trainer_victory_BGM": None,
+                "@wild_capture_ME": None,
+                "@town_map_size": None,
+                "@battle_environment": None,
+                "@flags": [],
+                "@pbs_file_suffix": ruby_text(""),
+            }
+            return RubyObject(
+                "GameData::MapMetadata",
+                {ivar: values[ivar] for ivar in MAP_METADATA_IVARS},
+            )
+
+        target_map_name = "Synthetic unique route"
+        shared_map_name = "Synthetic shared town"
+        map_metadata_root = {
+            1: map_metadata_object(
+                1,
+                target_map_name,
+                outdoor=True,
+                announce=True,
+                position=[0, 4, 7],
+            ),
+            2: map_metadata_object(2, shared_map_name, position=[0, 4, 8]),
+            3: map_metadata_object(3, shared_map_name, position=[0, 4, 8]),
+        }
+        (data / "map_metadata.dat").write_bytes(dumps(map_metadata_root))
+        bank = [{} for _index in range(31)]
+        target_map_key = ruby_text(target_map_name)
+        bank[19] = {
+            target_map_key: ruby_text(target_map_name),
+        }
+        bank[21] = {
+            target_map_key: ruby_text(target_map_name),
+            ruby_text(shared_map_name): ruby_text(shared_map_name),
+        }
     (data / "messages_game.dat").write_bytes(dumps(bank))
     (data / "messages_core.dat").write_bytes(dumps(core_bank))
     dangerous = (
@@ -617,6 +684,24 @@ def prepare_v21_game(
             b"[TORRENT]\r\n"
             b"Name = Synthetic Torrent\r\n"
             b"Description = Synthetic shared ability description.\r\n"
+        )
+    if map_metadata_validation:
+        (pbs.parent / "map_metadata.txt").write_bytes(
+            b"\xef\xbb\xbf# synthetic map metadata fixture\r\n"
+            b"[001]   # Synthetic unique route\r\n"
+            b"Name = Synthetic unique route\r\n"
+            b"Outdoor = true\r\n"
+            b"ShowArea = true\r\n"
+            b"MapPosition = 0,4,7\r\n"
+            b"BattleBack = field\r\n"
+            b"\r\n"
+            b"[002]   # Synthetic shared town one\r\n"
+            b"Name = Synthetic shared town\r\n"
+            b"MapPosition = 0,4,8\r\n"
+            b"\r\n"
+            b"[003]   # Synthetic shared town two\r\n"
+            b"Name = Synthetic shared town\r\n"
+            b"MapPosition = 0,4,8\r\n"
         )
     if point_validation:
         (pbs.parent / "town_map.txt").write_bytes(

@@ -571,6 +571,28 @@ Déjà en place :
   héritées, les catégories, noms/formes et autres champs d'espèce ne sont pas
   généralisés et aucune capacité publique ne change ;
 
+- `essentials_map_metadata.py` corrèle désormais, sans exécuter Ruby, les 69
+  champs `Name` de `PBS/map_metadata.txt` avec les clés numériques et objets
+  `GameData::MapMetadata` de `Data/map_metadata.dat`, puis avec la banque
+  `MAP_NAMES` située à l'index 21 de `Data/messages_game.dat`. Les preuves
+  immuables couvrent l'identifiant numérique, l'ordre des sections, les 25
+  ivars, les types, chemins, empreintes, cardinalités et graphes Marshal hors
+  cible ; un nom partagé par plusieurs cartes ou une collision de clé reste
+  volontairement bloqué ;
+- une treizième portée privée accepte exactement un nom de carte réel et unique.
+  Elle recalcule les trois représentations en mémoire et les publie par un lot
+  transactionnel avec rollback. La clé Ruby réelle ciblée étant également
+  référencée dans une autre banque, la mutation remplace uniquement la paire de
+  `MAP_NAMES` et prouve que cette banque alias ainsi que tout le graphe extérieur
+  restent inchangés. Le round-trip réel a conservé les 30 402 occurrences,
+  limité les modifications à `PBS/map_metadata.txt`, `Data/map_metadata.dat` et
+  `Data/messages_game.dat`, laissé la référence et la copie de travail
+  inchangées, puis réextrait le même nom sous la même identité stable. Une
+  validation humaine a confirmé l'affichage clair et intégral du marqueur dans
+  le bandeau de nom de lieu lors de l'entrée sur la carte ciblée. Cette preuve ne
+  couvre aucun nom partagé, aucun autre champ `MapMetadata`, aucun autre corpus
+  et ne change aucune capacité publique ;
+
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;

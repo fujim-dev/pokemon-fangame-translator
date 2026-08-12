@@ -290,6 +290,23 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   erreur après fermeture. Les autres entrées/champs d'espèce, les textes
   hérités ou partagés et `RECONSTRUCT` public restent volontairement bloqués.
 
+- le lot suivant couvre un registre de cartes indexé numériquement : les 69
+  `Name` de `PBS/map_metadata.txt` sont reliés aux objets
+  `GameData::MapMetadata` de `Data/map_metadata.dat`, puis à `MAP_NAMES` dans
+  `Data/messages_game.dat`, sans exécuter Ruby. La porte privée refuse les noms
+  partagés, les collisions, toute dérive d'identité/structure et toute source
+  modifiée après planification ;
+- une portée strictement unitaire synchronise transactionnellement les trois
+  représentations et conserve le graphe Marshal hors cible. Le cas réel a aussi
+  démontré qu'une clé `MAP_NAMES` pouvait être le même objet Ruby qu'une clé
+  d'une autre banque : seule la paire ciblée est remplacée et la banque alias
+  reste structurellement identique. Le round-trip a conservé les 30 402
+  occurrences, tous les fichiers hors plan, la référence et le travail. Une
+  validation humaine a confirmé l'affichage intégral du nom modifié dans le
+  bandeau d'entrée de la carte réelle. Les autres noms, les noms partagés, les
+  autres champs `MapMetadata`, les autres corpus et `RECONSTRUCT` public restent
+  volontairement bloqués.
+
 ## Phase 2 — Interface pilotée par capacités
 
 ### Objectifs

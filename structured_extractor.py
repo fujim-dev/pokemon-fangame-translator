@@ -45,6 +45,13 @@ from essentials_species import (
     SpeciesIntegrityError,
     build_species_pokedex_proofs,
 )
+from essentials_map_metadata import (
+    COMPILED_MAP_METADATA_FILE,
+    MAP_METADATA_MESSAGES_FILE,
+    MAP_METADATA_PBS_FILE,
+    MapMetadataIntegrityError,
+    build_map_metadata_name_proofs,
+)
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -333,6 +340,8 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
             return "compiled_ability"
         if name == "species.dat":
             return "compiled_species"
+        if name == "map_metadata.dat":
+            return "compiled_map_metadata"
     if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
         if any("backup" in part.casefold() for part in path.parts[1:]):
             return None
@@ -1468,6 +1477,73 @@ def _bind_compiled_species_pokedex_proofs(
         ) from exc
 
 
+def _bind_compiled_map_metadata_name_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie les noms de cartes à leur registre et à MAP_NAMES v21.1."""
+    metadata_rows = [
+        row
+        for row in rows
+        if str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == MAP_METADATA_PBS_FILE.casefold()
+        and row.get("type") == "PBS — Name"
+    ]
+    if not metadata_rows:
+        return
+    by_relative = {
+        source.relative_path.replace("\\", "/").casefold(): source
+        for source in inventory.sources
+    }
+    pbs_source = by_relative.get(MAP_METADATA_PBS_FILE.casefold())
+    compiled_source = by_relative.get(COMPILED_MAP_METADATA_FILE.casefold())
+    runtime_source = by_relative.get(MAP_METADATA_MESSAGES_FILE.casefold())
+    if pbs_source is None or compiled_source is None or runtime_source is None:
+        raise ExtractionIntegrityError(
+            "Les noms de cartes ne peuvent pas être reliés à map_metadata.dat "
+            "et à MAP_NAMES v21.1."
+        )
+
+    def snapshot_bytes(source: ExtractionSource) -> bytes:
+        return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
+
+    try:
+        proofs = build_map_metadata_name_proofs(
+            snapshot_bytes(pbs_source),
+            snapshot_bytes(compiled_source),
+            snapshot_bytes(runtime_source),
+        )
+        for row in metadata_rows:
+            lookup = (
+                str(row.get("evenement_id") or ""),
+                str(row.get("commande") or ""),
+                int(row.get("sous_index") or 0),
+            )
+            proof = proofs.pop(lookup)
+            if proof.source != str(row.get("texte_source") or ""):
+                raise MapMetadataIntegrityError(
+                    "Le texte PBS ne correspond pas à la preuve de nom de carte."
+                )
+            row["pbs_structure"] = proof.pbs_structure
+            row["pbs_compiled_file"] = compiled_source.relative_path
+            row["pbs_compiled_sha256"] = compiled_source.sha256
+            row["pbs_compiled_path"] = proof.compiled_path
+            row["pbs_compiled_structure"] = proof.compiled_structure
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_path"] = proof.runtime_path
+            row["pbs_runtime_structure"] = proof.runtime_structure
+        if any(looks_visible(proof.source) for proof in proofs.values()):
+            raise MapMetadataIntegrityError(
+                "Certains noms de cartes visibles ne sont pas extraits."
+            )
+    except (KeyError, TypeError, ValueError, OSError, MapMetadataIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "La correspondance PBS/map_metadata.dat/MAP_NAMES est ambiguë ou incohérente."
+        ) from exc
+
+
 def _is_same_or_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1599,6 +1675,7 @@ def _extract_snapshot(
         _bind_compiled_trainer_proofs(snapshot_root, inventory, rows)
         _bind_compiled_ability_proofs(snapshot_root, inventory, rows)
         _bind_compiled_species_pokedex_proofs(snapshot_root, inventory, rows)
+        _bind_compiled_map_metadata_name_proofs(snapshot_root, inventory, rows)
 
     duplicates = [
         row_id
