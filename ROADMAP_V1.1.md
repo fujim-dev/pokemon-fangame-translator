@@ -262,6 +262,19 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   un combat réel, la fin normale du dialogue et le retour au jeu. Les autres
   dresseurs, textes partagés, banques de combat, PBS modernes et `RECONSTRUCT`
   v21.1 public restent volontairement bloqués.
+- le lot suivant couvre une première chaîne de registre `GameData` moderne : les
+  267 descriptions de `PBS/abilities.txt` sont reliées à
+  `Data/abilities.dat` et à `ABILITY_DESCRIPTIONS` dans
+  `Data/messages_core.dat`, sans exécuter Ruby. Les 240 occurrences uniques sont
+  structurellement admissibles ; les 27 occurrences partagées restent bloquées ;
+- une porte privée strictement unitaire publie transactionnellement ces trois
+  représentations avec rollback. Le round-trip réel conserve les 30 402
+  occurrences, tous les fichiers hors plan, l'original et le travail, puis
+  réextrait la chaîne complète à la même identité. La validation humaine a
+  confirmé la capacité et la description sur la bonne fiche ainsi que le début
+  visible `[TEST PFT ...` du marqueur ; la fin, tronquée par l'interface, n'est
+  pas déclarée visuellement observée. Les autres capacités, textes partagés,
+  registres `GameData` et `RECONSTRUCT` public restent bloqués.
 
 ## Phase 2 — Interface pilotée par capacités
 

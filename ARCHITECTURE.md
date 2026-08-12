@@ -535,6 +535,23 @@ Déjà en place :
   Une validation visuelle humaine a confirmé le marqueur complet après un combat
   réel, la fin normale du dialogue et le retour au jeu. Cette preuve reste
   limitée à cette seule occurrence et ne change aucune capacité publique ;
+- `essentials_ability.py` corrèle désormais, sans exécuter Ruby, chaque
+  `Description` de `PBS/abilities.txt` avec son objet `GameData::Ability` dans
+  `Data/abilities.dat`, puis avec la banque `ABILITY_DESCRIPTIONS` à l'index 11
+  de `Data/messages_core.dat`. Les preuves immuables couvrent identifiant, nom,
+  flags, suffixe PBS, ivars, ordre, types, chemins, références et graphes Marshal
+  hors cible. L'inventaire réel compte 267 occurrences, dont 240 uniques
+  admissibles et 27 partagées volontairement bloquées ;
+- une onzième portée privée accepte exactement une description réelle unique,
+  recalcule les trois représentations en mémoire et les publie
+  transactionnellement avec rollback. Le round-trip réel a conservé les
+  30 402 occurrences, laissé la référence et le travail inchangés, limité les
+  changements aux trois fichiers prévus et réextrait la chaîne complète sous la
+  même identité stable. La validation humaine a confirmé la bonne fiche, la
+  description source et le préfixe visible `[TEST PFT ...`, ainsi que la fermeture
+  normale de la fiche. La fin du marqueur est tronquée par l'interface et n'est
+  donc pas considérée comme observée visuellement. Cette preuve reste limitée à
+  cette occurrence et ne change aucune capacité publique ;
 
 Encore partiel ou pas encore en place :
 

@@ -30,6 +30,13 @@ from essentials_trainer import (
     TrainerIntegrityError,
     build_trainer_entry_proofs,
 )
+from essentials_ability import (
+    ABILITY_MESSAGES_FILE,
+    ABILITY_PBS_FILE,
+    COMPILED_ABILITY_FILE,
+    AbilityIntegrityError,
+    build_ability_description_proofs,
+)
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -314,6 +321,8 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
             return "compiled_phone"
         if name == "trainers.dat":
             return "compiled_trainer"
+        if name == "abilities.dat":
+            return "compiled_ability"
     if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
         if any("backup" in part.casefold() for part in path.parts[1:]):
             return None
@@ -1306,6 +1315,74 @@ def _bind_compiled_trainer_proofs(
         ) from exc
 
 
+def _bind_compiled_ability_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie les descriptions de capacités aux deux représentations v21.1."""
+    ability_rows = [
+        row
+        for row in rows
+        if str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == ABILITY_PBS_FILE.casefold()
+        and row.get("type") == "PBS — Description"
+    ]
+    if not ability_rows:
+        return
+    by_relative = {
+        source.relative_path.replace("\\", "/").casefold(): source
+        for source in inventory.sources
+    }
+    pbs_source = by_relative.get(ABILITY_PBS_FILE.casefold())
+    compiled_source = by_relative.get(COMPILED_ABILITY_FILE.casefold())
+    runtime_source = by_relative.get(ABILITY_MESSAGES_FILE.casefold())
+    if pbs_source is None or compiled_source is None or runtime_source is None:
+        raise ExtractionIntegrityError(
+            "Les descriptions de capacités ne peuvent pas être reliées à "
+            "abilities.dat et à leur banque core v21.1."
+        )
+
+    def snapshot_bytes(source: ExtractionSource) -> bytes:
+        return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
+
+    try:
+        proofs = build_ability_description_proofs(
+            snapshot_bytes(pbs_source),
+            snapshot_bytes(compiled_source),
+            snapshot_bytes(runtime_source),
+        )
+        for row in ability_rows:
+            lookup = (
+                str(row.get("evenement_id") or ""),
+                str(row.get("commande") or ""),
+                int(row.get("sous_index") or 0),
+            )
+            proof = proofs.pop(lookup)
+            if proof.source != str(row.get("texte_source") or ""):
+                raise AbilityIntegrityError(
+                    "Le texte PBS ne correspond pas à la preuve de capacité."
+                )
+            row["pbs_structure"] = proof.pbs_structure
+            row["pbs_compiled_file"] = compiled_source.relative_path
+            row["pbs_compiled_sha256"] = compiled_source.sha256
+            row["pbs_compiled_path"] = proof.compiled_path
+            row["pbs_compiled_structure"] = proof.compiled_structure
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_path"] = proof.runtime_path
+            row["pbs_runtime_structure"] = proof.runtime_structure
+        if any(looks_visible(proof.source) for proof in proofs.values()):
+            raise AbilityIntegrityError(
+                "Certaines descriptions de capacités visibles ne sont pas extraites."
+            )
+    except (KeyError, TypeError, ValueError, OSError, AbilityIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "La correspondance PBS/abilities.dat/ABILITY_DESCRIPTIONS est "
+            "ambiguë ou incohérente."
+        ) from exc
+
+
 def _is_same_or_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1435,6 +1512,7 @@ def _extract_snapshot(
     _bind_compiled_phone_proofs(snapshot_root, inventory, rows)
     if essentials_profile == "essentials_v21_1_readonly":
         _bind_compiled_trainer_proofs(snapshot_root, inventory, rows)
+        _bind_compiled_ability_proofs(snapshot_root, inventory, rows)
 
     duplicates = [
         row_id

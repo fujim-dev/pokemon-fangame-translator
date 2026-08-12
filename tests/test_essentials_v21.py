@@ -192,6 +192,7 @@ def prepare_v21_game(
     point_validation: bool = False,
     phone_validation: bool = False,
     trainer_validation: bool = False,
+    ability_validation: bool = False,
     point_eight_switch: int = 51,
     dangerous_marker: Path | None = None,
 ) -> None:
@@ -382,6 +383,46 @@ def prepare_v21_game(
             ruby_text(shared_lose): ruby_text(shared_lose),
             ruby_text("..."): ruby_text("..."),
         }
+    if ability_validation:
+        def ability_object(
+            identifier: str,
+            name: str,
+            description: str,
+            flags: tuple[str, ...] = (),
+        ) -> RubyObject:
+            return RubyObject(
+                "GameData::Ability",
+                {
+                    "@id": identifier,
+                    "@real_name": ruby_text(name),
+                    "@real_description": ruby_text(description),
+                    "@flags": [ruby_text(flag) for flag in flags],
+                    "@pbs_file_suffix": ruby_text(""),
+                },
+            )
+
+        target_description = "Synthetic unique ability description."
+        shared_description = "Synthetic shared ability description."
+        ability_root = {
+            "OVERGROW": ability_object(
+                "OVERGROW", "Synthetic Overgrow", target_description
+            ),
+            "BLAZE": ability_object(
+                "BLAZE",
+                "Synthetic Blaze",
+                shared_description,
+                ("FasterEggHatching",),
+            ),
+            "TORRENT": ability_object(
+                "TORRENT", "Synthetic Torrent", shared_description
+            ),
+        }
+        (data / "abilities.dat").write_bytes(dumps(ability_root))
+        core_bank = [{} for _index in range(31)]
+        core_bank[11] = {
+            ruby_text(target_description): ruby_text(target_description),
+            ruby_text(shared_description): ruby_text(shared_description),
+        }
     (data / "messages_game.dat").write_bytes(dumps(bank))
     (data / "messages_core.dat").write_bytes(dumps(core_bank))
     dangerous = (
@@ -437,6 +478,22 @@ def prepare_v21_game(
             b"[RIVAL,Synthetic Placeholder]\r\n"
             b"LoseText = ...\r\n"
             b"Pokemon = PIKACHU,5\r\n"
+        )
+    if ability_validation:
+        (pbs.parent / "abilities.txt").write_bytes(
+            b"\xef\xbb\xbf# synthetic ability fixture\r\n"
+            b"[OVERGROW]\r\n"
+            b"Name = Synthetic Overgrow\r\n"
+            b"Description = Synthetic unique ability description.\r\n"
+            b"\r\n"
+            b"[BLAZE]\r\n"
+            b"Name = Synthetic Blaze\r\n"
+            b"Description = Synthetic shared ability description.\r\n"
+            b"Flags = FasterEggHatching\r\n"
+            b"\r\n"
+            b"[TORRENT]\r\n"
+            b"Name = Synthetic Torrent\r\n"
+            b"Description = Synthetic shared ability description.\r\n"
         )
     if point_validation:
         (pbs.parent / "town_map.txt").write_bytes(

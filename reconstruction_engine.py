@@ -61,6 +61,18 @@ from essentials_trainer import (
     extract_trainer_target_texts,
     rebuild_trainer_payloads,
 )
+from essentials_ability import (
+    ABILITY_MESSAGES_FILE,
+    ABILITY_PBS_FILE,
+    ABILITY_PBS_PROOF_FORMAT,
+    ABILITY_RUNTIME_PROOF_FORMAT,
+    COMPILED_ABILITY_FILE,
+    COMPILED_ABILITY_PROOF_FORMAT,
+    AbilityIntegrityError,
+    build_ability_description_proofs,
+    extract_ability_description_texts,
+    rebuild_ability_description_payloads,
+)
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
@@ -145,6 +157,9 @@ V21_1_PHONE_VALIDATION_SCOPE = (
 V21_1_TRAINER_LOSE_VALIDATION_SCOPE = (
     "essentials_v21_1_trainer_lose_candidate_v1"
 )
+V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE = (
+    "essentials_v21_1_ability_description_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -169,6 +184,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_POINT_NAME_EIGHT_FIELDS_VALIDATION_SCOPE,
         V21_1_PHONE_VALIDATION_SCOPE,
         V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
+        V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
     }
 )
 V21_1_POINT_SCOPE_SPECS = {
@@ -1711,6 +1727,157 @@ def _validate_v21_1_trainer_lose_scope(
     return applicable
 
 
+def _validate_v21_1_ability_description_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve à une description de capacité unique et non partagée."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation Ability.Description exige exactement un texte accepté."
+        )
+    item = applicable[0]
+    expected_files = {
+        ABILITY_PBS_FILE,
+        COMPILED_ABILITY_FILE,
+        ABILITY_MESSAGES_FILE,
+    }
+    if (
+        accepted[0].id_stable != item.id_stable
+        or item.type != "PBS — Description"
+        or item.fichier.replace("\\", "/").casefold()
+        != ABILITY_PBS_FILE.casefold()
+        or item.command != "Description"
+        or not item.event_id
+        or item.event_name != item.event_id
+        or item.map_id
+        or item.page
+        or {path.replace("\\", "/").casefold() for path in plan.source_hashes}
+        != {path.casefold() for path in expected_files}
+    ):
+        raise ReconstructionError(
+            "La validation est limitée à une description de PBS/abilities.txt."
+        )
+    occurrence = _integer(item.sub_index, "Occurrence Ability.Description")
+    line_number = _integer(item.pbs_line_number, "Ligne PBS Ability.Description")
+    if (
+        occurrence != 1
+        or line_number <= 0
+        or item.pbs_encoding != "utf-8-sig"
+        or item.pbs_bom != "utf-8"
+        or item.pbs_newline != "CRLF"
+        or item.pbs_field_index
+        or item.pbs_field_count
+        or item.pbs_point_structure
+        or item.id_stable
+        != stable_id(
+            "pbs",
+            ABILITY_PBS_FILE,
+            item.event_id,
+            item.command,
+            occurrence,
+        )
+        or item.pbs_value_sha256
+        != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
+    ):
+        raise ReconstructionError(
+            "Métadonnées PBS de la description de capacité incohérentes."
+        )
+    unrelated_rpg = (
+        item.rpg_command_code,
+        item.rpg_command_indent,
+        item.rpg_parameter_index,
+        item.rpg_continuation_end,
+        item.rpg_dialogue_segments,
+        item.rpg_common_event_array_index,
+        item.rpg_common_event_trigger,
+        item.rpg_common_event_switch_id,
+        item.rpg_common_event_sha256,
+        item.rpg_choice_branch_command,
+        item.rpg_choice_branch_parameter_index,
+    )
+    if any(unrelated_rpg):
+        raise ReconstructionError(
+            "La description de capacité porte des métadonnées RPG sans rapport."
+        )
+    if (
+        item.pbs_compiled_file.replace("\\", "/").casefold()
+        != COMPILED_ABILITY_FILE.casefold()
+        or item.pbs_runtime_file.replace("\\", "/").casefold()
+        != ABILITY_MESSAGES_FILE.casefold()
+        or item.pbs_compiled_sha256 != plan.source_hashes.get(COMPILED_ABILITY_FILE)
+        or item.pbs_runtime_sha256 != plan.source_hashes.get(ABILITY_MESSAGES_FILE)
+        or plan.source_hashes.get(ABILITY_PBS_FILE) is None
+    ):
+        raise ReconstructionError(
+            "Les trois empreintes Ability.Description ne correspondent pas au plan."
+        )
+    try:
+        root = Path(plan.game_root)
+        proofs = build_ability_description_proofs(
+            read_stable_bytes(_resolve_contained_path(root, ABILITY_PBS_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, COMPILED_ABILITY_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, ABILITY_MESSAGES_FILE)),
+        )
+        expected = proofs[(item.event_id, item.command, occurrence)]
+        pbs_proof = json.loads(item.pbs_structure)
+        compiled_proof = json.loads(item.pbs_compiled_structure)
+        runtime_proof = json.loads(item.pbs_runtime_structure)
+        compiled_path = json.loads(item.pbs_compiled_path)
+        runtime_path = json.loads(item.pbs_runtime_path)
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        AbilityIntegrityError,
+    ) as exc:
+        raise ReconstructionError(
+            "La preuve structurelle Ability.Description est illisible ou obsolète."
+        ) from exc
+    if (
+        expected.source != item.source
+        or expected.pbs_structure != item.pbs_structure
+        or expected.compiled_path != item.pbs_compiled_path
+        or expected.compiled_structure != item.pbs_compiled_structure
+        or expected.runtime_path != item.pbs_runtime_path
+        or expected.runtime_structure != item.pbs_runtime_structure
+        or pbs_proof.get("format") != ABILITY_PBS_PROOF_FORMAT
+        or pbs_proof.get("file_sha256") != plan.source_hashes[ABILITY_PBS_FILE]
+        or pbs_proof.get("source_usage_count") != 1
+        or compiled_proof.get("format") != COMPILED_ABILITY_PROOF_FORMAT
+        or compiled_proof.get("file_sha256") != item.pbs_compiled_sha256
+        or runtime_proof.get("format") != ABILITY_RUNTIME_PROOF_FORMAT
+        or runtime_proof.get("file_sha256") != item.pbs_runtime_sha256
+        or runtime_proof.get("target_value_equals_source") is not True
+        or runtime_proof.get("source_usage_count") != 1
+        or compiled_proof.get("target_reference_count") != 1
+        or runtime_proof.get("target_key_reference_count") != 1
+        or runtime_proof.get("target_value_reference_count") != 1
+        or compiled_proof.get("compiled_path") != compiled_path
+        or runtime_proof.get("runtime_path") != runtime_path
+    ):
+        raise ReconstructionError(
+            "La preuve PBS/abilities.dat/ABILITY_DESCRIPTIONS ne correspond plus."
+        )
+    if (
+        not item.translation
+        or any(character in item.translation for character in ("\r", "\n"))
+        or extract_protected(item.source) != extract_protected(item.translation)
+    ):
+        raise ReconstructionError(
+            "La traduction de capacité ne préserve pas sa ligne et ses commandes."
+        )
+    return applicable
+
+
 def _validate_v21_1_private_scope(
     plan: ReconstructionPlan,
     detection,
@@ -1735,6 +1902,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_phone_scope(plan, detection)
     if plan.validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE:
         return _validate_v21_1_trainer_lose_scope(plan, detection)
+    if plan.validation_scope == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE:
+        return _validate_v21_1_ability_description_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -2039,6 +2208,20 @@ def _build_plan_verified_body(
                     plan.source_hashes[relative] = sha256_file(
                         _resolve_contained_path(game_root, relative)
                     )
+    if validation_scope == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE:
+        applicable = [item for item in plan.items if item.decision == "applicable"]
+        if len(applicable) == 1:
+            item = applicable[0]
+            if (
+                item.pbs_compiled_file.replace("\\", "/").casefold()
+                == COMPILED_ABILITY_FILE.casefold()
+                and item.pbs_runtime_file.replace("\\", "/").casefold()
+                == ABILITY_MESSAGES_FILE.casefold()
+            ):
+                for relative in (COMPILED_ABILITY_FILE, ABILITY_MESSAGES_FILE):
+                    plan.source_hashes[relative] = sha256_file(
+                        _resolve_contained_path(game_root, relative)
+                    )
     return plan
 
 
@@ -2227,6 +2410,18 @@ def build_v21_1_trainer_lose_validation_plan(
         game_root,
         csv_path,
         V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_ability_description_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'une description de capacité unique v21.1."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
     )
 
 
@@ -3320,6 +3515,34 @@ def _build_v21_1_trainer_lose_payloads(
         ) from exc
 
 
+def _build_v21_1_ability_description_payloads(
+    source_root: Path,
+    item: PlanItem,
+) -> dict[str, bytes]:
+    try:
+        return rebuild_ability_description_payloads(
+            read_stable_bytes(_resolve_contained_path(source_root, ABILITY_PBS_FILE)),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, COMPILED_ABILITY_FILE)
+            ),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, ABILITY_MESSAGES_FILE)
+            ),
+            section=item.event_id,
+            source=item.source,
+            translation=item.translation,
+            pbs_structure=item.pbs_structure,
+            compiled_path=item.pbs_compiled_path,
+            compiled_structure=item.pbs_compiled_structure,
+            runtime_path=item.pbs_runtime_path,
+            runtime_structure=item.pbs_runtime_structure,
+        )
+    except (OSError, AbilityIntegrityError) as exc:
+        raise ReconstructionError(
+            "La reconstruction privée de la description de capacité a été refusée."
+        ) from exc
+
+
 def _expected_v21_1_private_payloads(
     source_root: Path,
     plan: ReconstructionPlan,
@@ -3338,6 +3561,14 @@ def _expected_v21_1_private_payloads(
                 "La reconstruction LoseText exige une occurrence unique."
             )
         return _build_v21_1_trainer_lose_payloads(
+            source_root, validation_items[0]
+        )
+    if plan.validation_scope == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE:
+        if len(validation_items) != 1:
+            raise ReconstructionError(
+                "La reconstruction Ability.Description exige une occurrence unique."
+            )
+        return _build_v21_1_ability_description_payloads(
             source_root, validation_items[0]
         )
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
@@ -3547,6 +3778,13 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                         )
                     _build_v21_1_trainer_lose_payloads(game_root, items[0])
                     continue
+                if plan.validation_scope == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE:
+                    if len(items) != 1:
+                        raise ReconstructionError(
+                            "La simulation Ability.Description exige une occurrence unique."
+                        )
+                    _build_v21_1_ability_description_payloads(game_root, items[0])
+                    continue
                 if _is_v21_1_point_validation_scope(plan.validation_scope):
                     _build_v21_1_point_payload(
                         read_stable_bytes(path),
@@ -3754,6 +3992,9 @@ def _reconstruct_copy_verified_body(
     if plan.validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE:
         allowed_changed[COMPILED_TRAINER_FILE] = list(validation_items)
         allowed_changed[TRAINER_MESSAGES_FILE] = list(validation_items)
+    if plan.validation_scope == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE:
+        allowed_changed[COMPILED_ABILITY_FILE] = list(validation_items)
+        allowed_changed[ABILITY_MESSAGES_FILE] = list(validation_items)
 
     modified_files: list[str] = []
     validation_errors: list[str] = []
@@ -3768,10 +4009,22 @@ def _reconstruct_copy_verified_body(
             if plan.validation_scope in {
                 V21_1_PHONE_VALIDATION_SCOPE,
                 V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
+                V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
             }:
                 is_phone = plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE
-                expected_pbs = PHONE_PBS_FILE if is_phone else TRAINER_PBS_FILE
-                label = "téléphone" if is_phone else "LoseText"
+                is_trainer = (
+                    plan.validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE
+                )
+                expected_pbs = (
+                    PHONE_PBS_FILE
+                    if is_phone
+                    else (TRAINER_PBS_FILE if is_trainer else ABILITY_PBS_FILE)
+                )
+                label = (
+                    "téléphone"
+                    if is_phone
+                    else ("LoseText" if is_trainer else "Ability.Description")
+                )
                 if len(items) != 1 or relative.casefold() != expected_pbs.casefold():
                     raise ReconstructionError(
                         f"Le lot {label} privé ne cible plus son unique occurrence PBS."
@@ -3817,7 +4070,7 @@ def _reconstruct_copy_verified_body(
                         key=items[0].command,
                         occurrence=_integer(items[0].sub_index, "Occurrence téléphone"),
                     )
-                else:
+                elif is_trainer:
                     translated = extract_trainer_target_texts(
                         read_stable_bytes(
                             _resolve_contained_path(target_root, TRAINER_PBS_FILE)
@@ -3827,6 +4080,19 @@ def _reconstruct_copy_verified_body(
                         ),
                         read_stable_bytes(
                             _resolve_contained_path(target_root, TRAINER_MESSAGES_FILE)
+                        ),
+                        section=items[0].event_id,
+                    )
+                else:
+                    translated = extract_ability_description_texts(
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, ABILITY_PBS_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, COMPILED_ABILITY_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, ABILITY_MESSAGES_FILE)
                         ),
                         section=items[0].event_id,
                     )

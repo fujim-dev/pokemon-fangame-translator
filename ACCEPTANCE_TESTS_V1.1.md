@@ -547,6 +547,39 @@ combat réel l'affichage complet du marqueur
 jeu. Cette preuve ne couvre aucun autre dresseur, texte partagé, schéma de
 dresseur ou banque de combat et n'active pas `RECONSTRUCT` v21.1 public.
 
+### AC-130 — Première Ability.Description v21.1 synchronisée
+
+L'analyse strictement statique relie les 267 `Description` réelles de
+`PBS/abilities.txt` aux objets `GameData::Ability` de `Data/abilities.dat`, puis
+à la banque core `ABILITY_DESCRIPTIONS` située à l'index 11 de
+`Data/messages_core.dat`. Elle conserve l'identifiant, le nom, les flags, le
+suffixe PBS, les cinq ivars et types Marshal, l'ordre du registre, les
+références de chaînes et les graphes hors cible. Les 27 occurrences portant un
+texte partagé restent extractibles, mais sont refusées par la reconstruction
+privée ; 240 occurrences uniques satisfont cette première preuve structurelle.
+
+Une portée privée accepte exactement une description réelle, unique et non
+partagée. Elle vérifie la provenance et les trois empreintes, recalcule les trois
+fichiers en mémoire et les publie dans un lot transactionnel. Une identité, un
+flag, une métadonnée hors cible, une preuve, une source après planification ou
+une référence Marshal divergente bloque l'opération. Une panne de publication
+injectée restaure exactement les fichiers déjà remplacés.
+
+Le round-trip réel a conservé les 30 402 occurrences, traversé le Studio, sa
+sauvegarde et sa reprise, puis modifié uniquement `PBS/abilities.txt`,
+`Data/abilities.dat` et `Data/messages_core.dat`. La réextraction retrouve la
+chaîne complète sous la même identité stable dans les trois représentations ;
+la référence et la copie de travail restent inchangées. La validation humaine a
+confirmé sur la bonne fiche la capacité ciblée, sa description originale et le
+début visible du marqueur `[TEST PFT ...`, puis la fermeture normale de la fiche
+et le retour au jeu. L'interface tronque la fin faute de place : cette observation
+ne prouve donc pas l'affichage visuel du marqueur complet, seulement son préfixe,
+même si sa présence complète est démontrée par la réextraction technique.
+
+Cette preuve ne couvre aucun autre texte ou objet de capacité, aucune description
+partagée, aucun autre registre `GameData` et n'active pas `RECONSTRUCT` v21.1
+public.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté
