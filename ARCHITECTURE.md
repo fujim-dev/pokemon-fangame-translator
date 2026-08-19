@@ -593,6 +593,33 @@ Déjà en place :
   couvre aucun nom partagé, aucun autre champ `MapMetadata`, aucun autre corpus
   et ne change aucune capacité publique ;
 
+- `essentials_move.py` corrèle désormais, sans exécuter Ruby, les 740 `Name` et
+  740 `Description` de `PBS/moves.txt` avec les 740 objets `GameData::Move` de
+  `Data/moves.dat`, puis avec `MOVE_NAMES` et `MOVE_DESCRIPTIONS` aux index 5 et
+  6 de `Data/messages_core.dat`. Le schéma compilé exact comporte 14 ivars ;
+  `Category` est l'enum technique Physical/Special/Status, compilé en 0/1/2,
+  et n'est jamais exposé comme texte traduisible. Ce filtrage retire les 740
+  fausses occurrences `Category` de l'extraction réelle, qui passe de 30 402 à
+  29 662 occurrences utiles ;
+- une quatorzième portée privée accepte exactement une `Move.Description`
+  unique, sans alias de source ni de graphe Marshal. Les preuves lient les trois
+  empreintes, l'identifiant, l'ordre PBS, tous les champs techniques, la
+  catégorie numérique, les 14 ivars, les chemins de banque et les références.
+  La publication des trois fichiers est transactionnelle avec rollback. Le
+  round-trip réel sur `TACKLE` a modifié uniquement `PBS/moves.txt`,
+  `Data/moves.dat` et `Data/messages_core.dat`, réextrait exactement le même
+  marqueur sous la même identité stable, laissé la référence et la copie de
+  travail inchangées sur 7 606 fichiers, puis atteint l'écran titre sans erreur
+  ni écriture au lancement. Parmi les 740 descriptions, 693 satisfont les
+  critères stricts de cible unitaire ; les occurrences partagées ou aliasées
+  restent bloquées. Une validation visuelle humaine a confirmé, sur la fiche
+  Moves de Bulbasaur, que `TACKLE` conserve son nom et que le marqueur complet
+  de sa description reconstruite s'affiche sur deux lignes ; l'écran et le
+  retour au jeu restent fonctionnels. Cette preuve porte uniquement sur cette
+  occurrence réelle de `Move.Description` : elle ne couvre aucune autre Move,
+  aucun `Move.Name` ni aucune autre structure. `Category` reste une donnée
+  technique non traduisible et aucune capacité publique ne change ;
+
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;

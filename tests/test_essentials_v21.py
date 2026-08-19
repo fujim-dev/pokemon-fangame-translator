@@ -193,6 +193,7 @@ def prepare_v21_game(
     phone_validation: bool = False,
     trainer_validation: bool = False,
     ability_validation: bool = False,
+    move_validation: bool = False,
     species_validation: bool = False,
     map_metadata_validation: bool = False,
     point_eight_switch: int = 51,
@@ -424,6 +425,101 @@ def prepare_v21_game(
         core_bank[11] = {
             ruby_text(target_description): ruby_text(target_description),
             ruby_text(shared_description): ruby_text(shared_description),
+        }
+    if move_validation:
+        from essentials_move import MOVE_IVARS
+
+        def move_object(
+            identifier: str,
+            name: str,
+            description: str,
+            *,
+            move_type: str,
+            category: int,
+            power: int,
+            accuracy: int,
+            total_pp: int,
+            target: str,
+            priority: int = 0,
+            function_code: str = "None",
+            flags: tuple[str, ...] = (),
+            effect_chance: int = 0,
+        ) -> RubyObject:
+            values = {
+                "@id": identifier,
+                "@real_name": ruby_text(name),
+                "@type": move_type,
+                "@category": category,
+                "@power": power,
+                "@accuracy": accuracy,
+                "@total_pp": total_pp,
+                "@target": target,
+                "@priority": priority,
+                "@function_code": ruby_text(function_code),
+                "@flags": [ruby_text(flag) for flag in flags],
+                "@effect_chance": effect_chance,
+                "@real_description": ruby_text(description),
+                "@pbs_file_suffix": ruby_text(""),
+            }
+            return RubyObject(
+                "GameData::Move",
+                {ivar: values[ivar] for ivar in MOVE_IVARS},
+            )
+
+        target_move_description = "Synthetic unique move description."
+        shared_move_description = "Synthetic shared move description."
+        move_root = {
+            "TACKLE": move_object(
+                "TACKLE",
+                "Synthetic Tackle",
+                target_move_description,
+                move_type="NORMAL",
+                category=0,
+                power=40,
+                accuracy=100,
+                total_pp=35,
+                target="NearOther",
+                flags=("Contact", "CanProtect"),
+            ),
+            "EMBER": move_object(
+                "EMBER",
+                "Synthetic Ember",
+                shared_move_description,
+                move_type="FIRE",
+                category=1,
+                power=40,
+                accuracy=100,
+                total_pp=25,
+                target="NearOther",
+                flags=("CanProtect",),
+                effect_chance=10,
+            ),
+            "GROWL": move_object(
+                "GROWL",
+                "Synthetic Growl",
+                shared_move_description,
+                move_type="NORMAL",
+                category=2,
+                power=0,
+                accuracy=100,
+                total_pp=40,
+                target="AllNearFoes",
+                priority=-1,
+            ),
+        }
+        (data / "moves.dat").write_bytes(dumps(move_root))
+        core_bank = [{} for _index in range(31)]
+        core_bank[5] = {
+            ruby_text("Synthetic Tackle"): ruby_text("Synthetic Tackle"),
+            ruby_text("Synthetic obsolete move alias"): ruby_text(
+                "Synthetic obsolete move alias"
+            ),
+            ruby_text("Synthetic Ember"): ruby_text("Synthetic Ember"),
+            ruby_text("Synthetic Growl"): ruby_text("Synthetic Growl"),
+        }
+        core_bank[6] = {
+            ruby_text(target_move_description): ruby_text(target_move_description),
+            ruby_text(shared_move_description): ruby_text(shared_move_description),
         }
     if species_validation:
         from essentials_species import SPECIES_IVARS
@@ -684,6 +780,45 @@ def prepare_v21_game(
             b"[TORRENT]\r\n"
             b"Name = Synthetic Torrent\r\n"
             b"Description = Synthetic shared ability description.\r\n"
+        )
+    if move_validation:
+        (pbs.parent / "moves.txt").write_bytes(
+            b"\xef\xbb\xbf# synthetic move fixture\r\n"
+            b"[TACKLE]\r\n"
+            b"Name = Synthetic Tackle\r\n"
+            b"Type = NORMAL\r\n"
+            b"Category = Physical\r\n"
+            b"Power = 40\r\n"
+            b"Accuracy = 100\r\n"
+            b"TotalPP = 35\r\n"
+            b"Target = NearOther\r\n"
+            b"FunctionCode = None\r\n"
+            b"Flags = Contact,CanProtect\r\n"
+            b"Description = Synthetic unique move description.\r\n"
+            b"\r\n"
+            b"[EMBER]\r\n"
+            b"Name = Synthetic Ember\r\n"
+            b"Type = FIRE\r\n"
+            b"Category = Special\r\n"
+            b"Power = 40\r\n"
+            b"Accuracy = 100\r\n"
+            b"TotalPP = 25\r\n"
+            b"Target = NearOther\r\n"
+            b"FunctionCode = None\r\n"
+            b"Flags = CanProtect\r\n"
+            b"EffectChance = 10\r\n"
+            b"Description = Synthetic shared move description.\r\n"
+            b"\r\n"
+            b"[GROWL]\r\n"
+            b"Name = Synthetic Growl\r\n"
+            b"Type = NORMAL\r\n"
+            b"Category = Status\r\n"
+            b"Accuracy = 100\r\n"
+            b"TotalPP = 40\r\n"
+            b"Target = AllNearFoes\r\n"
+            b"Priority = -1\r\n"
+            b"FunctionCode = None\r\n"
+            b"Description = Synthetic shared move description.\r\n"
         )
     if map_metadata_validation:
         (pbs.parent / "map_metadata.txt").write_bytes(

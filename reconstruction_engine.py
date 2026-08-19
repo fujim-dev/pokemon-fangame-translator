@@ -98,6 +98,18 @@ from essentials_map_metadata import (
     extract_map_metadata_name_texts,
     rebuild_map_metadata_name_payloads,
 )
+from essentials_move import (
+    COMPILED_MOVE_FILE,
+    COMPILED_MOVE_PROOF_FORMAT,
+    MOVE_MESSAGES_FILE,
+    MOVE_PBS_FILE,
+    MOVE_PBS_PROOF_FORMAT,
+    MOVE_RUNTIME_PROOF_FORMAT,
+    MoveIntegrityError,
+    build_move_text_proofs,
+    extract_move_description_texts,
+    rebuild_move_description_payloads,
+)
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
 from project_identity import ProjectIdentityError, read_project_identity
@@ -191,6 +203,9 @@ V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE = (
 V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE = (
     "essentials_v21_1_map_metadata_name_candidate_v1"
 )
+V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE = (
+    "essentials_v21_1_move_description_candidate_v1"
+)
 V21_1_VALIDATION_PROFILE = "essentials_v21_1_readonly"
 V21_1_VALIDATION_FILE = "Data/messages_game.dat"
 V21_1_COMMON_EVENTS_FILE = "Data/CommonEvents.rxdata"
@@ -218,6 +233,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
         V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE,
         V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE,
+        V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE,
     }
 )
 V21_1_POINT_SCOPE_SPECS = {
@@ -1911,6 +1927,154 @@ def _validate_v21_1_ability_description_scope(
     return applicable
 
 
+def _validate_v21_1_move_description_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve a une description de Move unique et non partagee."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accept\u00e9"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation Move.Description exige exactement un texte accepte "
+            f"et applicable (acceptes={len(accepted)}, applicables={len(applicable)})."
+        )
+    item = applicable[0]
+    expected_files = {MOVE_PBS_FILE, COMPILED_MOVE_FILE, MOVE_MESSAGES_FILE}
+    if (
+        accepted[0].id_stable != item.id_stable
+        or item.type != "PBS \N{EM DASH} Description"
+        or item.fichier.replace("\\", "/").casefold() != MOVE_PBS_FILE.casefold()
+        or item.command != "Description"
+        or not item.event_id
+        or item.event_name != item.event_id
+        or item.map_id
+        or item.page
+        or {path.replace("\\", "/").casefold() for path in plan.source_hashes}
+        != {path.casefold() for path in expected_files}
+    ):
+        raise ReconstructionError(
+            "La validation est limitee a une description de PBS/moves.txt."
+        )
+    occurrence = _integer(item.sub_index, "Occurrence Move.Description")
+    line_number = _integer(item.pbs_line_number, "Ligne PBS Move.Description")
+    if (
+        occurrence != 1
+        or line_number <= 0
+        or item.pbs_encoding != "utf-8-sig"
+        or item.pbs_bom != "utf-8"
+        or item.pbs_newline != "CRLF"
+        or item.pbs_field_index
+        or item.pbs_field_count
+        or item.pbs_point_structure
+        or item.id_stable
+        != stable_id("pbs", MOVE_PBS_FILE, item.event_id, item.command, occurrence)
+        or item.pbs_value_sha256
+        != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
+    ):
+        raise ReconstructionError(
+            "Metadonnees PBS de la description de Move incoherentes."
+        )
+    unrelated_rpg = (
+        item.rpg_command_code,
+        item.rpg_command_indent,
+        item.rpg_parameter_index,
+        item.rpg_continuation_end,
+        item.rpg_dialogue_segments,
+        item.rpg_common_event_array_index,
+        item.rpg_common_event_trigger,
+        item.rpg_common_event_switch_id,
+        item.rpg_common_event_sha256,
+        item.rpg_choice_branch_command,
+        item.rpg_choice_branch_parameter_index,
+    )
+    if any(unrelated_rpg):
+        raise ReconstructionError(
+            "La description de Move porte des metadonnees RPG sans rapport."
+        )
+    if (
+        item.pbs_compiled_file.replace("\\", "/").casefold()
+        != COMPILED_MOVE_FILE.casefold()
+        or item.pbs_runtime_file.replace("\\", "/").casefold()
+        != MOVE_MESSAGES_FILE.casefold()
+        or item.pbs_compiled_sha256 != plan.source_hashes.get(COMPILED_MOVE_FILE)
+        or item.pbs_runtime_sha256 != plan.source_hashes.get(MOVE_MESSAGES_FILE)
+        or plan.source_hashes.get(MOVE_PBS_FILE) is None
+    ):
+        raise ReconstructionError(
+            "Les trois empreintes Move.Description ne correspondent pas au plan."
+        )
+    try:
+        root = Path(plan.game_root)
+        proofs = build_move_text_proofs(
+            read_stable_bytes(_resolve_contained_path(root, MOVE_PBS_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, COMPILED_MOVE_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, MOVE_MESSAGES_FILE)),
+        )
+        expected = proofs[(item.event_id, item.command, occurrence)]
+        pbs_proof = json.loads(item.pbs_structure)
+        compiled_proof = json.loads(item.pbs_compiled_structure)
+        runtime_proof = json.loads(item.pbs_runtime_structure)
+        compiled_path = json.loads(item.pbs_compiled_path)
+        runtime_path = json.loads(item.pbs_runtime_path)
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        MoveIntegrityError,
+    ) as exc:
+        raise ReconstructionError(
+            "La preuve structurelle Move.Description est illisible ou obsolete."
+        ) from exc
+    if (
+        expected.source != item.source
+        or expected.pbs_structure != item.pbs_structure
+        or expected.compiled_path != item.pbs_compiled_path
+        or expected.compiled_structure != item.pbs_compiled_structure
+        or expected.runtime_path != item.pbs_runtime_path
+        or expected.runtime_structure != item.pbs_runtime_structure
+        or pbs_proof.get("format") != MOVE_PBS_PROOF_FORMAT
+        or pbs_proof.get("file_sha256") != plan.source_hashes[MOVE_PBS_FILE]
+        or pbs_proof.get("field") != "Description"
+        or pbs_proof.get("source_usage_count") != 1
+        or pbs_proof.get("category_code") not in {0, 1, 2}
+        or compiled_proof.get("format") != COMPILED_MOVE_PROOF_FORMAT
+        or compiled_proof.get("file_sha256") != item.pbs_compiled_sha256
+        or compiled_proof.get("field") != "Description"
+        or compiled_proof.get("category_code") != pbs_proof.get("category_code")
+        or compiled_proof.get("technical_fields_sha256")
+        != pbs_proof.get("technical_fields_sha256")
+        or runtime_proof.get("format") != MOVE_RUNTIME_PROOF_FORMAT
+        or runtime_proof.get("file_sha256") != item.pbs_runtime_sha256
+        or runtime_proof.get("field") != "Description"
+        or runtime_proof.get("target_value_equals_source") is not True
+        or runtime_proof.get("source_usage_count") != 1
+        or compiled_proof.get("target_reference_count") != 1
+        or runtime_proof.get("target_key_reference_count") != 1
+        or runtime_proof.get("target_value_reference_count") != 1
+        or compiled_proof.get("compiled_path") != compiled_path
+        or runtime_proof.get("runtime_path") != runtime_path
+    ):
+        raise ReconstructionError(
+            "La preuve PBS/moves.dat/MOVE_DESCRIPTIONS ne correspond plus."
+        )
+    if (
+        not item.translation
+        or any(character in item.translation for character in ("\r", "\n"))
+        or extract_protected(item.source) != extract_protected(item.translation)
+    ):
+        raise ReconstructionError(
+            "La traduction de Move ne preserve pas sa ligne et ses commandes."
+        )
+    return applicable
+
+
 def _validate_v21_1_species_pokedex_scope(
     plan: ReconstructionPlan,
     detection,
@@ -2275,6 +2439,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_species_pokedex_scope(plan, detection)
     if plan.validation_scope == V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE:
         return _validate_v21_1_map_metadata_name_scope(plan, detection)
+    if plan.validation_scope == V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE:
+        return _validate_v21_1_move_description_scope(plan, detection)
     raise ReconstructionError("Portée de validation privée inconnue.")
 
 
@@ -2628,6 +2794,20 @@ def _build_plan_verified_body(
                     plan.source_hashes[relative] = sha256_file(
                         _resolve_contained_path(game_root, relative)
                     )
+    if validation_scope == V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE:
+        applicable = [item for item in plan.items if item.decision == "applicable"]
+        if len(applicable) == 1:
+            item = applicable[0]
+            if (
+                item.pbs_compiled_file.replace("\\", "/").casefold()
+                == COMPILED_MOVE_FILE.casefold()
+                and item.pbs_runtime_file.replace("\\", "/").casefold()
+                == MOVE_MESSAGES_FILE.casefold()
+            ):
+                for relative in (COMPILED_MOVE_FILE, MOVE_MESSAGES_FILE):
+                    plan.source_hashes[relative] = sha256_file(
+                        _resolve_contained_path(game_root, relative)
+                    )
     return plan
 
 
@@ -2852,6 +3032,18 @@ def build_v21_1_map_metadata_name_validation_plan(
         game_root,
         csv_path,
         V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_move_description_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privee d'une description de Move unique v21.1."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE,
     )
 
 
@@ -3770,7 +3962,7 @@ def _apply_pbs_items(path: Path, relative: str, items: list[PlanItem]) -> None:
             continue
         prefix, raw_key, value, trailing = match.groups()
         key = raw_key.strip()
-        if not is_translatable_pbs_key(key) or not looks_visible(value):
+        if not is_translatable_pbs_key(key, relative) or not looks_visible(value):
             continue
         occurrence[(section, key)] += 1
         sub_index = occurrence[(section, key)]
@@ -4034,6 +4226,34 @@ def _build_v21_1_map_metadata_name_payloads(
         ) from exc
 
 
+def _build_v21_1_move_description_payloads(
+    source_root: Path,
+    item: PlanItem,
+) -> dict[str, bytes]:
+    try:
+        return rebuild_move_description_payloads(
+            read_stable_bytes(_resolve_contained_path(source_root, MOVE_PBS_FILE)),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, COMPILED_MOVE_FILE)
+            ),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, MOVE_MESSAGES_FILE)
+            ),
+            section=item.event_id,
+            source=item.source,
+            translation=item.translation,
+            pbs_structure=item.pbs_structure,
+            compiled_path=item.pbs_compiled_path,
+            compiled_structure=item.pbs_compiled_structure,
+            runtime_path=item.pbs_runtime_path,
+            runtime_structure=item.pbs_runtime_structure,
+        )
+    except (OSError, MoveIntegrityError) as exc:
+        raise ReconstructionError(
+            "La reconstruction privee de la description de Move a ete refusee."
+        ) from exc
+
+
 def _expected_v21_1_private_payloads(
     source_root: Path,
     plan: ReconstructionPlan,
@@ -4076,6 +4296,14 @@ def _expected_v21_1_private_payloads(
                 "La reconstruction MapMetadata.Name exige une occurrence unique."
             )
         return _build_v21_1_map_metadata_name_payloads(
+            source_root, validation_items[0]
+        )
+    if plan.validation_scope == V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE:
+        if len(validation_items) != 1:
+            raise ReconstructionError(
+                "La reconstruction Move.Description exige une occurrence unique."
+            )
+        return _build_v21_1_move_description_payloads(
             source_root, validation_items[0]
         )
     by_file: dict[str, list[PlanItem]] = defaultdict(list)
@@ -4306,6 +4534,13 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                         )
                     _build_v21_1_map_metadata_name_payloads(game_root, items[0])
                     continue
+                if plan.validation_scope == V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE:
+                    if len(items) != 1:
+                        raise ReconstructionError(
+                            "La simulation Move.Description exige une occurrence unique."
+                        )
+                    _build_v21_1_move_description_payloads(game_root, items[0])
+                    continue
                 if _is_v21_1_point_validation_scope(plan.validation_scope):
                     _build_v21_1_point_payload(
                         read_stable_bytes(path),
@@ -4522,6 +4757,9 @@ def _reconstruct_copy_verified_body(
     if plan.validation_scope == V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE:
         allowed_changed[COMPILED_MAP_METADATA_FILE] = list(validation_items)
         allowed_changed[MAP_METADATA_MESSAGES_FILE] = list(validation_items)
+    if plan.validation_scope == V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE:
+        allowed_changed[COMPILED_MOVE_FILE] = list(validation_items)
+        allowed_changed[MOVE_MESSAGES_FILE] = list(validation_items)
 
     modified_files: list[str] = []
     validation_errors: list[str] = []
@@ -4539,6 +4777,7 @@ def _reconstruct_copy_verified_body(
                 V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
                 V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE,
                 V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE,
+                V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE,
             }:
                 is_phone = plan.validation_scope == V21_1_PHONE_VALIDATION_SCOPE
                 is_trainer = (
@@ -4552,6 +4791,10 @@ def _reconstruct_copy_verified_body(
                     plan.validation_scope
                     == V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE
                 )
+                is_move = (
+                    plan.validation_scope
+                    == V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE
+                )
                 expected_pbs = (
                     PHONE_PBS_FILE
                     if is_phone
@@ -4564,7 +4807,11 @@ def _reconstruct_copy_verified_body(
                             else (
                                 MAP_METADATA_PBS_FILE
                                 if is_map_metadata
-                                else SPECIES_PBS_FILE
+                                else (
+                                    MOVE_PBS_FILE
+                                    if is_move
+                                    else SPECIES_PBS_FILE
+                                )
                             )
                         )
                     )
@@ -4581,7 +4828,11 @@ def _reconstruct_copy_verified_body(
                             else (
                                 "MapMetadata.Name"
                                 if is_map_metadata
-                                else "Species.Pokedex"
+                                else (
+                                    "Move.Description"
+                                    if is_move
+                                    else "Species.Pokedex"
+                                )
                             )
                         )
                     )
@@ -4673,6 +4924,19 @@ def _reconstruct_copy_verified_body(
                             _resolve_contained_path(
                                 target_root, MAP_METADATA_MESSAGES_FILE
                             )
+                        ),
+                        section=items[0].event_id,
+                    )
+                elif is_move:
+                    translated = extract_move_description_texts(
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, MOVE_PBS_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, COMPILED_MOVE_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, MOVE_MESSAGES_FILE)
                         ),
                         section=items[0].event_id,
                     )

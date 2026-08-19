@@ -52,6 +52,13 @@ from essentials_map_metadata import (
     MapMetadataIntegrityError,
     build_map_metadata_name_proofs,
 )
+from essentials_move import (
+    COMPILED_MOVE_FILE,
+    MOVE_MESSAGES_FILE,
+    MOVE_PBS_FILE,
+    MoveIntegrityError,
+    build_move_text_proofs,
+)
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -342,6 +349,8 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
             return "compiled_species"
         if name == "map_metadata.dat":
             return "compiled_map_metadata"
+        if name == "moves.dat":
+            return "compiled_move"
     if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
         if any("backup" in part.casefold() for part in path.parts[1:]):
             return None
@@ -828,7 +837,11 @@ def iter_pbs_files(pbs_dir: Path):
         yield path
 
 
-def is_translatable_pbs_key(key: str) -> bool:
+def is_translatable_pbs_key(key: str, relative: str = "") -> bool:
+    # Dans moves.txt, Category est l'enum de combat Physical/Special/Status.
+    # Le nom homonyme reste textuel dans certains autres PBS (Species, etc.).
+    if Path(relative).name.casefold() == "moves.txt":
+        return key in {"Name", "Description"}
     return key in TRANSLATABLE_PBS_KEYS or bool(re.fullmatch(r"Body\d+", key))
 
 
@@ -1047,7 +1060,7 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
                     ),
                 })
             continue
-        if not is_translatable_pbs_key(key) or not looks_visible(value):
+        if not is_translatable_pbs_key(key, relative) or not looks_visible(value):
             continue
         occurrence[(section, key)] += 1
         sub_index = occurrence[(section, key)]
@@ -1544,6 +1557,78 @@ def _bind_compiled_map_metadata_name_proofs(
         ) from exc
 
 
+def _bind_compiled_move_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie Name/Description aux objets Move et aux banques v21.1.
+
+    Cette liaison garantit aussi que ``Category`` reste une donnee technique :
+    seules les deux commandes explicitement textuelles sont acceptees et
+    chacune doit avoir une preuve compilee.
+    """
+    move_rows = [
+        row
+        for row in rows
+        if str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == MOVE_PBS_FILE.casefold()
+        and row.get("commande") in {"Name", "Description"}
+    ]
+    if not move_rows:
+        return
+    by_relative = {
+        source.relative_path.replace("\\", "/").casefold(): source
+        for source in inventory.sources
+    }
+    pbs_source = by_relative.get(MOVE_PBS_FILE.casefold())
+    compiled_source = by_relative.get(COMPILED_MOVE_FILE.casefold())
+    runtime_source = by_relative.get(MOVE_MESSAGES_FILE.casefold())
+    if pbs_source is None or compiled_source is None or runtime_source is None:
+        raise ExtractionIntegrityError(
+            "Les textes de Moves ne peuvent pas \u00eatre reli\u00e9s \u00e0 moves.dat "
+            "et aux banques MOVE_NAMES/MOVE_DESCRIPTIONS v21.1."
+        )
+
+    def snapshot_bytes(source: ExtractionSource) -> bytes:
+        return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
+
+    try:
+        proofs = build_move_text_proofs(
+            snapshot_bytes(pbs_source),
+            snapshot_bytes(compiled_source),
+            snapshot_bytes(runtime_source),
+        )
+        for row in move_rows:
+            lookup = (
+                str(row.get("evenement_id") or ""),
+                str(row.get("commande") or ""),
+                int(row.get("sous_index") or 0),
+            )
+            proof = proofs.pop(lookup)
+            if proof.source != str(row.get("texte_source") or ""):
+                raise MoveIntegrityError(
+                    "Le texte PBS ne correspond pas \u00e0 la preuve de Move."
+                )
+            row["pbs_structure"] = proof.pbs_structure
+            row["pbs_compiled_file"] = compiled_source.relative_path
+            row["pbs_compiled_sha256"] = compiled_source.sha256
+            row["pbs_compiled_path"] = proof.compiled_path
+            row["pbs_compiled_structure"] = proof.compiled_structure
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_path"] = proof.runtime_path
+            row["pbs_runtime_structure"] = proof.runtime_structure
+        if any(looks_visible(proof.source) for proof in proofs.values()):
+            raise MoveIntegrityError(
+                "Certains textes de Moves visibles ne sont pas extraits."
+            )
+    except (KeyError, TypeError, ValueError, OSError, MoveIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "La correspondance PBS/moves.dat/banques Move est ambigu\u00eb ou incoh\u00e9rente."
+        ) from exc
+
+
 def _is_same_or_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1676,6 +1761,7 @@ def _extract_snapshot(
         _bind_compiled_ability_proofs(snapshot_root, inventory, rows)
         _bind_compiled_species_pokedex_proofs(snapshot_root, inventory, rows)
         _bind_compiled_map_metadata_name_proofs(snapshot_root, inventory, rows)
+        _bind_compiled_move_proofs(snapshot_root, inventory, rows)
 
     duplicates = [
         row_id

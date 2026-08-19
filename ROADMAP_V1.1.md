@@ -307,6 +307,25 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   autres champs `MapMetadata`, les autres corpus et `RECONSTRUCT` public restent
   volontairement bloqués.
 
+- le lot Moves corrige une ambiguïté de schéma importante : dans
+  `PBS/moves.txt`, seuls `Name` et `Description` sont textuels ; `Category` est
+  un enum de combat et reste strictement technique. Les 740 fausses lignes
+  `Category` disparaissent donc du CSV v21.1, sans affecter les clés `Category`
+  réellement textuelles d'autres PBS ;
+- les 740 Moves réels sont reliés à `Data/moves.dat` et aux banques
+  `MOVE_NAMES`/`MOVE_DESCRIPTIONS`. Une porte privée unitaire a synchronisé une
+  description unique dans les trois représentations, conservé tous les champs
+  techniques dont le code de catégorie, publié transactionnellement avec
+  rollback, réextrait le marqueur exact et laissé les 7 606 fichiers de la
+  référence et du travail inchangés. Le candidat atteint l'écran titre. Une
+  validation humaine a ensuite confirmé sur la fiche Moves de Bulbasaur que
+  `TACKLE` garde son nom et que le marqueur complet de sa description s'affiche
+  sur deux lignes, sans erreur lors du retour au jeu. Cette preuve reste bornée
+  à cette seule occurrence réelle de `Move.Description`. Les autres Moves,
+  `Move.Name`, les descriptions partagées/aliasées, les autres structures et
+  `RECONSTRUCT` v21.1 public restent volontairement bloqués ; `Category` reste
+  strictement technique et non traduisible.
+
 ## Phase 2 — Interface pilotée par capacités
 
 ### Objectifs

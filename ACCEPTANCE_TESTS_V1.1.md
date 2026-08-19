@@ -652,6 +652,42 @@ occurrence réelle de `MapMetadata.Name` : elle ne couvre aucun nom partagé,
 aucun autre nom ou champ `MapMetadata`, aucun autre corpus et n'active pas
 `RECONSTRUCT` v21.1 public.
 
+### AC-133 — Première Move.Description v21.1 synchronisée
+
+L'analyse statique relie les 740 sections de `PBS/moves.txt` aux objets
+`GameData::Move` de `Data/moves.dat`, puis aux banques `MOVE_NAMES` et
+`MOVE_DESCRIPTIONS` de `Data/messages_core.dat`. Seuls `Name` et `Description`
+sont extractibles. La clé `Category` de ce fichier est validée comme l'enum
+technique Physical/Special/Status, avec les codes compilés 0/1/2 ; elle ne doit
+produire aucune ligne traduisible. Les clés homonymes réellement textuelles des
+autres PBS restent inchangées.
+
+La porte privée exige exactement une `Description` unique, trois empreintes
+intactes, les 14 ivars de `GameData::Move`, tous les champs techniques, la
+catégorie numérique, les chemins de banques et l'absence d'alias incompatible.
+Une modification de `Category`, d'un autre paramètre, de la structure Marshal,
+du BOM/CRLF, d'une preuve ou de la provenance doit bloquer la simulation. Une
+panne pendant la publication des trois représentations doit restaurer leur état
+exact.
+
+Le round-trip réel borné a produit 29 662 occurrences utiles, dont 740 noms et
+740 descriptions de Moves et aucune fausse `Category`. Il a traversé le Studio,
+sa sauvegarde et sa reprise, modifié uniquement `PBS/moves.txt`,
+`Data/moves.dat` et `Data/messages_core.dat`, puis réextrait le marqueur exact
+sous la même identité stable. La référence et la copie de travail sont restées
+inchangées sur 7 606 fichiers. Le candidat court atteint l'écran titre sans
+erreur mkxp-z et sans modifier ses fichiers. Une validation humaine a ensuite
+confirmé dans Bulbasaur > Summary > Moves que `TACKLE` conserve son nom et que
+le marqueur complet `[TEST PFT v21.1 MOVE DESCRIPTION]` est visible dans sa
+description, réparti sur deux lignes par l'interface. L'écran Moves est resté
+fonctionnel et sa fermeture a permis le retour normal au jeu, sans erreur.
+
+Cette preuve est strictement limitée à cette occurrence réelle de
+`Move.Description` : elle ne couvre aucune autre Move, aucun `Move.Name`, les
+descriptions partagées/aliasées ni aucune autre structure. `Category` demeure
+une donnée technique non traduisible et `RECONSTRUCT` v21.1 public reste
+désactivé.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté
