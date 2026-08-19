@@ -620,6 +620,33 @@ Déjà en place :
   aucun `Move.Name` ni aucune autre structure. `Category` reste une donnée
   technique non traduisible et aucune capacité publique ne change ;
 
+- `essentials_item.py` corrèle désormais, sans exécuter Ruby, les cinq familles
+  textuelles observées dans `PBS/items.txt` (`Name`, `NamePlural`, les deux noms
+  de portion optionnels et `Description`) avec les objets `GameData::Item` de
+  `Data/items.dat` et les banques dédiées de `Data/messages_core.dat`. Le schéma
+  compilé réel comporte 17 ivars. Les poches, prix, usages terrain/combat,
+  flags, booléens, identifiants de Move et suffixes restent des données
+  techniques, même lorsque leur représentation ressemble à du texte ;
+- une quinzième portée privée accepte exactement une `Item.Description` unique,
+  non partagée et reliée sans ambiguïté aux trois représentations. Elle valide
+  l'ordre PBS, BOM/CRLF, les 17 ivars, tous les champs techniques, les chemins,
+  types, cardinalités et graphes Marshal hors cible, puis publie les trois
+  fichiers dans une transaction avec rollback. Sur la référence réelle, 2 274
+  preuves triples sont démontrées pour 2 275 occurrences Item : une description
+  dont la clé de banque est ancienne reste volontairement sans preuve. Parmi
+  les 692 descriptions corrélées, 632 satisfont les critères unitaires stricts.
+  Le premier round-trip réel a modifié seulement `PBS/items.txt`,
+  `Data/items.dat` et `Data/messages_core.dat`, réextrait la même traduction
+  dans les trois représentations, laissé référence et copie de travail
+  byte-identical et démarré sans erreur immédiate. Une validation humaine a
+  ensuite confirmé, pour une occurrence réelle de `Potion.Description`, que le
+  nom reste `Potion`, que le marqueur complet apparaît au début de la
+  description et que le début du texte normal s'affiche immédiatement après.
+  La fin éventuellement hors zone visible n'est pas revendiquée. L'interface
+  et le retour au jeu restent fonctionnels. Cette preuve ne couvre aucun
+  `Item.Name`, pluriel, nom de portion, autre Item ou champ technique, et aucune
+  capacité publique ne change ;
+
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;

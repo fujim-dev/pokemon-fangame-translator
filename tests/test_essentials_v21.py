@@ -194,6 +194,7 @@ def prepare_v21_game(
     trainer_validation: bool = False,
     ability_validation: bool = False,
     move_validation: bool = False,
+    item_validation: bool = False,
     species_validation: bool = False,
     map_metadata_validation: bool = False,
     point_eight_switch: int = 51,
@@ -521,6 +522,159 @@ def prepare_v21_game(
             ruby_text(target_move_description): ruby_text(target_move_description),
             ruby_text(shared_move_description): ruby_text(shared_move_description),
         }
+    if item_validation:
+        from essentials_item import ITEM_IVARS
+
+        def item_object(
+            identifier: str,
+            name: str,
+            name_plural: str,
+            description: str,
+            *,
+            pocket: int,
+            price: int,
+            sell_price: int,
+            bp_price: int = 1,
+            field_use: int = 0,
+            battle_use: int = 0,
+            flags: tuple[str, ...] = (),
+            consumable: bool = True,
+            move: str | None = None,
+            portion_name: str | None = None,
+            portion_name_plural: str | None = None,
+        ) -> RubyObject:
+            values = {
+                "@id": identifier,
+                "@real_name": ruby_text(name),
+                "@real_name_plural": ruby_text(name_plural),
+                "@real_portion_name": (
+                    ruby_text(portion_name) if portion_name is not None else None
+                ),
+                "@real_portion_name_plural": (
+                    ruby_text(portion_name_plural)
+                    if portion_name_plural is not None
+                    else None
+                ),
+                "@pocket": pocket,
+                "@price": price,
+                "@sell_price": sell_price,
+                "@bp_price": bp_price,
+                "@field_use": field_use,
+                "@battle_use": battle_use,
+                "@flags": [ruby_text(flag) for flag in flags],
+                "@consumable": consumable,
+                "@show_quantity": None,
+                "@move": move,
+                "@real_description": ruby_text(description),
+                "@pbs_file_suffix": ruby_text(""),
+            }
+            return RubyObject(
+                "GameData::Item",
+                {ivar: values[ivar] for ivar in ITEM_IVARS},
+            )
+
+        target_item_description = "Synthetic unique item description."
+        shared_item_description = "Synthetic shared item description."
+        machine_description = "Synthetic machine item description."
+        item_root = {
+            "POTION": item_object(
+                "POTION",
+                "Synthetic Potion",
+                "Synthetic Potions",
+                target_item_description,
+                pocket=2,
+                price=300,
+                sell_price=150,
+                field_use=1,
+                battle_use=1,
+                flags=("Fling_30",),
+            ),
+            "ORANBERRY": item_object(
+                "ORANBERRY",
+                "Synthetic Oran Berry",
+                "Synthetic Oran Berries",
+                shared_item_description,
+                pocket=5,
+                price=20,
+                sell_price=10,
+                bp_price=2,
+                field_use=1,
+                battle_use=1,
+                flags=("Berry", "Fling_10"),
+                consumable=False,
+                portion_name="Synthetic Oran portion",
+                portion_name_plural="Synthetic Oran portions",
+            ),
+            "SITRUSBERRY": item_object(
+                "SITRUSBERRY",
+                "Synthetic Sitrus Berry",
+                "Synthetic Sitrus Berries",
+                shared_item_description,
+                pocket=5,
+                price=20,
+                sell_price=10,
+                field_use=1,
+                battle_use=1,
+                flags=("Berry",),
+                portion_name="Synthetic Sitrus portion",
+                portion_name_plural="Synthetic Sitrus portions",
+            ),
+            "TM001": item_object(
+                "TM001",
+                "Synthetic TM",
+                "Synthetic TMs",
+                machine_description,
+                pocket=4,
+                price=3000,
+                sell_price=1500,
+                field_use=3,
+                consumable=False,
+                move="TACKLE",
+            ),
+        }
+        (data / "items.dat").write_bytes(dumps(item_root))
+        core_bank = [{} for _index in range(31)]
+        core_bank[7] = {
+            ruby_text("Synthetic obsolete item alias"): ruby_text(
+                "Synthetic obsolete item alias"
+            ),
+        }
+        core_bank[7].update(
+            {
+                ruby_text(value.ivars["@real_name"].text()): ruby_text(
+                    value.ivars["@real_name"].text()
+                )
+                for value in item_root.values()
+            }
+        )
+        core_bank[8] = {
+            ruby_text(value.ivars["@real_name_plural"].text()): ruby_text(
+                value.ivars["@real_name_plural"].text()
+            )
+            for value in item_root.values()
+        }
+        core_bank[9] = {
+            ruby_text(message): ruby_text(message)
+            for message in (
+                target_item_description,
+                shared_item_description,
+                machine_description,
+            )
+        }
+        core_bank[28] = {
+            ruby_text(value.ivars["@real_portion_name"].text()): ruby_text(
+                value.ivars["@real_portion_name"].text()
+            )
+            for value in item_root.values()
+            if value.ivars["@real_portion_name"] is not None
+        }
+        core_bank[29] = {
+            ruby_text(value.ivars["@real_portion_name_plural"].text()): ruby_text(
+                value.ivars["@real_portion_name_plural"].text()
+            )
+            for value in item_root.values()
+            if value.ivars["@real_portion_name_plural"] is not None
+        }
     if species_validation:
         from essentials_species import SPECIES_IVARS
 
@@ -819,6 +973,54 @@ def prepare_v21_game(
             b"Priority = -1\r\n"
             b"FunctionCode = None\r\n"
             b"Description = Synthetic shared move description.\r\n"
+        )
+    if item_validation:
+        (pbs.parent / "items.txt").write_bytes(
+            b"\xef\xbb\xbf# synthetic item fixture\r\n"
+            b"[POTION]\r\n"
+            b"Name = Synthetic Potion\r\n"
+            b"NamePlural = Synthetic Potions\r\n"
+            b"Pocket = 2\r\n"
+            b"Price = 300\r\n"
+            b"FieldUse = OnPokemon\r\n"
+            b"BattleUse = OnPokemon\r\n"
+            b"Flags = Fling_30\r\n"
+            b"Description = Synthetic unique item description.\r\n"
+            b"\r\n"
+            b"[ORANBERRY]\r\n"
+            b"Name = Synthetic Oran Berry\r\n"
+            b"NamePlural = Synthetic Oran Berries\r\n"
+            b"PortionName = Synthetic Oran portion\r\n"
+            b"PortionNamePlural = Synthetic Oran portions\r\n"
+            b"Pocket = 5\r\n"
+            b"Price = 20\r\n"
+            b"BPPrice = 2\r\n"
+            b"FieldUse = OnPokemon\r\n"
+            b"BattleUse = OnPokemon\r\n"
+            b"Flags = Berry,Fling_10\r\n"
+            b"Consumable = false\r\n"
+            b"Description = Synthetic shared item description.\r\n"
+            b"\r\n"
+            b"[SITRUSBERRY]\r\n"
+            b"Name = Synthetic Sitrus Berry\r\n"
+            b"NamePlural = Synthetic Sitrus Berries\r\n"
+            b"PortionName = Synthetic Sitrus portion\r\n"
+            b"PortionNamePlural = Synthetic Sitrus portions\r\n"
+            b"Pocket = 5\r\n"
+            b"Price = 20\r\n"
+            b"FieldUse = OnPokemon\r\n"
+            b"BattleUse = OnPokemon\r\n"
+            b"Flags = Berry\r\n"
+            b"Description = Synthetic shared item description.\r\n"
+            b"\r\n"
+            b"[TM001]\r\n"
+            b"Name = Synthetic TM\r\n"
+            b"NamePlural = Synthetic TMs\r\n"
+            b"Pocket = 4\r\n"
+            b"Price = 3000\r\n"
+            b"FieldUse = TM\r\n"
+            b"Move = TACKLE\r\n"
+            b"Description = Synthetic machine item description.\r\n"
         )
     if map_metadata_validation:
         (pbs.parent / "map_metadata.txt").write_bytes(

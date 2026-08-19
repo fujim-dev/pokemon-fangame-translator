@@ -326,6 +326,22 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   `RECONSTRUCT` v21.1 public restent volontairement bloqués ; `Category` reste
   strictement technique et non traduisible.
 
+- le lot Items distingue cinq champs textuels réels de `PBS/items.txt` de tous
+  les paramètres techniques de `GameData::Item`. Les valeurs comme les flags,
+  usages ou identifiants de Move ne peuvent pas devenir des traductions du seul
+  fait qu'elles sont représentées par des chaînes ;
+- les 693 Items réels sont reliés à `Data/items.dat` et aux cinq banques de
+  messages correspondantes. Une porte privée strictement unitaire a synchronisé
+  une description admissible dans les trois représentations, publié le lot de
+  manière transactionnelle avec rollback, réextrait la chaîne exacte et laissé
+  la référence ainsi que la copie de travail inchangées. Une entrée à banque
+  ancienne, les textes partagés/aliasés, les autres champs Item, les autres
+  familles et `RECONSTRUCT` v21.1 public restent bloqués. Une validation humaine
+  a confirmé sur une `Potion.Description` réelle le nom `Potion`, le marqueur
+  complet suivi du début du texte normal, puis un retour fonctionnel au jeu.
+  Elle ne revendique pas la fin éventuellement masquée par l'interface et ne
+  généralise la preuve à aucun autre champ ou Item.
+
 ## Phase 2 — Interface pilotée par capacités
 
 ### Objectifs

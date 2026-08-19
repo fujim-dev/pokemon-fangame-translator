@@ -688,6 +688,44 @@ descriptions partagées/aliasées ni aucune autre structure. `Category` demeure
 une donnée technique non traduisible et `RECONSTRUCT` v21.1 public reste
 désactivé.
 
+### AC-134 — Première Item.Description v21.1 synchronisée
+
+L'analyse statique relie les cinq champs textuels observés dans les 693 sections
+de `PBS/items.txt` aux objets `GameData::Item` de `Data/items.dat`, puis aux
+banques correspondantes de `Data/messages_core.dat`. Les poches, prix, usages,
+flags, booléens, identifiants de Move et autres paramètres techniques ne doivent
+produire aucune occurrence traduisible, même lorsqu'ils ressemblent à du texte.
+
+La porte privée exige exactement une `Description` unique, les trois empreintes,
+les 17 ivars, l'ordre et le format PBS, les champs techniques, les chemins de
+banque et l'absence d'alias incompatible. Une dérive de champ technique, de
+structure Marshal, de BOM/CRLF, de preuve ou de provenance doit bloquer la
+simulation. Une panne pendant la publication doit restaurer exactement les
+trois fichiers.
+
+Le round-trip réel borné a démontré 2 274 corrélations triples sur 2 275
+occurrences Item ; l'unique description dont la banque ne correspond plus
+exactement reste sans preuve. La cible unitaire a traversé le Studio, sa
+sauvegarde et sa reprise, modifié seulement `PBS/items.txt`, `Data/items.dat` et
+`Data/messages_core.dat`, puis été réextraite exactement sous la même identité
+stable. La référence et la copie de travail sont byte-identical sur 7 606
+fichiers et le candidat ne comporte aucun changement hors plan. Le processus de
+jeu reste actif et répondant après son démarrage sans erreur immédiate.
+
+Une validation humaine a ensuite confirmé sur une occurrence réelle de
+`Potion.Description` que le nom reste exactement `Potion`, que le marqueur
+complet `[TEST PFT v21.1 ITEM DESCRIPTION]` est visible au début de la
+description et que le texte normal apparaît immédiatement après, notamment son
+début relatif au spray et à la restauration de PV. La fin éventuellement hors
+zone visible n'est pas considérée comme observée. L'interface est restée
+fonctionnelle et sa fermeture a permis un retour normal au jeu, sans erreur.
+
+Cette preuve est strictement limitée à cette occurrence réelle de
+`Item.Description`. Elle ne couvre aucun autre Item, aucun `Item.Name`,
+`NamePlural`, `PortionName`, `PortionNamePlural`, texte partagé/aliasé, champ
+technique ni aucune autre structure.
+`RECONSTRUCT` v21.1 public reste désactivé.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

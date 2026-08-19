@@ -59,6 +59,14 @@ from essentials_move import (
     MoveIntegrityError,
     build_move_text_proofs,
 )
+from essentials_item import (
+    COMPILED_ITEM_FILE,
+    ITEM_MESSAGES_FILE,
+    ITEM_PBS_FILE,
+    ITEM_TEXT_FIELDS,
+    ItemIntegrityError,
+    build_item_text_proofs,
+)
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -351,6 +359,8 @@ def _source_kind(relative: str, entry_type: str) -> str | None:
             return "compiled_map_metadata"
         if name == "moves.dat":
             return "compiled_move"
+        if name == "items.dat":
+            return "compiled_item"
     if relative.casefold().startswith("pbs/") and name.endswith(".txt"):
         if any("backup" in part.casefold() for part in path.parts[1:]):
             return None
@@ -1629,6 +1639,80 @@ def _bind_compiled_move_proofs(
         ) from exc
 
 
+def _bind_compiled_item_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie les cinq champs textuels Item aux deux représentations compilées.
+
+    Les champs techniques restent exclus par la liste explicite. Une ancienne
+    clé de banque qui ne correspond plus exactement à la source PBS laisse la
+    ligne extractible, mais sans preuve de reconstruction privée.
+    """
+    item_rows = [
+        row
+        for row in rows
+        if str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == ITEM_PBS_FILE.casefold()
+        and row.get("commande") in ITEM_TEXT_FIELDS
+    ]
+    if not item_rows:
+        return
+    by_relative = {
+        source.relative_path.replace("\\", "/").casefold(): source
+        for source in inventory.sources
+    }
+    pbs_source = by_relative.get(ITEM_PBS_FILE.casefold())
+    compiled_source = by_relative.get(COMPILED_ITEM_FILE.casefold())
+    runtime_source = by_relative.get(ITEM_MESSAGES_FILE.casefold())
+    if pbs_source is None or compiled_source is None or runtime_source is None:
+        raise ExtractionIntegrityError(
+            "Les textes d'Items ne peuvent pas être reliés à items.dat et aux "
+            "banques Item v21.1."
+        )
+
+    def snapshot_bytes(source: ExtractionSource) -> bytes:
+        return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
+
+    try:
+        proofs = build_item_text_proofs(
+            snapshot_bytes(pbs_source),
+            snapshot_bytes(compiled_source),
+            snapshot_bytes(runtime_source),
+        )
+        for row in item_rows:
+            lookup = (
+                str(row.get("evenement_id") or ""),
+                str(row.get("commande") or ""),
+                int(row.get("sous_index") or 0),
+            )
+            proof = proofs.pop(lookup, None)
+            if proof is None:
+                continue
+            if proof.source != str(row.get("texte_source") or ""):
+                raise ItemIntegrityError(
+                    "Le texte PBS ne correspond pas à la preuve d'Item."
+                )
+            row["pbs_structure"] = proof.pbs_structure
+            row["pbs_compiled_file"] = compiled_source.relative_path
+            row["pbs_compiled_sha256"] = compiled_source.sha256
+            row["pbs_compiled_path"] = proof.compiled_path
+            row["pbs_compiled_structure"] = proof.compiled_structure
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_path"] = proof.runtime_path
+            row["pbs_runtime_structure"] = proof.runtime_structure
+        if any(looks_visible(proof.source) for proof in proofs.values()):
+            raise ItemIntegrityError(
+                "Certains textes d'Items prouvés ne sont pas extraits."
+            )
+    except (KeyError, TypeError, ValueError, OSError, ItemIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "La correspondance PBS/items.dat/banques Item est ambiguë ou incohérente."
+        ) from exc
+
+
 def _is_same_or_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -1762,6 +1846,7 @@ def _extract_snapshot(
         _bind_compiled_species_pokedex_proofs(snapshot_root, inventory, rows)
         _bind_compiled_map_metadata_name_proofs(snapshot_root, inventory, rows)
         _bind_compiled_move_proofs(snapshot_root, inventory, rows)
+        _bind_compiled_item_proofs(snapshot_root, inventory, rows)
 
     duplicates = [
         row_id
