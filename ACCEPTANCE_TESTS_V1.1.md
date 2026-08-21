@@ -726,6 +726,45 @@ Cette preuve est strictement limitée à cette occurrence réelle de
 technique ni aucune autre structure.
 `RECONSTRUCT` v21.1 public reste désactivé.
 
+### AC-135 — Première Species.Category v21.1 synchronisée
+
+L'analyse statique distingue les champs en fonction de leur fichier et de leur
+schéma réel, jamais d'après leur seul nom. Les 898 champs `Category` de base de
+`PBS/pokemon.txt` sont reliés aux objets `GameData::Species` de
+`Data/species.dat`, puis à la banque `SPECIES_CATEGORIES` située à l'index 2 de
+`Data/messages_core.dat`. Dans ce contexte précis, `Category` est un texte
+Pokédex traduisible. À l'inverse, `PBS/moves.txt/Category` demeure l'enum
+technique Physical/Special/Status compilé en 0/1/2 : il ne produit aucune
+occurrence traduisible et un CSV forgé qui tente de le modifier est refusé.
+
+La porte privée exige exactement une catégorie d'espèce de base, unique, non
+partagée, non héritée et non ambiguë. Elle surveille aussi
+`PBS/pokemon_forms.txt`, mais publie uniquement `PBS/pokemon.txt`,
+`Data/species.dat` et `Data/messages_core.dat` dans une transaction avec
+rollback. L'identité espèce/forme/champ, les quatre empreintes, l'ordre PBS, les
+ivars et types Marshal, la banque et tous les champs techniques ou textuels hors
+cible doivent rester identiques. Un champ technique de Species ne devient pas
+traduisible du seul fait que sa représentation ressemble à une chaîne.
+
+Le round-trip réel a conservé 29 662 occurrences, dont 898 catégories de base,
+et a identifié 374 cibles satisfaisant les critères unitaires stricts. Une seule
+`Species.Category` réelle de Squirtle a traversé le Studio, sa reprise, la
+simulation, la reconstruction privée et la réextraction sous la même identité
+stable. Seuls les trois fichiers planifiés diffèrent ;
+`PBS/pokemon_forms.txt`, la référence et la copie de travail restent inchangés.
+
+La validation humaine a confirmé que le nom Squirtle et son texte Pokédex
+restent inchangés, que l'ancienne catégorie n'est plus affichée et que le début
+du marqueur `[TEST PFT v21.1 SPECIES C...` apparaît sur la ligne de catégorie.
+La largeur de l'interface tronque la fin : l'affichage humain du marqueur complet
+n'est donc pas revendiqué, même si la réextraction technique retrouve la chaîne
+entière. La navigation et le retour au jeu restent fonctionnels.
+
+Cette preuve est strictement limitée à cette occurrence réelle de
+`Species.Category`. Elle ne couvre aucun `Species.Name`, `Species.Pokedex`,
+`FormName`, autre espèce ou forme. Elle ne modifie pas la règle technique de
+`moves.txt/Category` et n'active pas `RECONSTRUCT` v21.1 public.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

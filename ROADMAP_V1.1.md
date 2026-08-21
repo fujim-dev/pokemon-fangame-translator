@@ -342,6 +342,23 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   Elle ne revendique pas la fin éventuellement masquée par l'interface et ne
   généralise la preuve à aucun autre champ ou Item.
 
+- le lot Species de base distingue explicitement les décisions par fichier et
+  par schéma : `PBS/pokemon.txt/Category` est une catégorie Pokédex textuelle
+  liée à `GameData::Species` et à `SPECIES_CATEGORIES`, tandis que
+  `PBS/moves.txt/Category` reste l'enum technique 0/1/2 et ne peut être ni
+  extrait ni reconstruit comme traduction ;
+- une porte privée strictement unitaire a synchronisé une catégorie d'espèce de
+  base unique dans `PBS/pokemon.txt`, `Data/species.dat` et
+  `Data/messages_core.dat`, avec surveillance de `pokemon_forms.txt`, publication
+  transactionnelle et rollback. Le round-trip réel a conservé 29 662
+  occurrences, réextrait la chaîne complète et laissé la référence ainsi que la
+  copie de travail inchangées. La validation humaine sur Squirtle a confirmé le
+  nom et le texte Pokédex inchangés, l'ancienne catégorie absente, le préfixe
+  visible `[TEST PFT v21.1 SPECIES C...` et le retour normal au jeu ; la fin
+  tronquée du marqueur n'est pas revendiquée comme observée. Cette preuve reste
+  limitée à cette seule `Species.Category` réelle et n'autorise ni les autres
+  champs/espèces/formes ni `RECONSTRUCT` public.
+
 ## Phase 2 — Interface pilotée par capacités
 
 ### Objectifs

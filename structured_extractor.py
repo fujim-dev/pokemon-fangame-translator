@@ -45,6 +45,7 @@ from essentials_species import (
     SpeciesIntegrityError,
     build_species_pokedex_proofs,
 )
+from essentials_species_category import build_species_category_proofs
 from essentials_map_metadata import (
     COMPILED_MAP_METADATA_FILE,
     MAP_METADATA_MESSAGES_FILE,
@@ -1500,6 +1501,81 @@ def _bind_compiled_species_pokedex_proofs(
         ) from exc
 
 
+def _bind_compiled_species_category_proofs(
+    snapshot_root: Path,
+    inventory: ExtractionInventory,
+    rows: list[dict],
+) -> None:
+    """Lie Category de Species à species.dat et SPECIES_CATEGORIES v21.1."""
+    category_rows = [
+        row
+        for row in rows
+        if str(row.get("fichier") or "").replace("\\", "/").casefold()
+        == SPECIES_PBS_FILE.casefold()
+        and row.get("type") == "PBS — Category"
+    ]
+    if not category_rows:
+        return
+    by_relative = {
+        source.relative_path.replace("\\", "/").casefold(): source
+        for source in inventory.sources
+    }
+    pbs_source = by_relative.get(SPECIES_PBS_FILE.casefold())
+    forms_source = by_relative.get(SPECIES_FORMS_PBS_FILE.casefold())
+    compiled_source = by_relative.get(COMPILED_SPECIES_FILE.casefold())
+    runtime_source = by_relative.get(SPECIES_MESSAGES_FILE.casefold())
+    if (
+        pbs_source is None
+        or forms_source is None
+        or compiled_source is None
+        or runtime_source is None
+    ):
+        raise ExtractionIntegrityError(
+            "Les catégories Species ne peuvent pas être reliées aux deux PBS, "
+            "à species.dat et à SPECIES_CATEGORIES v21.1."
+        )
+
+    def snapshot_bytes(source: ExtractionSource) -> bytes:
+        return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
+
+    try:
+        proofs = build_species_category_proofs(
+            snapshot_bytes(pbs_source),
+            snapshot_bytes(forms_source),
+            snapshot_bytes(compiled_source),
+            snapshot_bytes(runtime_source),
+        )
+        for row in category_rows:
+            lookup = (
+                str(row.get("evenement_id") or ""),
+                str(row.get("commande") or ""),
+                int(row.get("sous_index") or 0),
+            )
+            proof = proofs.pop(lookup)
+            if proof.source != str(row.get("texte_source") or ""):
+                raise SpeciesIntegrityError(
+                    "Le texte PBS ne correspond pas à la preuve Category Species."
+                )
+            row["pbs_structure"] = proof.pbs_structure
+            row["pbs_compiled_file"] = compiled_source.relative_path
+            row["pbs_compiled_sha256"] = compiled_source.sha256
+            row["pbs_compiled_path"] = proof.compiled_path
+            row["pbs_compiled_structure"] = proof.compiled_structure
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_path"] = proof.runtime_path
+            row["pbs_runtime_structure"] = proof.runtime_structure
+        if any(looks_visible(proof.source) for proof in proofs.values()):
+            raise SpeciesIntegrityError(
+                "Certaines catégories Species de base visibles ne sont pas extraites."
+            )
+    except (KeyError, TypeError, ValueError, OSError, SpeciesIntegrityError) as exc:
+        raise ExtractionIntegrityError(
+            "La correspondance pokemon/pokemon_forms/species.dat/"
+            "SPECIES_CATEGORIES est ambiguë ou incohérente."
+        ) from exc
+
+
 def _bind_compiled_map_metadata_name_proofs(
     snapshot_root: Path,
     inventory: ExtractionInventory,
@@ -1844,6 +1920,7 @@ def _extract_snapshot(
         _bind_compiled_trainer_proofs(snapshot_root, inventory, rows)
         _bind_compiled_ability_proofs(snapshot_root, inventory, rows)
         _bind_compiled_species_pokedex_proofs(snapshot_root, inventory, rows)
+        _bind_compiled_species_category_proofs(snapshot_root, inventory, rows)
         _bind_compiled_map_metadata_name_proofs(snapshot_root, inventory, rows)
         _bind_compiled_move_proofs(snapshot_root, inventory, rows)
         _bind_compiled_item_proofs(snapshot_root, inventory, rows)

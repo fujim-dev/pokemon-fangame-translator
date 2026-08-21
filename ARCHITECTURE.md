@@ -647,6 +647,26 @@ Déjà en place :
   `Item.Name`, pluriel, nom de portion, autre Item ou champ technique, et aucune
   capacité publique ne change ;
 
+- `essentials_species_category.py` ajoute une corrélation distincte, dépendante
+  du schéma, entre les 898 `Category` de base de `PBS/pokemon.txt`, les objets
+  `GameData::Species` de `Data/species.dat` et `SPECIES_CATEGORIES` à l'index 2
+  de `Data/messages_core.dat`. Ce nom de clé n'accorde aucun droit générique :
+  `PBS/moves.txt/Category` reste l'enum technique Physical/Special/Status 0/1/2,
+  absent du CSV traduisible et explicitement refusé par la reconstruction ;
+- une seizième portée privée accepte exactement une catégorie d'espèce de base,
+  unique, non partagée et non héritée. Les deux PBS Species sont surveillés,
+  mais seuls `PBS/pokemon.txt`, `Data/species.dat` et
+  `Data/messages_core.dat` peuvent être publiés transactionnellement avec
+  rollback. Le round-trip réel a conservé 29 662 occurrences, dont 898
+  catégories de base et 374 cibles unitaires admissibles, laissé la référence
+  et le travail inchangés puis réextrait la chaîne complète sous la même
+  identité. La validation humaine sur une occurrence réelle de Squirtle a
+  confirmé le nom et le texte Pokédex inchangés, le remplacement de la catégorie,
+  le préfixe visible `[TEST PFT v21.1 SPECIES C...` et le retour normal au jeu.
+  La fin du marqueur, tronquée par l'interface, n'est pas revendiquée comme
+  observée. Cette preuve ne couvre aucun `Species.Name`, `Species.Pokedex`,
+  `FormName`, autre espèce ou forme, et aucune capacité publique ne change ;
+
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;

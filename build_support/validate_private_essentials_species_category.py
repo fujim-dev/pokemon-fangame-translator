@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 import hashlib
 import json
 import multiprocessing
@@ -15,51 +14,34 @@ if str(ROOT) not in sys.path:
 
 from adapters import GameCapability, PokemonEssentialsAdapter  # noqa: E402
 from analysis.integrity import compare_snapshots, snapshot_tree  # noqa: E402
+from build_support.validate_private_essentials_species import (  # noqa: E402
+    _publish_project,
+)
 from essentials_species import (  # noqa: E402
     COMPILED_SPECIES_FILE,
     SPECIES_FORMS_PBS_FILE,
     SPECIES_MESSAGES_FILE,
     SPECIES_PBS_FILE,
-    build_species_pokedex_proofs,
-    extract_species_pokedex_texts,
 )
-from extraction_project import (  # noqa: E402
-    BASELINE_CSV_NAME,
-    EXTRACTION_MANIFEST_NAME,
-    EXTRACTION_REPORT_NAME,
-    PROJECT_CSV_NAME,
-    build_extraction_manifest_bytes,
-    extraction_id,
+from essentials_species_category import (  # noqa: E402
+    build_species_category_proofs,
+    extract_species_category_texts,
 )
-from Pokemon_Fangame_Translator import (  # noqa: E402
-    merge_project_rows,
-    serialize_project_csv,
-)
-from project_identity import (  # noqa: E402
-    PROJECT_METADATA_NAME,
-    build_project_identity_bytes,
-)
+from extraction_project import PROJECT_CSV_NAME  # noqa: E402
+from Pokemon_Fangame_Translator import serialize_project_csv  # noqa: E402
 from reconstruction_engine import (  # noqa: E402
     ReconstructionError,
     build_plan,
-    build_v21_1_species_pokedex_validation_plan,
+    build_v21_1_species_category_validation_plan,
     reconstruct_copy,
     simulate_plan,
 )
-from safe_io import atomic_write_bundle  # noqa: E402
-from translation_project import (  # noqa: E402
-    RESUME_STATE_NAME,
-    TRANSLATION_STATE_NAME,
-    TranslationProjectSession,
-    build_resume_state_bytes,
-    build_translation_state_bytes,
-    inspect_csv_structure,
-)
+from translation_project import TranslationProjectSession  # noqa: E402
 
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validation privée bornée d'une Species.Pokedex v21.1."
+        description="Validation privée bornée d'une Species.Category v21.1."
     )
     parser.add_argument("reference", type=Path)
     parser.add_argument("work", type=Path)
@@ -67,91 +49,8 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("candidate", type=Path)
     parser.add_argument("reports", type=Path)
     parser.add_argument("--section", required=True)
-    parser.add_argument("--marker", required=True)
+    parser.add_argument("--translation", required=True)
     return parser.parse_args()
-
-
-def _publish_project(
-    extraction,
-    detection,
-    work: Path,
-    project: Path,
-    *,
-    label: str = "Species.Pokedex",
-) -> tuple[list[dict[str, str]], list[str]]:
-    rows, preserved, fields = merge_project_rows(
-        [dict(row) for row in extraction.rows],
-        None,
-    )
-    if preserved:
-        raise RuntimeError("Une traduction privée inattendue a été réutilisée.")
-    csv_payload = serialize_project_csv(rows, fields)
-    csv_sha256 = hashlib.sha256(csv_payload).hexdigest()
-    report_payload = (
-        f"PFT v21.1 — validation privée {label}\n"
-        f"Occurrences structurées : {len(rows)}\n"
-        "Aucun texte extrait n'est reproduit dans ce rapport.\n"
-    ).encode("utf-8")
-    report_sha256 = hashlib.sha256(report_payload).hexdigest()
-    manifest_payload = build_extraction_manifest_bytes(
-        extraction,
-        game_root=work,
-        adapter_version=detection.recognized_version,
-        csv_sha256=csv_sha256,
-        report_sha256=report_sha256,
-        row_count=len(rows),
-    )
-    manifest_sha256 = hashlib.sha256(manifest_payload).hexdigest()
-    run_id = extraction_id(extraction.source_manifest_sha256, csv_sha256)
-    identity_payload = build_project_identity_bytes(
-        work,
-        adapter_id="pokemon_essentials",
-        adapter_version=detection.recognized_version,
-        adapter_profile=extraction.essentials_profile,
-        source_manifest_sha256=extraction.source_manifest_sha256,
-        extraction_manifest_name=EXTRACTION_MANIFEST_NAME,
-        extraction_manifest_sha256=manifest_sha256,
-        extraction_id=run_id,
-        extracted_csv_sha256=csv_sha256,
-    )
-    state_payload = build_translation_state_bytes(
-        revision=1,
-        csv_name=PROJECT_CSV_NAME,
-        csv_sha256=csv_sha256,
-        identity_sha256=hashlib.sha256(identity_payload).hexdigest(),
-        manifest_sha256=manifest_sha256,
-        baseline_sha256=csv_sha256,
-        report_sha256=report_sha256,
-        source_manifest_sha256=extraction.source_manifest_sha256,
-        extraction_id=run_id,
-        immutable_rows_sha256=inspect_csv_structure(csv_payload).immutable_sha256,
-    )
-    resume_payload = build_resume_state_bytes(
-        {
-            "version": "1.0",
-            "active": False,
-            "total": 0,
-            "completed": 0,
-            "remaining": 0,
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-        },
-        csv_name=PROJECT_CSV_NAME,
-        csv_sha256=csv_sha256,
-        source_manifest_sha256=extraction.source_manifest_sha256,
-        extraction_id=run_id,
-    )
-    atomic_write_bundle(
-        {
-            project / PROJECT_CSV_NAME: csv_payload,
-            project / BASELINE_CSV_NAME: csv_payload,
-            project / EXTRACTION_REPORT_NAME: report_payload,
-            project / EXTRACTION_MANIFEST_NAME: manifest_payload,
-            project / PROJECT_METADATA_NAME: identity_payload,
-            project / TRANSLATION_STATE_NAME: state_payload,
-            project / RESUME_STATE_NAME: resume_payload,
-        }
-    )
-    return rows, fields
 
 
 def main() -> int:
@@ -175,18 +74,32 @@ def main() -> int:
     if detection.can(GameCapability.RECONSTRUCT) or detection.write_actions_allowed:
         raise RuntimeError("La reconstruction publique v21.1 est devenue active.")
     extraction = adapter.extract_with_provenance(work)
-    rows, fields = _publish_project(extraction, detection, work, project)
-    pokedex_rows = [
-        row
-        for row in rows
-        if row["fichier"] == SPECIES_PBS_FILE and row["commande"] == "Pokedex"
-    ]
-    selected = next(
-        row for row in pokedex_rows if row["evenement_id"] == args.section
+    rows, fields = _publish_project(
+        extraction,
+        detection,
+        work,
+        project,
+        label="Species.Category",
     )
-    selected["traduction_fr"] = args.marker.strip() + " " + selected["texte_source"]
+    species_rows = [row for row in rows if row["fichier"] == SPECIES_PBS_FILE]
+    category_rows = [row for row in species_rows if row["commande"] == "Category"]
+    technical_rows = [
+        row
+        for row in species_rows
+        if row["commande"] not in {"Name", "Category", "Pokedex", "FormName"}
+    ]
+    if technical_rows:
+        raise RuntimeError(
+            "Un champ technique de pokemon.txt a été exposé comme traduction."
+        )
+    selected = next(
+        row for row in category_rows if row["evenement_id"] == args.section
+    )
+    selected["traduction_fr"] = args.translation
     selected["statut"] = "Accepté"
-    selected["origine_traduction"] = "validation_privee_v21_1_species_pokedex"
+    selected["origine_traduction"] = (
+        "validation_privee_v21_1_species_category"
+    )
     translated_payload = serialize_project_csv(rows, fields)
     csv_path = project / PROJECT_CSV_NAME
     with TranslationProjectSession(
@@ -211,13 +124,13 @@ def main() -> int:
     else:
         raise RuntimeError("La porte publique a accepté le projet v21.1.")
 
-    plan = build_v21_1_species_pokedex_validation_plan(work, csv_path)
+    plan = build_v21_1_species_category_validation_plan(work, csv_path)
     simulate_plan(plan)
     if plan.counts().get("applicable") != 1:
         raise RuntimeError("La simulation privée ne conserve pas sa cible unique.")
     result = reconstruct_copy(plan, candidate, reports)
     expected_translation = selected["traduction_fr"]
-    reextracted = extract_species_pokedex_texts(
+    reextracted = extract_species_category_texts(
         (candidate / SPECIES_PBS_FILE).read_bytes(),
         (candidate / SPECIES_FORMS_PBS_FILE).read_bytes(),
         (candidate / COMPILED_SPECIES_FILE).read_bytes(),
@@ -226,21 +139,22 @@ def main() -> int:
     )
     if reextracted != (expected_translation,) * 3:
         raise RuntimeError("La réextraction privée ne retrouve pas les trois textes.")
-    proofs = build_species_pokedex_proofs(
+
+    proofs = build_species_category_proofs(
         (work / SPECIES_PBS_FILE).read_bytes(),
         (work / SPECIES_FORMS_PBS_FILE).read_bytes(),
         (work / COMPILED_SPECIES_FILE).read_bytes(),
         (work / SPECIES_MESSAGES_FILE).read_bytes(),
     )
-    safe_unique = sum(
+    safe_categories = sum(
         json.loads(proof.runtime_structure)["source_usage_count"] == 1
         and json.loads(proof.compiled_structure)["target_reference_count"] == 1
         and json.loads(proof.runtime_structure)["target_key_reference_count"] == 1
         and json.loads(proof.runtime_structure)["target_value_reference_count"] == 1
         for proof in proofs.values()
     )
-    selected_pbs_proof = json.loads(
-        proofs[(selected["evenement_id"], "Pokedex", 1)].pbs_structure
+    selected_proof = json.loads(
+        proofs[(selected["evenement_id"], "Category", 1)].pbs_structure
     )
 
     reference_after = snapshot_tree(reference)
@@ -248,14 +162,15 @@ def main() -> int:
     candidate_after = snapshot_tree(candidate)
     original_unchanged = compare_snapshots(reference_before, reference_after)
     work_unchanged = compare_snapshots(work_before, work_after)
+    expected_files = {
+        SPECIES_PBS_FILE,
+        COMPILED_SPECIES_FILE,
+        SPECIES_MESSAGES_FILE,
+    }
     candidate_comparison = compare_snapshots(
         work_after,
         candidate_after,
-        allowed_changed={
-            SPECIES_PBS_FILE,
-            COMPILED_SPECIES_FILE,
-            SPECIES_MESSAGES_FILE,
-        },
+        allowed_changed=expected_files,
     )
     if not original_unchanged.passed or not work_unchanged.passed:
         raise RuntimeError("La référence ou la copie de travail a changé.")
@@ -265,6 +180,8 @@ def main() -> int:
         or candidate_comparison.emptied_files
     ):
         raise RuntimeError("Le candidat contient une modification hors plan.")
+    if set(result.modified_files) != expected_files:
+        raise RuntimeError("La liste des fichiers modifiés ne correspond pas au plan.")
 
     print(
         json.dumps(
@@ -275,19 +192,24 @@ def main() -> int:
                 "public_reconstruct": detection.can(GameCapability.RECONSTRUCT),
                 "public_reconstruction_refused": public_reconstruction_refused,
                 "total_rows": len(rows),
-                "species_pokedex_rows": len(pokedex_rows),
-                "base_species_count": selected_pbs_proof["base_section_count"],
-                "form_count": selected_pbs_proof["form_section_count"],
-                "explicit_form_pokedex_count": selected_pbs_proof[
-                    "explicit_form_pokedex_count"
+                "species_rows": len(species_rows),
+                "species_category_rows": len(category_rows),
+                "species_technical_rows": len(technical_rows),
+                "species_category_unique_safe": safe_categories,
+                "base_species_count": selected_proof["base_section_count"],
+                "form_count": selected_proof["form_section_count"],
+                "explicit_form_category_count": selected_proof[
+                    "explicit_form_category_count"
                 ],
-                "inherited_form_pokedex_count": selected_pbs_proof[
-                    "inherited_form_pokedex_count"
+                "inherited_form_category_count": selected_proof[
+                    "inherited_form_category_count"
                 ],
-                "species_pokedex_unique_safe": safe_unique,
                 "selected_section": selected["evenement_id"],
                 "selected_occurrence": int(selected["sous_index"]),
-                "marker": args.marker.strip(),
+                "source_sha256": hashlib.sha256(
+                    selected["texte_source"].encode("utf-8")
+                ).hexdigest(),
+                "translation": expected_translation,
                 "plan_scope": plan.validation_scope,
                 "plan_hash_files": sorted(plan.source_hashes),
                 "modified_files": result.modified_files,

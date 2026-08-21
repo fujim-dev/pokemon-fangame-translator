@@ -683,6 +683,7 @@ def prepare_v21_game(
             species: str,
             form: int,
             name: str,
+            category_value: RubyString,
             pokedex_value: RubyString,
         ) -> RubyObject:
             values = {
@@ -691,7 +692,7 @@ def prepare_v21_game(
                 "@form": form,
                 "@real_name": ruby_text(name),
                 "@real_form_name": None,
-                "@real_category": ruby_text("Synthetic"),
+                "@real_category": category_value,
                 "@real_pokedex_entry": pokedex_value,
                 "@pokedex_form": form,
                 "@types": ["NORMAL"],
@@ -737,28 +738,49 @@ def prepare_v21_game(
         inherited_pokedex = ruby_text("Synthetic inherited Cubone Pokédex entry.")
         charmander_pokedex = ruby_text("Synthetic Charmander Pokédex entry.")
         explicit_form_pokedex = ruby_text("Synthetic explicit form Pokédex entry.")
+        target_category = ruby_text("Synthetic unique Seed")
+        inherited_category = ruby_text("Synthetic shared Lonely")
+        charmander_category = ruby_text("Synthetic Lizard")
+        explicit_form_category = ruby_text("Synthetic Regional Lizard")
         species_root = {
             "BULBASAUR": species_object(
-                "BULBASAUR", "BULBASAUR", 0, "Synthetic Bulbasaur", target_pokedex
+                "BULBASAUR",
+                "BULBASAUR",
+                0,
+                "Synthetic Bulbasaur",
+                target_category,
+                target_pokedex,
             ),
             "CUBONE": species_object(
-                "CUBONE", "CUBONE", 0, "Synthetic Cubone", inherited_pokedex
+                "CUBONE",
+                "CUBONE",
+                0,
+                "Synthetic Cubone",
+                inherited_category,
+                inherited_pokedex,
             ),
             "CHARMANDER": species_object(
                 "CHARMANDER",
                 "CHARMANDER",
                 0,
                 "Synthetic Charmander",
+                charmander_category,
                 charmander_pokedex,
             ),
             "CUBONE_1": species_object(
-                "CUBONE_1", "CUBONE", 1, "Synthetic Cubone", inherited_pokedex
+                "CUBONE_1",
+                "CUBONE",
+                1,
+                "Synthetic Cubone",
+                inherited_category,
+                inherited_pokedex,
             ),
             "CHARMANDER_1": species_object(
                 "CHARMANDER_1",
                 "CHARMANDER",
                 1,
                 "Synthetic Charmander",
+                explicit_form_category,
                 explicit_form_pokedex,
             ),
         }
@@ -771,6 +793,15 @@ def prepare_v21_game(
                 inherited_pokedex.text(),
                 charmander_pokedex.text(),
                 explicit_form_pokedex.text(),
+            )
+        }
+        core_bank[2] = {
+            ruby_text(message): ruby_text(message)
+            for message in (
+                target_category.text(),
+                inherited_category.text(),
+                charmander_category.text(),
+                explicit_form_category.text(),
             )
         }
     if map_metadata_validation:
@@ -868,14 +899,23 @@ def prepare_v21_game(
             b"\xef\xbb\xbf# synthetic species fixture\r\n"
             b"[BULBASAUR]\r\n"
             b"Name = Synthetic Bulbasaur\r\n"
+            b"Category = Synthetic unique Seed\r\n"
+            b"Color = Green\r\n"
+            b"GrowthRate = Medium\r\n"
             b"Pokedex = Synthetic unique Bulbasaur Pok\xc3\xa9dex entry.\r\n"
             b"\r\n"
             b"[CUBONE]\r\n"
             b"Name = Synthetic Cubone\r\n"
+            b"Category = Synthetic shared Lonely\r\n"
+            b"Color = Green\r\n"
+            b"GrowthRate = Medium\r\n"
             b"Pokedex = Synthetic inherited Cubone Pok\xc3\xa9dex entry.\r\n"
             b"\r\n"
             b"[CHARMANDER]\r\n"
             b"Name = Synthetic Charmander\r\n"
+            b"Category = Synthetic Lizard\r\n"
+            b"Color = Green\r\n"
+            b"GrowthRate = Medium\r\n"
             b"Pokedex = Synthetic Charmander Pok\xc3\xa9dex entry.\r\n"
         )
         (pbs.parent / "pokemon_forms.txt").write_bytes(
@@ -885,6 +925,7 @@ def prepare_v21_game(
             b"\r\n"
             b"[CHARMANDER,1]\r\n"
             b"FormName = Synthetic explicit form\r\n"
+            b"Category = Synthetic Regional Lizard\r\n"
             b"Pokedex = Synthetic explicit form Pok\xc3\xa9dex entry.\r\n"
         )
     if phone_validation:
