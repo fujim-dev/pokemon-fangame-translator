@@ -95,6 +95,15 @@ from essentials_species_category import (
     extract_species_category_texts,
     rebuild_species_category_payloads,
 )
+from essentials_species_form import (
+    COMPILED_SPECIES_FORM_NAME_PROOF_FORMAT,
+    SPECIES_FORM_NAME_MESSAGES_INDEX,
+    SPECIES_FORM_NAME_PBS_PROOF_FORMAT,
+    SPECIES_FORM_NAME_RUNTIME_PROOF_FORMAT,
+    build_species_form_name_proofs,
+    extract_species_form_name_texts,
+    rebuild_species_form_name_payloads,
+)
 from essentials_map_metadata import (
     COMPILED_MAP_METADATA_FILE,
     COMPILED_MAP_METADATA_PROOF_FORMAT,
@@ -224,6 +233,9 @@ V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE = (
 V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE = (
     "essentials_v21_1_species_category_candidate_v1"
 )
+V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE = (
+    "essentials_v21_1_species_form_name_candidate_v1"
+)
 V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE = (
     "essentials_v21_1_map_metadata_name_candidate_v1"
 )
@@ -260,6 +272,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
         V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE,
         V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE,
+        V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE,
         V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE,
         V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE,
         V21_1_ITEM_DESCRIPTION_VALIDATION_SCOPE,
@@ -2602,6 +2615,191 @@ def _validate_v21_1_species_category_scope(
     return applicable
 
 
+def _validate_v21_1_species_form_name_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    """Borne la preuve à un FormName explicite, unique et propre à une forme."""
+    applicable = _validate_v21_1_scope_header(
+        plan,
+        detection,
+        V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE,
+    )
+    accepted = [item for item in plan.items if item.status == "Accepté"]
+    if len(accepted) != 1 or len(applicable) != 1:
+        raise ReconstructionError(
+            "La validation Species.FormName exige exactement un texte accepté."
+        )
+    item = applicable[0]
+    expected_files = {
+        SPECIES_PBS_FILE,
+        SPECIES_FORMS_PBS_FILE,
+        COMPILED_SPECIES_FILE,
+        SPECIES_MESSAGES_FILE,
+    }
+    identity = re.fullmatch(r"([A-Z][A-Za-z0-9_]*),([1-9][0-9]*)", item.event_id)
+    if (
+        accepted[0].id_stable != item.id_stable
+        or item.type != "PBS — FormName"
+        or item.fichier.replace("\\", "/").casefold()
+        != SPECIES_FORMS_PBS_FILE.casefold()
+        or item.command != "FormName"
+        or identity is None
+        or item.event_name != item.event_id
+        or item.map_id
+        or item.page
+        or {path.replace("\\", "/").casefold() for path in plan.source_hashes}
+        != {path.casefold() for path in expected_files}
+    ):
+        raise ReconstructionError(
+            "La validation est limitée à un FormName explicite de "
+            "PBS/pokemon_forms.txt."
+        )
+    species = identity.group(1)
+    form = int(identity.group(2))
+    occurrence = _integer(item.sub_index, "Occurrence Species.FormName")
+    line_number = _integer(item.pbs_line_number, "Ligne PBS Species.FormName")
+    if (
+        occurrence != 1
+        or line_number <= 0
+        or item.pbs_encoding != "utf-8-sig"
+        or item.pbs_bom != "utf-8"
+        or item.pbs_newline != "CRLF"
+        or item.pbs_field_index
+        or item.pbs_field_count
+        or item.pbs_point_structure
+        or item.id_stable
+        != stable_id(
+            "pbs",
+            SPECIES_FORMS_PBS_FILE,
+            item.event_id,
+            item.command,
+            occurrence,
+        )
+        or item.pbs_value_sha256
+        != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
+    ):
+        raise ReconstructionError("Métadonnées PBS de Species.FormName incohérentes.")
+    unrelated_rpg = (
+        item.rpg_command_code,
+        item.rpg_command_indent,
+        item.rpg_parameter_index,
+        item.rpg_continuation_end,
+        item.rpg_dialogue_segments,
+        item.rpg_common_event_array_index,
+        item.rpg_common_event_trigger,
+        item.rpg_common_event_switch_id,
+        item.rpg_common_event_sha256,
+        item.rpg_choice_branch_command,
+        item.rpg_choice_branch_parameter_index,
+    )
+    if any(unrelated_rpg):
+        raise ReconstructionError(
+            "Species.FormName porte des métadonnées RPG sans rapport."
+        )
+    if (
+        item.pbs_compiled_file.replace("\\", "/").casefold()
+        != COMPILED_SPECIES_FILE.casefold()
+        or item.pbs_runtime_file.replace("\\", "/").casefold()
+        != SPECIES_MESSAGES_FILE.casefold()
+        or item.pbs_compiled_sha256 != plan.source_hashes.get(COMPILED_SPECIES_FILE)
+        or item.pbs_runtime_sha256 != plan.source_hashes.get(SPECIES_MESSAGES_FILE)
+        or plan.source_hashes.get(SPECIES_PBS_FILE) is None
+        or plan.source_hashes.get(SPECIES_FORMS_PBS_FILE) is None
+    ):
+        raise ReconstructionError(
+            "Les quatre empreintes Species.FormName ne correspondent pas au plan."
+        )
+    try:
+        root = Path(plan.game_root)
+        proofs = build_species_form_name_proofs(
+            read_stable_bytes(_resolve_contained_path(root, SPECIES_PBS_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, SPECIES_FORMS_PBS_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, COMPILED_SPECIES_FILE)),
+            read_stable_bytes(_resolve_contained_path(root, SPECIES_MESSAGES_FILE)),
+        )
+        expected = proofs[(item.event_id, item.command, occurrence)]
+        pbs_proof = json.loads(item.pbs_structure)
+        compiled_proof = json.loads(item.pbs_compiled_structure)
+        runtime_proof = json.loads(item.pbs_runtime_structure)
+        compiled_path = json.loads(item.pbs_compiled_path)
+        runtime_path = json.loads(item.pbs_runtime_path)
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        SpeciesIntegrityError,
+    ) as exc:
+        raise ReconstructionError(
+            "La preuve structurelle Species.FormName est illisible, héritée ou obsolète."
+        ) from exc
+    if (
+        expected.source != item.source
+        or expected.pbs_structure != item.pbs_structure
+        or expected.compiled_path != item.pbs_compiled_path
+        or expected.compiled_structure != item.pbs_compiled_structure
+        or expected.runtime_path != item.pbs_runtime_path
+        or expected.runtime_structure != item.pbs_runtime_structure
+        or pbs_proof.get("format") != SPECIES_FORM_NAME_PBS_PROOF_FORMAT
+        or pbs_proof.get("file_sha256")
+        != plan.source_hashes[SPECIES_FORMS_PBS_FILE]
+        or pbs_proof.get("base_file_sha256")
+        != plan.source_hashes[SPECIES_PBS_FILE]
+        or pbs_proof.get("key") != "FormName"
+        or pbs_proof.get("species") != species
+        or pbs_proof.get("form") != form
+        or pbs_proof.get("target_is_explicit") is not True
+        or pbs_proof.get("form_name_is_inherited") is not False
+        or pbs_proof.get("source_usage_count") != 1
+        or not isinstance(pbs_proof.get("base_section_count"), int)
+        or pbs_proof.get("base_section_count", 0) <= 0
+        or not isinstance(pbs_proof.get("form_section_count"), int)
+        or pbs_proof.get("form_section_count", 0) <= 0
+        or not isinstance(pbs_proof.get("explicit_form_name_count"), int)
+        or not isinstance(pbs_proof.get("missing_form_name_count"), int)
+        or pbs_proof.get("explicit_form_name_count", 0)
+        + pbs_proof.get("missing_form_name_count", 0)
+        != pbs_proof.get("form_section_count")
+        or compiled_proof.get("format")
+        != COMPILED_SPECIES_FORM_NAME_PROOF_FORMAT
+        or compiled_proof.get("file_sha256") != item.pbs_compiled_sha256
+        or compiled_proof.get("base_species_count")
+        != pbs_proof.get("base_section_count")
+        or compiled_proof.get("form_count") != pbs_proof.get("form_section_count")
+        or compiled_proof.get("species") != species
+        or compiled_proof.get("form") != form
+        or compiled_proof.get("field") != "@real_form_name"
+        or compiled_proof.get("section_index")
+        != pbs_proof.get("compiled_section_index")
+        or runtime_proof.get("format") != SPECIES_FORM_NAME_RUNTIME_PROOF_FORMAT
+        or runtime_proof.get("file_sha256") != item.pbs_runtime_sha256
+        or runtime_proof.get("message_type_index")
+        != SPECIES_FORM_NAME_MESSAGES_INDEX
+        or runtime_proof.get("target_value_equals_source") is not True
+        or runtime_proof.get("source_usage_count") != 1
+        or compiled_proof.get("target_reference_count") != 1
+        or runtime_proof.get("target_key_reference_count") != 1
+        or runtime_proof.get("target_value_reference_count") != 1
+        or compiled_proof.get("compiled_path") != compiled_path
+        or runtime_proof.get("runtime_path") != runtime_path
+    ):
+        raise ReconstructionError(
+            "La preuve pokemon/pokemon_forms/species.dat/SPECIES_FORM_NAMES "
+            "ne correspond plus exactement à cette forme."
+        )
+    if (
+        not item.translation
+        or any(character in item.translation for character in ("\r", "\n"))
+        or extract_protected(item.source) != extract_protected(item.translation)
+    ):
+        raise ReconstructionError(
+            "La traduction Species.FormName ne préserve pas sa ligne et ses commandes."
+        )
+    return applicable
+
+
 def _validate_v21_1_map_metadata_name_scope(
     plan: ReconstructionPlan,
     detection,
@@ -2794,6 +2992,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_species_pokedex_scope(plan, detection)
     if plan.validation_scope == V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE:
         return _validate_v21_1_species_category_scope(plan, detection)
+    if plan.validation_scope == V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE:
+        return _validate_v21_1_species_form_name_scope(plan, detection)
     if plan.validation_scope == V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE:
         return _validate_v21_1_map_metadata_name_scope(plan, detection)
     if plan.validation_scope == V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE:
@@ -3121,6 +3321,7 @@ def _build_plan_verified_body(
     if validation_scope in {
         V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE,
         V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE,
+        V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE,
     }:
         applicable = [item for item in plan.items if item.decision == "applicable"]
         if len(applicable) == 1:
@@ -3131,8 +3332,13 @@ def _build_plan_verified_body(
                 and item.pbs_runtime_file.replace("\\", "/").casefold()
                 == SPECIES_MESSAGES_FILE.casefold()
             ):
+                companion_pbs = (
+                    SPECIES_PBS_FILE
+                    if validation_scope == V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE
+                    else SPECIES_FORMS_PBS_FILE
+                )
                 for relative in (
-                    SPECIES_FORMS_PBS_FILE,
+                    companion_pbs,
                     COMPILED_SPECIES_FILE,
                     SPECIES_MESSAGES_FILE,
                 ):
@@ -3408,6 +3614,18 @@ def build_v21_1_species_category_validation_plan(
         game_root,
         csv_path,
         V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_species_form_name_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un FormName explicite et unique v21.1."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE,
     )
 
 
@@ -4627,6 +4845,37 @@ def _build_v21_1_species_category_payloads(
         ) from exc
 
 
+def _build_v21_1_species_form_name_payloads(
+    source_root: Path,
+    item: PlanItem,
+) -> dict[str, bytes]:
+    try:
+        return rebuild_species_form_name_payloads(
+            read_stable_bytes(_resolve_contained_path(source_root, SPECIES_PBS_FILE)),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, SPECIES_FORMS_PBS_FILE)
+            ),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, COMPILED_SPECIES_FILE)
+            ),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, SPECIES_MESSAGES_FILE)
+            ),
+            section=item.event_id,
+            source=item.source,
+            translation=item.translation,
+            pbs_structure=item.pbs_structure,
+            compiled_path=item.pbs_compiled_path,
+            compiled_structure=item.pbs_compiled_structure,
+            runtime_path=item.pbs_runtime_path,
+            runtime_structure=item.pbs_runtime_structure,
+        )
+    except (OSError, SpeciesIntegrityError) as exc:
+        raise ReconstructionError(
+            "La reconstruction privée de Species.FormName a été refusée."
+        ) from exc
+
+
 def _build_v21_1_map_metadata_name_payloads(
     source_root: Path,
     item: PlanItem,
@@ -4755,6 +5004,14 @@ def _expected_v21_1_private_payloads(
                 "La reconstruction Species.Category exige une occurrence unique."
             )
         return _build_v21_1_species_category_payloads(
+            source_root, validation_items[0]
+        )
+    if plan.validation_scope == V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE:
+        if len(validation_items) != 1:
+            raise ReconstructionError(
+                "La reconstruction Species.FormName exige une occurrence unique."
+            )
+        return _build_v21_1_species_form_name_payloads(
             source_root, validation_items[0]
         )
     if plan.validation_scope == V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE:
@@ -5009,6 +5266,13 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                         )
                     _build_v21_1_species_category_payloads(game_root, items[0])
                     continue
+                if plan.validation_scope == V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE:
+                    if len(items) != 1:
+                        raise ReconstructionError(
+                            "La simulation Species.FormName exige une occurrence unique."
+                        )
+                    _build_v21_1_species_form_name_payloads(game_root, items[0])
+                    continue
                 if plan.validation_scope == V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE:
                     if len(items) != 1:
                         raise ReconstructionError(
@@ -5243,6 +5507,7 @@ def _reconstruct_copy_verified_body(
     if plan.validation_scope in {
         V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE,
         V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE,
+        V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE,
     }:
         allowed_changed[COMPILED_SPECIES_FILE] = list(validation_items)
         allowed_changed[SPECIES_MESSAGES_FILE] = list(validation_items)
@@ -5272,6 +5537,7 @@ def _reconstruct_copy_verified_body(
                 V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
                 V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE,
                 V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE,
+                V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE,
                 V21_1_MAP_METADATA_NAME_VALIDATION_SCOPE,
                 V21_1_MOVE_DESCRIPTION_VALIDATION_SCOPE,
                 V21_1_ITEM_DESCRIPTION_VALIDATION_SCOPE,
@@ -5287,6 +5553,10 @@ def _reconstruct_copy_verified_body(
                 is_species_category = (
                     plan.validation_scope
                     == V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE
+                )
+                is_species_form_name = (
+                    plan.validation_scope
+                    == V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE
                 )
                 is_map_metadata = (
                     plan.validation_scope
@@ -5318,7 +5588,11 @@ def _reconstruct_copy_verified_body(
                                     else (
                                         ITEM_PBS_FILE
                                         if is_item
-                                        else SPECIES_PBS_FILE
+                                        else (
+                                            SPECIES_FORMS_PBS_FILE
+                                            if is_species_form_name
+                                            else SPECIES_PBS_FILE
+                                        )
                                     )
                                 )
                             )
@@ -5344,9 +5618,13 @@ def _reconstruct_copy_verified_body(
                                         "Item.Description"
                                         if is_item
                                         else (
-                                            "Species.Category"
-                                            if is_species_category
-                                            else "Species.Pokedex"
+                                            "Species.FormName"
+                                            if is_species_form_name
+                                            else (
+                                                "Species.Category"
+                                                if is_species_category
+                                                else "Species.Pokedex"
+                                            )
                                         )
                                     )
                                 )
@@ -5469,6 +5747,28 @@ def _reconstruct_copy_verified_body(
                         ),
                         read_stable_bytes(
                             _resolve_contained_path(target_root, ITEM_MESSAGES_FILE)
+                        ),
+                        section=items[0].event_id,
+                    )
+                elif is_species_form_name:
+                    translated = extract_species_form_name_texts(
+                        read_stable_bytes(
+                            _resolve_contained_path(target_root, SPECIES_PBS_FILE)
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(
+                                target_root, SPECIES_FORMS_PBS_FILE
+                            )
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(
+                                target_root, COMPILED_SPECIES_FILE
+                            )
+                        ),
+                        read_stable_bytes(
+                            _resolve_contained_path(
+                                target_root, SPECIES_MESSAGES_FILE
+                            )
                         ),
                         section=items[0].event_id,
                     )

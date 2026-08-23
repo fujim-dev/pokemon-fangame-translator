@@ -667,6 +667,31 @@ Déjà en place :
   observée. Cette preuve ne couvre aucun `Species.Name`, `Species.Pokedex`,
   `FormName`, autre espèce ou forme, et aucune capacité publique ne change ;
 
+- `essentials_species_form.py` corrèle désormais, sans exécuter Ruby, les 339
+  formes de `PBS/pokemon_forms.txt` avec les objets `GameData::Species` de
+  `Data/species.dat`, puis avec `SPECIES_FORM_NAMES` à l'index 4 de
+  `Data/messages_core.dat`. L'inventaire réel distingue 284 `FormName`
+  explicites de 55 valeurs absentes compilées à `nil` : une valeur absente n'est
+  jamais héritée de l'espèce de base ni présentée comme une cible. Les libellés
+  purement ponctuels `?` et `!` restent hors du CSV traduisible, qui expose donc
+  282 de ces occurrences. Parmi les valeurs explicites, 181 satisfont les
+  critères unitaires stricts de source, d'objet compilé et de banque ;
+- une dix-septième portée privée accepte exactement un `FormName` explicite,
+  unique, non partagé et propre à une identité espèce/forme. Elle surveille
+  `PBS/pokemon.txt` comme source de l'espèce de base, mais publie uniquement
+  `PBS/pokemon_forms.txt`, `Data/species.dat` et `Data/messages_core.dat` dans
+  une transaction avec rollback. Le round-trip réel de `PICHU,2 / FormName` a
+  conservé les 29 662 occurrences utiles, réextrait le marqueur exact dans les
+  trois représentations et laissé la référence ainsi que la copie de travail
+  inchangées. La validation humaine, volontairement assistée par le mode Debug
+  pour rendre la forme accessible sans progression longue, a confirmé le
+  marqueur complet dans `Set form` puis dans la page `Forms` du Pokédex, l'espèce
+  `Pichu` inchangée et le retour normal au jeu. Cette observation ne démontre pas
+  l'obtention naturelle de la forme et reste strictement limitée à cette
+  occurrence : aucun autre `FormName`, champ hérité, `Species.Name`,
+  `Species.Category`, `Species.Pokedex` ou autre champ de `pokemon_forms.txt`
+  n'en est déduit. `RECONSTRUCT` v21.1 public reste désactivé ;
+
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;

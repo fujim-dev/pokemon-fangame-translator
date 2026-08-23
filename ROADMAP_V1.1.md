@@ -359,6 +359,22 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   limitée à cette seule `Species.Category` réelle et n'autorise ni les autres
   champs/espèces/formes ni `RECONSTRUCT` public.
 
+- le lot Species Forms distingue les 284 `FormName` explicites des 55 valeurs
+  absentes compilées à `nil` parmi les 339 formes réelles. Une absence n'est pas
+  un héritage traduisible ; les libellés ponctuels `?` et `!` restent exclus du
+  CSV et 181 valeurs explicites satisfont les critères unitaires stricts dans
+  le PBS, `Data/species.dat` et `SPECIES_FORM_NAMES` ;
+- une porte privée strictement unitaire a synchronisé `PICHU,2 / FormName` dans
+  `PBS/pokemon_forms.txt`, `Data/species.dat` et `Data/messages_core.dat`, avec
+  surveillance de `PBS/pokemon.txt`, publication transactionnelle et rollback.
+  Le round-trip réel a conservé 29 662 occurrences, réextrait la chaîne exacte
+  et laissé la référence ainsi que le travail inchangés. Une validation humaine
+  assistée par le mode Debug a confirmé le marqueur complet dans le sélecteur de
+  forme puis dans la page Forms du Pokédex, l'espèce Pichu inchangée et le retour
+  normal au jeu. Cette preuve ne démontre pas l'obtention naturelle de la forme
+  et ne couvre aucun autre `FormName`, champ hérité, champ Species ou champ de
+  `pokemon_forms.txt`. `RECONSTRUCT` v21.1 public reste désactivé.
+
 ## Phase 2 — Interface pilotée par capacités
 
 ### Objectifs

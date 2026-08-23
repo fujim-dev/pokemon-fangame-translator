@@ -685,13 +685,15 @@ def prepare_v21_game(
             name: str,
             category_value: RubyString,
             pokedex_value: RubyString,
+            *,
+            form_name: RubyString | None = None,
         ) -> RubyObject:
             values = {
                 "@id": identifier,
                 "@species": species,
                 "@form": form,
                 "@real_name": ruby_text(name),
-                "@real_form_name": None,
+                "@real_form_name": form_name,
                 "@real_category": category_value,
                 "@real_pokedex_entry": pokedex_value,
                 "@pokedex_form": form,
@@ -742,6 +744,8 @@ def prepare_v21_game(
         inherited_category = ruby_text("Synthetic shared Lonely")
         charmander_category = ruby_text("Synthetic Lizard")
         explicit_form_category = ruby_text("Synthetic Regional Lizard")
+        secondary_form_name = ruby_text("Synthetic inherited form")
+        target_form_name = ruby_text("Synthetic explicit form")
         species_root = {
             "BULBASAUR": species_object(
                 "BULBASAUR",
@@ -774,6 +778,7 @@ def prepare_v21_game(
                 "Synthetic Cubone",
                 inherited_category,
                 inherited_pokedex,
+                form_name=secondary_form_name,
             ),
             "CHARMANDER_1": species_object(
                 "CHARMANDER_1",
@@ -782,6 +787,7 @@ def prepare_v21_game(
                 "Synthetic Charmander",
                 explicit_form_category,
                 explicit_form_pokedex,
+                form_name=target_form_name,
             ),
         }
         (data / "species.dat").write_bytes(dumps(species_root))
@@ -802,6 +808,13 @@ def prepare_v21_game(
                 inherited_category.text(),
                 charmander_category.text(),
                 explicit_form_category.text(),
+            )
+        }
+        core_bank[4] = {
+            ruby_text(message): ruby_text(message)
+            for message in (
+                secondary_form_name.text(),
+                target_form_name.text(),
             )
         }
     if map_metadata_validation:

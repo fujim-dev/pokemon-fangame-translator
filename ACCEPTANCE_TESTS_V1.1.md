@@ -765,6 +765,50 @@ Cette preuve est strictement limitée à cette occurrence réelle de
 `FormName`, autre espèce ou forme. Elle ne modifie pas la règle technique de
 `moves.txt/Category` et n'active pas `RECONSTRUCT` v21.1 public.
 
+### AC-136 — Premier Species.FormName v21.1 synchronisé
+
+L'analyse strictement statique relie les 339 formes de
+`PBS/pokemon_forms.txt` aux objets `GameData::Species` qui suivent les 898
+espèces de base dans `Data/species.dat`, puis à la banque core
+`SPECIES_FORM_NAMES` située à l'index 4 de `Data/messages_core.dat`. Elle
+distingue 284 `FormName` explicites de 55 absences compilées à `nil`. Une valeur
+absente n'est pas héritée de l'espèce de base et ne peut jamais devenir une
+cible de reconstruction. Les deux libellés purement ponctuels `?` et `!` restent
+hors extraction traduisible, soit 282 lignes `FormName` dans le CSV. Les
+`Category` et `Pokedex` propres aux formes conservent leurs chemins séparés ; les
+autres clés de `pokemon_forms.txt` restent techniques.
+
+Une portée privée accepte exactement un `FormName` explicite, unique, non
+partagé et propre à l'identité espèce + numéro de forme + champ. Elle surveille
+les quatre empreintes de `PBS/pokemon.txt`, `PBS/pokemon_forms.txt`,
+`Data/species.dat` et `Data/messages_core.dat`, ainsi que l'ordre des 1 237
+objets, les 42 ivars et types Marshal, le chemin de banque et les graphes hors
+cible. Elle publie uniquement les trois fichiers réellement modifiés dans un lot
+transactionnel avec rollback. Une valeur absente/héritée, un autre champ, une
+autre forme, un texte partagé, une collision, une preuve ou une source modifiée
+après planification bloque l'opération.
+
+Le round-trip réel de l'unique cible `PICHU,2 / FormName` a conservé les 29 662
+occurrences utiles, traversé le Studio, sa sauvegarde et sa reprise, puis modifié
+uniquement `PBS/pokemon_forms.txt`, `Data/species.dat` et
+`Data/messages_core.dat`. La réextraction retrouve le marqueur complet sous la
+même identité stable dans les trois représentations ; la référence et la copie
+de travail restent inchangées et aucun fichier hors plan ne diffère.
+
+La validation humaine a été effectuée en mode Debug uniquement afin de rendre la
+forme accessible sans progression artificiellement longue. Le sélecteur
+`Species/form...` → `Set form` a affiché intégralement
+`2: [TEST PFT v21.1 SPECIES FORM NAME]`. Après sélection, la page
+`Summary` → `View Pokédex` → `Forms` a affiché intégralement le même marqueur ;
+l'espèce est restée `Pichu`, la navigation est restée fonctionnelle et le retour
+au jeu s'est effectué sans erreur. Ce contrôle assisté ne démontre pas
+l'obtention naturelle de cette forme dans le scénario normal.
+
+Cette preuve reste strictement limitée à cette occurrence réelle de
+`PICHU,2 / FormName`. Elle ne couvre aucune autre forme, aucun `Species.Name`,
+`Species.Category`, `Species.Pokedex`, valeur héritée ni autre champ de
+`pokemon_forms.txt`. `RECONSTRUCT` v21.1 public reste désactivé.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté
