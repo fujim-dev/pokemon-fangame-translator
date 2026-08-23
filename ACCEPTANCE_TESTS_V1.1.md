@@ -809,6 +809,43 @@ Cette preuve reste strictement limitée à cette occurrence réelle de
 `Species.Category`, `Species.Pokedex`, valeur héritée ni autre champ de
 `pokemon_forms.txt`. `RECONSTRUCT` v21.1 public reste désactivé.
 
+### AC-137 — Premier Ability.Name v21.1 synchronisé
+
+L'analyse strictement statique relie les 267 `Name` de `PBS/abilities.txt` aux
+objets `GameData::Ability` de `Data/abilities.dat`, puis à `ABILITY_NAMES` à
+l'index 10 de `Data/messages_core.dat`. Les 267 occurrences représentent 266
+noms uniques. Une valeur est partagée par deux capacités et dix autres noms
+possèdent une référence Marshal externe à leur entrée de banque : ces douze
+occurrences restent volontairement bloquées. Les 255 autres satisfont les
+critères unitaires stricts. `Description` utilise séparément l'ivar
+`@real_description` et la banque `ABILITY_DESCRIPTIONS` à l'index 11 ; `Flags`,
+`id` et suffixe PBS restent techniques et immuables.
+
+Une portée privée accepte exactement un `Ability.Name` unique, sans partage ni
+alias Marshal. Elle vérifie la provenance, l'identité Ability/champ, les trois
+empreintes, l'ordre PBS, les cinq ivars et leurs types, les graphes hors cible
+et le chemin exact dans `ABILITY_NAMES`. Elle refuse un champ technique, une
+seconde traduction `Description`, une identité ou provenance différente, une
+source modifiée après planification et toute collision. Les trois fichiers sont
+publiés transactionnellement avec rollback.
+
+Le round-trip réel de `OVERGROW / Name` a modifié uniquement
+`PBS/abilities.txt`, `Data/abilities.dat` et `Data/messages_core.dat`. La
+réextraction retrouve le marqueur complet sous le même identifiant stable dans
+les trois représentations. La description, les flags, l'identifiant, le suffixe
+PBS, la banque des descriptions, la référence et la copie de travail restent
+inchangés ; le candidat démarre sans erreur immédiate et ce démarrage ne modifie
+aucun fichier.
+
+La validation humaine sur Bulbasaur a confirmé le préfixe visible
+`[PFT v21.1 NAME...` dans le champ Ability du Summary. La fin du marqueur, hors
+de la zone capturée, n'est pas revendiquée comme observée. La description est
+restée exactement `Powers up Grass-type moves in a pinch.`, Bulbasaur est resté
+inchangé, l'écran Summary et le retour au jeu ont fonctionné sans erreur. Cette
+preuve est strictement limitée à `OVERGROW / Name` : elle ne couvre aucune autre
+Ability et ne constitue pas une nouvelle preuve pour `Ability.Description`.
+`RECONSTRUCT` v21.1 public reste désactivé.
+
 ## 4. Analyse profonde
 
 ### AC-201 — Aucun script Ruby exécuté

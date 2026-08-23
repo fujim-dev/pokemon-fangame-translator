@@ -413,16 +413,20 @@ def prepare_v21_game(
             ),
             "BLAZE": ability_object(
                 "BLAZE",
-                "Synthetic Blaze",
+                "Synthetic Shared Ability",
                 shared_description,
                 ("FasterEggHatching",),
             ),
             "TORRENT": ability_object(
-                "TORRENT", "Synthetic Torrent", shared_description
+                "TORRENT", "Synthetic Shared Ability", shared_description
             ),
         }
         (data / "abilities.dat").write_bytes(dumps(ability_root))
         core_bank = [{} for _index in range(31)]
+        core_bank[10] = {
+            ruby_text("Synthetic Overgrow"): ruby_text("Synthetic Overgrow"),
+            ruby_text("Synthetic Shared Ability"): ruby_text("Synthetic Shared Ability"),
+        }
         core_bank[11] = {
             ruby_text(target_description): ruby_text(target_description),
             ruby_text(shared_description): ruby_text(shared_description),
@@ -981,12 +985,12 @@ def prepare_v21_game(
             b"Description = Synthetic unique ability description.\r\n"
             b"\r\n"
             b"[BLAZE]\r\n"
-            b"Name = Synthetic Blaze\r\n"
+            b"Name = Synthetic Shared Ability\r\n"
             b"Description = Synthetic shared ability description.\r\n"
             b"Flags = FasterEggHatching\r\n"
             b"\r\n"
             b"[TORRENT]\r\n"
-            b"Name = Synthetic Torrent\r\n"
+            b"Name = Synthetic Shared Ability\r\n"
             b"Description = Synthetic shared ability description.\r\n"
         )
     if move_validation:

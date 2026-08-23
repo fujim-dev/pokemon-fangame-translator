@@ -692,6 +692,26 @@ Déjà en place :
   `Species.Category`, `Species.Pokedex` ou autre champ de `pokemon_forms.txt`
   n'en est déduit. `RECONSTRUCT` v21.1 public reste désactivé ;
 
+- `essentials_ability.py` couvre désormais aussi `Ability.Name` avec des
+  invariants distincts de `Ability.Description` : les 267 noms PBS et compilés
+  sont reliés à `ABILITY_NAMES` à l'index 10, tandis que les descriptions
+  restent liées séparément à l'index 11. Les 267 occurrences contiennent 266
+  noms uniques ; une valeur partagée par deux capacités et dix alias Marshal de
+  banque bloquent douze cibles, laissant 255 occurrences unitaires admissibles.
+  `Flags`, identifiant et suffixe PBS restent techniques et immuables ;
+- une dix-huitième portée privée accepte exactement un nom de capacité unique,
+  vérifie provenance, identité, ivars, types, chemins, références et graphes
+  hors cible, puis publie `PBS/abilities.txt`, `Data/abilities.dat` et
+  `Data/messages_core.dat` transactionnellement avec rollback. Le round-trip
+  réel de `OVERGROW / Name` a conservé l'identifiant stable, la description, les
+  flags et tous les fichiers hors plan, puis réextrait le marqueur complet dans
+  les trois représentations. La validation humaine a confirmé uniquement le
+  préfixe visible `[PFT v21.1 NAME...`, la description exacte
+  `Powers up Grass-type moves in a pinch.`, Bulbasaur inchangé et le retour
+  normal au jeu. La fin du marqueur hors capture n'est pas revendiquée. Cette
+  preuve ne couvre aucune autre Ability et ne généralise rien à
+  `Ability.Description`; `RECONSTRUCT` v21.1 public reste désactivé ;
+
 Encore partiel ou pas encore en place :
 
 - branches dynamiques et références statiques avancées de l'analyse profonde ;

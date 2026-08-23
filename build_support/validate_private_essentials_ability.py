@@ -75,6 +75,8 @@ def _publish_project(
     detection,
     work: Path,
     project: Path,
+    *,
+    label: str = "Ability.Description",
 ) -> tuple[list[dict[str, str]], list[str]]:
     rows, preserved, fields = merge_project_rows(
         [dict(row) for row in extraction.rows],
@@ -85,7 +87,7 @@ def _publish_project(
     csv_payload = serialize_project_csv(rows, fields)
     csv_sha256 = hashlib.sha256(csv_payload).hexdigest()
     report_payload = (
-        "PFT v21.1 — validation privée Ability.Description\n"
+        f"PFT v21.1 — validation privée {label}\n"
         f"Occurrences structurées : {len(rows)}\n"
         "Aucun texte extrait n'est reproduit dans ce rapport.\n"
     ).encode("utf-8")

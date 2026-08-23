@@ -63,15 +63,21 @@ from essentials_trainer import (
 )
 from essentials_ability import (
     ABILITY_MESSAGES_FILE,
+    ABILITY_NAME_PBS_PROOF_FORMAT,
+    ABILITY_NAME_RUNTIME_PROOF_FORMAT,
     ABILITY_PBS_FILE,
     ABILITY_PBS_PROOF_FORMAT,
     ABILITY_RUNTIME_PROOF_FORMAT,
     COMPILED_ABILITY_FILE,
+    COMPILED_ABILITY_NAME_PROOF_FORMAT,
     COMPILED_ABILITY_PROOF_FORMAT,
     AbilityIntegrityError,
     build_ability_description_proofs,
+    build_ability_name_proofs,
     extract_ability_description_texts,
+    extract_ability_name_texts,
     rebuild_ability_description_payloads,
+    rebuild_ability_name_payloads,
 )
 from essentials_species import (
     COMPILED_SPECIES_FILE,
@@ -227,6 +233,9 @@ V21_1_TRAINER_LOSE_VALIDATION_SCOPE = (
 V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE = (
     "essentials_v21_1_ability_description_candidate_v1"
 )
+V21_1_ABILITY_NAME_VALIDATION_SCOPE = (
+    "essentials_v21_1_ability_name_candidate_v1"
+)
 V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE = (
     "essentials_v21_1_species_pokedex_candidate_v1"
 )
@@ -270,6 +279,7 @@ V21_1_PRIVATE_VALIDATION_SCOPES = frozenset(
         V21_1_PHONE_VALIDATION_SCOPE,
         V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
         V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+        V21_1_ABILITY_NAME_VALIDATION_SCOPE,
         V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE,
         V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE,
         V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE,
@@ -1818,20 +1828,35 @@ def _validate_v21_1_trainer_lose_scope(
     return applicable
 
 
-def _validate_v21_1_ability_description_scope(
+def _validate_v21_1_ability_scope(
     plan: ReconstructionPlan,
     detection,
+    *,
+    field: str,
+    validation_scope: str,
 ) -> list[PlanItem]:
-    """Borne la preuve à une description de capacité unique et non partagée."""
+    """Borne la preuve à un seul champ textuel Ability non partagé."""
+    if field == "Name":
+        pbs_format = ABILITY_NAME_PBS_PROOF_FORMAT
+        compiled_format = COMPILED_ABILITY_NAME_PROOF_FORMAT
+        runtime_format = ABILITY_NAME_RUNTIME_PROOF_FORMAT
+        proof_builder = build_ability_name_proofs
+    elif field == "Description":
+        pbs_format = ABILITY_PBS_PROOF_FORMAT
+        compiled_format = COMPILED_ABILITY_PROOF_FORMAT
+        runtime_format = ABILITY_RUNTIME_PROOF_FORMAT
+        proof_builder = build_ability_description_proofs
+    else:
+        raise ReconstructionError("Champ Ability privé inconnu.")
     applicable = _validate_v21_1_scope_header(
         plan,
         detection,
-        V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+        validation_scope,
     )
     accepted = [item for item in plan.items if item.status == "Accepté"]
     if len(accepted) != 1 or len(applicable) != 1:
         raise ReconstructionError(
-            "La validation Ability.Description exige exactement un texte accepté."
+            f"La validation Ability.{field} exige exactement un texte accepté."
         )
     item = applicable[0]
     expected_files = {
@@ -1841,10 +1866,10 @@ def _validate_v21_1_ability_description_scope(
     }
     if (
         accepted[0].id_stable != item.id_stable
-        or item.type != "PBS — Description"
+        or item.type != f"PBS — {field}"
         or item.fichier.replace("\\", "/").casefold()
         != ABILITY_PBS_FILE.casefold()
-        or item.command != "Description"
+        or item.command != field
         or not item.event_id
         or item.event_name != item.event_id
         or item.map_id
@@ -1853,10 +1878,10 @@ def _validate_v21_1_ability_description_scope(
         != {path.casefold() for path in expected_files}
     ):
         raise ReconstructionError(
-            "La validation est limitée à une description de PBS/abilities.txt."
+            f"La validation est limitée à Ability.{field} dans PBS/abilities.txt."
         )
-    occurrence = _integer(item.sub_index, "Occurrence Ability.Description")
-    line_number = _integer(item.pbs_line_number, "Ligne PBS Ability.Description")
+    occurrence = _integer(item.sub_index, f"Occurrence Ability.{field}")
+    line_number = _integer(item.pbs_line_number, f"Ligne PBS Ability.{field}")
     if (
         occurrence != 1
         or line_number <= 0
@@ -1878,7 +1903,7 @@ def _validate_v21_1_ability_description_scope(
         != hashlib.sha256(item.source.encode("utf-8")).hexdigest()
     ):
         raise ReconstructionError(
-            "Métadonnées PBS de la description de capacité incohérentes."
+            f"Métadonnées PBS d'Ability.{field} incohérentes."
         )
     unrelated_rpg = (
         item.rpg_command_code,
@@ -1895,7 +1920,7 @@ def _validate_v21_1_ability_description_scope(
     )
     if any(unrelated_rpg):
         raise ReconstructionError(
-            "La description de capacité porte des métadonnées RPG sans rapport."
+            f"Ability.{field} porte des métadonnées RPG sans rapport."
         )
     if (
         item.pbs_compiled_file.replace("\\", "/").casefold()
@@ -1907,11 +1932,11 @@ def _validate_v21_1_ability_description_scope(
         or plan.source_hashes.get(ABILITY_PBS_FILE) is None
     ):
         raise ReconstructionError(
-            "Les trois empreintes Ability.Description ne correspondent pas au plan."
+            f"Les trois empreintes Ability.{field} ne correspondent pas au plan."
         )
     try:
         root = Path(plan.game_root)
-        proofs = build_ability_description_proofs(
+        proofs = proof_builder(
             read_stable_bytes(_resolve_contained_path(root, ABILITY_PBS_FILE)),
             read_stable_bytes(_resolve_contained_path(root, COMPILED_ABILITY_FILE)),
             read_stable_bytes(_resolve_contained_path(root, ABILITY_MESSAGES_FILE)),
@@ -1931,7 +1956,7 @@ def _validate_v21_1_ability_description_scope(
         AbilityIntegrityError,
     ) as exc:
         raise ReconstructionError(
-            "La preuve structurelle Ability.Description est illisible ou obsolète."
+            f"La preuve structurelle Ability.{field} est illisible ou obsolète."
         ) from exc
     if (
         expected.source != item.source
@@ -1940,12 +1965,15 @@ def _validate_v21_1_ability_description_scope(
         or expected.compiled_structure != item.pbs_compiled_structure
         or expected.runtime_path != item.pbs_runtime_path
         or expected.runtime_structure != item.pbs_runtime_structure
-        or pbs_proof.get("format") != ABILITY_PBS_PROOF_FORMAT
+        or pbs_proof.get("format") != pbs_format
+        or pbs_proof.get("key") != field
         or pbs_proof.get("file_sha256") != plan.source_hashes[ABILITY_PBS_FILE]
         or pbs_proof.get("source_usage_count") != 1
-        or compiled_proof.get("format") != COMPILED_ABILITY_PROOF_FORMAT
+        or compiled_proof.get("format") != compiled_format
+        or compiled_proof.get("field") != field
         or compiled_proof.get("file_sha256") != item.pbs_compiled_sha256
-        or runtime_proof.get("format") != ABILITY_RUNTIME_PROOF_FORMAT
+        or runtime_proof.get("format") != runtime_format
+        or runtime_proof.get("field") != field
         or runtime_proof.get("file_sha256") != item.pbs_runtime_sha256
         or runtime_proof.get("target_value_equals_source") is not True
         or runtime_proof.get("source_usage_count") != 1
@@ -1956,7 +1984,7 @@ def _validate_v21_1_ability_description_scope(
         or runtime_proof.get("runtime_path") != runtime_path
     ):
         raise ReconstructionError(
-            "La preuve PBS/abilities.dat/ABILITY_DESCRIPTIONS ne correspond plus."
+            f"La preuve PBS/abilities.dat/banque Ability.{field} ne correspond plus."
         )
     if (
         not item.translation
@@ -1967,6 +1995,30 @@ def _validate_v21_1_ability_description_scope(
             "La traduction de capacité ne préserve pas sa ligne et ses commandes."
         )
     return applicable
+
+
+def _validate_v21_1_ability_description_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    return _validate_v21_1_ability_scope(
+        plan,
+        detection,
+        field="Description",
+        validation_scope=V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+    )
+
+
+def _validate_v21_1_ability_name_scope(
+    plan: ReconstructionPlan,
+    detection,
+) -> list[PlanItem]:
+    return _validate_v21_1_ability_scope(
+        plan,
+        detection,
+        field="Name",
+        validation_scope=V21_1_ABILITY_NAME_VALIDATION_SCOPE,
+    )
 
 
 def _validate_v21_1_move_description_scope(
@@ -2988,6 +3040,8 @@ def _validate_v21_1_private_scope(
         return _validate_v21_1_trainer_lose_scope(plan, detection)
     if plan.validation_scope == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE:
         return _validate_v21_1_ability_description_scope(plan, detection)
+    if plan.validation_scope == V21_1_ABILITY_NAME_VALIDATION_SCOPE:
+        return _validate_v21_1_ability_name_scope(plan, detection)
     if plan.validation_scope == V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE:
         return _validate_v21_1_species_pokedex_scope(plan, detection)
     if plan.validation_scope == V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE:
@@ -3304,7 +3358,10 @@ def _build_plan_verified_body(
                     plan.source_hashes[relative] = sha256_file(
                         _resolve_contained_path(game_root, relative)
                     )
-    if validation_scope == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE:
+    if validation_scope in {
+        V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+        V21_1_ABILITY_NAME_VALIDATION_SCOPE,
+    }:
         applicable = [item for item in plan.items if item.decision == "applicable"]
         if len(applicable) == 1:
             item = applicable[0]
@@ -3590,6 +3647,18 @@ def build_v21_1_ability_description_validation_plan(
         game_root,
         csv_path,
         V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+    )
+
+
+def build_v21_1_ability_name_validation_plan(
+    game_root: Path,
+    csv_path: Path,
+) -> ReconstructionPlan:
+    """Construit la preuve privée d'un nom de capacité unique v21.1."""
+    return _build_v21_1_private_validation_plan(
+        game_root,
+        csv_path,
+        V21_1_ABILITY_NAME_VALIDATION_SCOPE,
     )
 
 
@@ -4783,6 +4852,34 @@ def _build_v21_1_ability_description_payloads(
         ) from exc
 
 
+def _build_v21_1_ability_name_payloads(
+    source_root: Path,
+    item: PlanItem,
+) -> dict[str, bytes]:
+    try:
+        return rebuild_ability_name_payloads(
+            read_stable_bytes(_resolve_contained_path(source_root, ABILITY_PBS_FILE)),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, COMPILED_ABILITY_FILE)
+            ),
+            read_stable_bytes(
+                _resolve_contained_path(source_root, ABILITY_MESSAGES_FILE)
+            ),
+            section=item.event_id,
+            source=item.source,
+            translation=item.translation,
+            pbs_structure=item.pbs_structure,
+            compiled_path=item.pbs_compiled_path,
+            compiled_structure=item.pbs_compiled_structure,
+            runtime_path=item.pbs_runtime_path,
+            runtime_structure=item.pbs_runtime_structure,
+        )
+    except (OSError, AbilityIntegrityError) as exc:
+        raise ReconstructionError(
+            "La reconstruction privée du nom de capacité a été refusée."
+        ) from exc
+
+
 def _build_v21_1_species_pokedex_payloads(
     source_root: Path,
     item: PlanItem,
@@ -4990,6 +5087,12 @@ def _expected_v21_1_private_payloads(
         return _build_v21_1_ability_description_payloads(
             source_root, validation_items[0]
         )
+    if plan.validation_scope == V21_1_ABILITY_NAME_VALIDATION_SCOPE:
+        if len(validation_items) != 1:
+            raise ReconstructionError(
+                "La reconstruction Ability.Name exige une occurrence unique."
+            )
+        return _build_v21_1_ability_name_payloads(source_root, validation_items[0])
     if plan.validation_scope == V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE:
         if len(validation_items) != 1:
             raise ReconstructionError(
@@ -5252,6 +5355,13 @@ def simulate_plan(plan: ReconstructionPlan) -> ReconstructionPlan:
                         )
                     _build_v21_1_ability_description_payloads(game_root, items[0])
                     continue
+                if plan.validation_scope == V21_1_ABILITY_NAME_VALIDATION_SCOPE:
+                    if len(items) != 1:
+                        raise ReconstructionError(
+                            "La simulation Ability.Name exige une occurrence unique."
+                        )
+                    _build_v21_1_ability_name_payloads(game_root, items[0])
+                    continue
                 if plan.validation_scope == V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE:
                     if len(items) != 1:
                         raise ReconstructionError(
@@ -5501,7 +5611,10 @@ def _reconstruct_copy_verified_body(
     if plan.validation_scope == V21_1_TRAINER_LOSE_VALIDATION_SCOPE:
         allowed_changed[COMPILED_TRAINER_FILE] = list(validation_items)
         allowed_changed[TRAINER_MESSAGES_FILE] = list(validation_items)
-    if plan.validation_scope == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE:
+    if plan.validation_scope in {
+        V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+        V21_1_ABILITY_NAME_VALIDATION_SCOPE,
+    }:
         allowed_changed[COMPILED_ABILITY_FILE] = list(validation_items)
         allowed_changed[ABILITY_MESSAGES_FILE] = list(validation_items)
     if plan.validation_scope in {
@@ -5535,6 +5648,7 @@ def _reconstruct_copy_verified_body(
                 V21_1_PHONE_VALIDATION_SCOPE,
                 V21_1_TRAINER_LOSE_VALIDATION_SCOPE,
                 V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+                V21_1_ABILITY_NAME_VALIDATION_SCOPE,
                 V21_1_SPECIES_POKEDEX_VALIDATION_SCOPE,
                 V21_1_SPECIES_CATEGORY_VALIDATION_SCOPE,
                 V21_1_SPECIES_FORM_NAME_VALIDATION_SCOPE,
@@ -5548,7 +5662,13 @@ def _reconstruct_copy_verified_body(
                 )
                 is_ability = (
                     plan.validation_scope
-                    == V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE
+                    in {
+                        V21_1_ABILITY_DESCRIPTION_VALIDATION_SCOPE,
+                        V21_1_ABILITY_NAME_VALIDATION_SCOPE,
+                    }
+                )
+                is_ability_name = (
+                    plan.validation_scope == V21_1_ABILITY_NAME_VALIDATION_SCOPE
                 )
                 is_species_category = (
                     plan.validation_scope
@@ -5606,7 +5726,7 @@ def _reconstruct_copy_verified_body(
                         "LoseText"
                         if is_trainer
                         else (
-                            "Ability.Description"
+                            ("Ability.Name" if is_ability_name else "Ability.Description")
                             if is_ability
                             else (
                                 "MapMetadata.Name"
@@ -5691,7 +5811,12 @@ def _reconstruct_copy_verified_body(
                         section=items[0].event_id,
                     )
                 elif is_ability:
-                    translated = extract_ability_description_texts(
+                    ability_extractor = (
+                        extract_ability_name_texts
+                        if is_ability_name
+                        else extract_ability_description_texts
+                    )
+                    translated = ability_extractor(
                         read_stable_bytes(
                             _resolve_contained_path(target_root, ABILITY_PBS_FILE)
                         ),

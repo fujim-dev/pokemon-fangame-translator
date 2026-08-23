@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Corrélation statique et mutation bornée d'une description de capacité v21.1.
+"""Corrélation statique et mutation bornée des textes de capacité v21.1.
 
 Le module ne lance jamais Ruby. Il relie ``PBS/abilities.txt`` à
-``Data/abilities.dat`` puis à la banque ``ABILITY_DESCRIPTIONS`` de
-``Data/messages_core.dat``. Une description partagée reste extractible, mais
-la porte de reconstruction privée la refuse.
+``Data/abilities.dat`` puis aux banques ``ABILITY_NAMES`` et
+``ABILITY_DESCRIPTIONS`` de ``Data/messages_core.dat``. Un texte partagé reste
+extractible, mais les portes de reconstruction privées le refusent. Les portes
+``Name`` et ``Description`` restent volontairement distinctes.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import Counter
 import hashlib
 import json
 import re
@@ -28,11 +30,19 @@ from ruby_marshal_writer import dumps
 ABILITY_PBS_FILE = "PBS/abilities.txt"
 COMPILED_ABILITY_FILE = "Data/abilities.dat"
 ABILITY_MESSAGES_FILE = "Data/messages_core.dat"
+ABILITY_NAME_MESSAGES_INDEX = 10
 ABILITY_DESCRIPTION_MESSAGES_INDEX = 11
 ABILITY_CLASS = "GameData::Ability"
 ABILITY_PBS_PROOF_FORMAT = "pft_v21_1_ability_description_pbs_v1"
 COMPILED_ABILITY_PROOF_FORMAT = "pft_v21_1_compiled_ability_description_v1"
 ABILITY_RUNTIME_PROOF_FORMAT = "pft_v21_1_ability_description_runtime_v1"
+ABILITY_NAME_PBS_PROOF_FORMAT = "pft_v21_1_ability_name_pbs_v1"
+COMPILED_ABILITY_NAME_PROOF_FORMAT = "pft_v21_1_compiled_ability_name_v1"
+ABILITY_NAME_RUNTIME_PROOF_FORMAT = "pft_v21_1_ability_name_runtime_v1"
+ABILITY_TEXT_FIELDS = {
+    "Name": ("@real_name", ABILITY_NAME_MESSAGES_INDEX),
+    "Description": ("@real_description", ABILITY_DESCRIPTION_MESSAGES_INDEX),
+}
 ABILITY_IVARS = (
     "@id",
     "@real_name",
@@ -61,7 +71,7 @@ class AbilityPbsAssignment:
 @dataclass(frozen=True)
 class AbilityPbsSection:
     identifier: str
-    name: str
+    name: AbilityPbsAssignment
     flags: tuple[str, ...]
     description: AbilityPbsAssignment
 
@@ -75,9 +85,11 @@ class AbilityPbsDocument:
 
 @dataclass(frozen=True)
 class AbilityTarget:
+    field: str
     assignment: AbilityPbsAssignment
     compiled_value: RubyString
     compiled_path: tuple[object, ...]
+    compiled_reference_count: int
     message_key: RubyString
     message_value: RubyString
     message_path: tuple[object, ...]
@@ -138,31 +150,35 @@ def _ruby_text(value: object, label: str) -> RubyString:
     return value
 
 
-def _reference_count(value: object, target: object) -> int:
+def _reference_counts(value: object) -> Counter[int]:
+    """Compte toutes les références en une seule traversée déterministe."""
+    counts: Counter[int] = Counter()
     seen: set[int] = set()
 
-    def visit(current: object) -> int:
-        count = int(current is target)
+    def visit(current: object) -> None:
+        counts[id(current)] += 1
         if isinstance(current, RubyHashKey):
-            return count + visit(current.value)
+            visit(current.value)
+            return
         if isinstance(current, (RubyString, RubyUserDefined, RubyObject, list, dict)):
             identity = id(current)
             if identity in seen:
-                return count
+                return
             seen.add(identity)
         if isinstance(current, (RubyString, RubyUserDefined, RubyObject)):
-            return count + sum(
-                visit(key) + visit(child) for key, child in current.ivars.items()
-            )
-        if isinstance(current, list):
-            return count + sum(visit(child) for child in current)
-        if isinstance(current, dict):
-            return count + sum(
-                visit(key) + visit(child) for key, child in current.items()
-            )
-        return count
+            for key, child in current.ivars.items():
+                visit(key)
+                visit(child)
+        elif isinstance(current, list):
+            for child in current:
+                visit(child)
+        elif isinstance(current, dict):
+            for key, child in current.items():
+                visit(key)
+                visit(child)
 
-    return visit(value)
+    visit(value)
+    return counts
 
 
 def _parse_assignment(body: str) -> tuple[str, str, str, str] | None:
@@ -199,7 +215,7 @@ def parse_ability_pbs(raw: bytes) -> AbilityPbsDocument:
     sections: list[AbilityPbsSection] = []
     identifier = ""
     section_index = -1
-    name: str | None = None
+    name: AbilityPbsAssignment | None = None
     flags: tuple[str, ...] | None = None
     description: AbilityPbsAssignment | None = None
 
@@ -236,7 +252,16 @@ def parse_ability_pbs(raw: bytes) -> AbilityPbsDocument:
         if key == "Name":
             if name is not None or not source or source != source.strip():
                 raise AbilityIntegrityError("Name de capacité absent, dupliqué ou ambigu.")
-            name = source
+            name = AbilityPbsAssignment(
+                section=identifier,
+                section_index=section_index,
+                line_index=line_index,
+                line_number=line_index + 1,
+                prefix=prefix,
+                source=source,
+                trailing=trailing,
+                newline="\r\n",
+            )
         elif key == "Flags":
             if flags is not None or not source or source != source.strip():
                 raise AbilityIntegrityError("Flags de capacité dupliqués ou ambigus.")
@@ -282,7 +307,7 @@ def _validate_compiled_entry(
     if (
         value.ivars["@id"] != section.identifier
         or _ruby_text(value.ivars["@real_name"], "Le nom compilé de capacité").text()
-        != section.name
+        != section.name.source
         or _ruby_text(
             value.ivars["@real_description"], "La description compilée de capacité"
         ).text()
@@ -310,65 +335,71 @@ def _analyze_sources(
     if not isinstance(compiled_root, dict) or len(compiled_root) != len(pbs.sections):
         raise AbilityIntegrityError("La racine abilities.dat ne correspond pas aux sections PBS.")
 
-    flattened: list[tuple[AbilityPbsSection, RubyString]] = []
+    compiled_reference_counts = _reference_counts(compiled_root)
+    compiled_by_field: dict[
+        str, list[tuple[AbilityPbsSection, AbilityPbsAssignment, RubyString]]
+    ] = {field: [] for field in ABILITY_TEXT_FIELDS}
     for section, (key, raw_object) in zip(pbs.sections, compiled_root.items()):
         compiled_object = _validate_compiled_entry(key, section, raw_object)
-        compiled_value = compiled_object.ivars["@real_description"]
-        if _reference_count(compiled_root, compiled_value) != 1:
-            raise AbilityIntegrityError("Une chaîne abilities.dat est partagée ou ambiguë.")
-        flattened.append((section, compiled_value))
+        for field, (ivar, _bank_index) in ABILITY_TEXT_FIELDS.items():
+            assignment = section.name if field == "Name" else section.description
+            compiled_by_field[field].append(
+                (
+                    section,
+                    assignment,
+                    _ruby_text(compiled_object.ivars[ivar], f"{field} compilé de capacité"),
+                )
+            )
 
     messages_root = _load_marshal(messages_raw, ABILITY_MESSAGES_FILE)
-    if (
-        not isinstance(messages_root, list)
-        or len(messages_root) <= ABILITY_DESCRIPTION_MESSAGES_INDEX
-        or not isinstance(messages_root[ABILITY_DESCRIPTION_MESSAGES_INDEX], dict)
-    ):
-        raise AbilityIntegrityError(
-            "La banque ABILITY_DESCRIPTIONS n'est pas à l'index v21.1 attendu."
-        )
-    source_counts: dict[str, int] = {}
-    ordered_unique: list[str] = []
-    for section, _value in flattened:
-        source = section.description.source
-        source_counts[source] = source_counts.get(source, 0) + 1
-        if source_counts[source] == 1:
-            ordered_unique.append(source)
-    message_items = list(messages_root[ABILITY_DESCRIPTION_MESSAGES_INDEX].items())
-    if len(message_items) != len(ordered_unique):
-        raise AbilityIntegrityError("La banque de descriptions ne couvre pas exactement abilities.dat.")
-    runtime_by_source: dict[str, tuple[RubyString, RubyString, int, int, int]] = {}
-    for message_index, (source, (key, value)) in enumerate(zip(ordered_unique, message_items)):
-        message_key = _ruby_text(key, "La clé ABILITY_DESCRIPTIONS")
-        message_value = _ruby_text(value, "La valeur ABILITY_DESCRIPTIONS")
-        if message_key.text() != source or message_value.text() != source:
-            raise AbilityIntegrityError("L'ordre de la banque de descriptions ne correspond plus.")
-        key_references = _reference_count(messages_root, message_key)
-        value_references = _reference_count(messages_root, message_value)
-        runtime_by_source[source] = (
-            message_key,
-            message_value,
-            message_index,
-            key_references,
-            value_references,
-        )
+    if not isinstance(messages_root, list):
+        raise AbilityIntegrityError("La racine messages_core.dat n'est pas un Array v21.1.")
+    message_reference_counts = _reference_counts(messages_root)
 
     targets: dict[tuple[str, str, int], AbilityTarget] = {}
-    for section, compiled_value in flattened:
-        message_key, message_value, message_index, key_refs, value_refs = runtime_by_source[
-            section.description.source
-        ]
-        targets[(section.identifier, "Description", 1)] = AbilityTarget(
-            assignment=section.description,
-            compiled_value=compiled_value,
-            compiled_path=(section.description.section_index, "@real_description"),
-            message_key=message_key,
-            message_value=message_value,
-            message_path=(ABILITY_DESCRIPTION_MESSAGES_INDEX, "entry", message_index),
-            source_usage_count=source_counts[section.description.source],
-            runtime_key_reference_count=key_refs,
-            runtime_value_reference_count=value_refs,
-        )
+    for field, (ivar, bank_index) in ABILITY_TEXT_FIELDS.items():
+        if len(messages_root) <= bank_index or not isinstance(messages_root[bank_index], dict):
+            raise AbilityIntegrityError(
+                f"La banque Ability.{field} n'est pas à l'index v21.1 attendu."
+            )
+        entries = compiled_by_field[field]
+        sources = [assignment.source for _section, assignment, _value in entries]
+        source_counts = Counter(sources)
+        ordered_unique = list(dict.fromkeys(sources))
+        message_items = list(messages_root[bank_index].items())
+        if len(message_items) != len(ordered_unique):
+            raise AbilityIntegrityError(
+                f"La banque Ability.{field} ne couvre pas exactement abilities.dat."
+            )
+        runtime_by_source: dict[str, tuple[RubyString, RubyString, int]] = {}
+        for message_index, (source, (key, value)) in enumerate(
+            zip(ordered_unique, message_items)
+        ):
+            message_key = _ruby_text(key, f"La clé Ability.{field}")
+            message_value = _ruby_text(value, f"La valeur Ability.{field}")
+            if message_key.text() != source or message_value.text() != source:
+                raise AbilityIntegrityError(
+                    f"L'ordre de la banque Ability.{field} ne correspond plus."
+                )
+            runtime_by_source[source] = (message_key, message_value, message_index)
+
+        for section, assignment, compiled_value in entries:
+            message_key, message_value, message_index = runtime_by_source[
+                assignment.source
+            ]
+            targets[(section.identifier, field, 1)] = AbilityTarget(
+                field=field,
+                assignment=assignment,
+                compiled_value=compiled_value,
+                compiled_path=(assignment.section_index, ivar),
+                compiled_reference_count=compiled_reference_counts[id(compiled_value)],
+                message_key=message_key,
+                message_value=message_value,
+                message_path=(bank_index, "entry", message_index),
+                source_usage_count=source_counts[assignment.source],
+                runtime_key_reference_count=message_reference_counts[id(message_key)],
+                runtime_value_reference_count=message_reference_counts[id(message_value)],
+            )
     return _AbilityAnalysis(
         pbs,
         compiled_root,
@@ -381,8 +412,14 @@ def _analyze_sources(
 
 def _pbs_proof(analysis: _AbilityAnalysis, target: AbilityTarget) -> str:
     assignment = target.assignment
+    section = analysis.pbs.sections[assignment.section_index]
+    other_text = section.description if target.field == "Name" else section.name
     proof = {
-        "format": ABILITY_PBS_PROOF_FORMAT,
+        "format": (
+            ABILITY_NAME_PBS_PROOF_FORMAT
+            if target.field == "Name"
+            else ABILITY_PBS_PROOF_FORMAT
+        ),
         "pbs_file": ABILITY_PBS_FILE,
         "file_sha256": analysis.pbs.file_sha256,
         "encoding": "utf-8-sig",
@@ -391,7 +428,7 @@ def _pbs_proof(analysis: _AbilityAnalysis, target: AbilityTarget) -> str:
         "line_number": assignment.line_number,
         "section_index": assignment.section_index,
         "section_sha256": _sha256(assignment.section.encode("utf-8")),
-        "key": "Description",
+        "key": target.field,
         "key_occurrence": 1,
         "prefix_sha256": _sha256(assignment.prefix.encode("utf-8")),
         "trailing_sha256": _sha256(assignment.trailing.encode("utf-8")),
@@ -399,6 +436,19 @@ def _pbs_proof(analysis: _AbilityAnalysis, target: AbilityTarget) -> str:
             analysis.pbs.content_lines[assignment.line_index].encode("utf-8")
         ),
         "source_sha256": _sha256(assignment.source.encode("utf-8")),
+        "other_text_sha256": _sha256(other_text.source.encode("utf-8")),
+        "technical_fields_sha256": _sha256(
+            json.dumps(
+                {
+                    "id": section.identifier,
+                    "flags": list(section.flags),
+                    "pbs_file_suffix": "",
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+        ),
         "source_usage_count": target.source_usage_count,
     }
     return json.dumps(proof, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -410,7 +460,11 @@ def _compiled_proof(
     compiled_raw: bytes,
 ) -> str:
     proof = {
-        "format": COMPILED_ABILITY_PROOF_FORMAT,
+        "format": (
+            COMPILED_ABILITY_NAME_PROOF_FORMAT
+            if target.field == "Name"
+            else COMPILED_ABILITY_PROOF_FORMAT
+        ),
         "compiled_file": COMPILED_ABILITY_FILE,
         "file_sha256": _sha256(compiled_raw),
         "root_type": "Hash",
@@ -424,10 +478,11 @@ def _compiled_proof(
         "section_sha256": _sha256(target.assignment.section.encode("utf-8")),
         "section_class": ABILITY_CLASS,
         "section_ivars": list(ABILITY_IVARS),
+        "field": target.field,
         "target_type": "RubyString",
         "target_ivars_sha256": graph_sha256(target.compiled_value.ivars),
         "target_value_sha256": _sha256(target.compiled_value.data),
-        "target_reference_count": 1,
+        "target_reference_count": target.compiled_reference_count,
         "compiled_path": list(target.compiled_path),
     }
     return json.dumps(proof, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -438,15 +493,25 @@ def _runtime_proof(
     target: AbilityTarget,
     messages_raw: bytes,
 ) -> str:
+    bank_index = ABILITY_TEXT_FIELDS[target.field][1]
     proof = {
-        "format": ABILITY_RUNTIME_PROOF_FORMAT,
+        "format": (
+            ABILITY_NAME_RUNTIME_PROOF_FORMAT
+            if target.field == "Name"
+            else ABILITY_RUNTIME_PROOF_FORMAT
+        ),
         "runtime_file": ABILITY_MESSAGES_FILE,
         "file_sha256": _sha256(messages_raw),
         "root_type": "Array",
         "root_size": len(analysis.messages_root),
-        "message_type_index": ABILITY_DESCRIPTION_MESSAGES_INDEX,
-        "message_count": len(analysis.messages_root[ABILITY_DESCRIPTION_MESSAGES_INDEX]),
+        "field": target.field,
+        "message_type_index": bank_index,
+        "message_count": len(analysis.messages_root[bank_index]),
         "root_graph_sha256": analysis.messages_graph_sha256,
+        "non_target_bank_graph_sha256": graph_sha256(
+            analysis.messages_root[bank_index],
+            masked=(target.message_key, target.message_value),
+        ),
         "target_key_sha256": _sha256(target.message_key.data),
         "target_value_sha256": _sha256(target.message_value.data),
         "target_value_equals_source": target.message_value.text()
@@ -459,7 +524,7 @@ def _runtime_proof(
     return json.dumps(proof, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
-def build_ability_description_proofs(
+def build_ability_text_proofs(
     pbs_raw: bytes,
     compiled_raw: bytes,
     messages_raw: bytes,
@@ -478,11 +543,40 @@ def build_ability_description_proofs(
     }
 
 
-def rebuild_ability_description_payloads(
+def build_ability_description_proofs(
+    pbs_raw: bytes,
+    compiled_raw: bytes,
+    messages_raw: bytes,
+) -> dict[tuple[str, str, int], AbilityEntryProof]:
+    return {
+        key: proof
+        for key, proof in build_ability_text_proofs(
+            pbs_raw, compiled_raw, messages_raw
+        ).items()
+        if key[1] == "Description"
+    }
+
+
+def build_ability_name_proofs(
+    pbs_raw: bytes,
+    compiled_raw: bytes,
+    messages_raw: bytes,
+) -> dict[tuple[str, str, int], AbilityEntryProof]:
+    return {
+        key: proof
+        for key, proof in build_ability_text_proofs(
+            pbs_raw, compiled_raw, messages_raw
+        ).items()
+        if key[1] == "Name"
+    }
+
+
+def _rebuild_ability_text_payloads(
     pbs_raw: bytes,
     compiled_raw: bytes,
     messages_raw: bytes,
     *,
+    field: str,
     section: str,
     source: str,
     translation: str,
@@ -496,11 +590,13 @@ def rebuild_ability_description_payloads(
         raise AbilityIntegrityError("La traduction de capacité ne tient pas sur une ligne PBS.")
     translated = translation.encode("utf-8")
     analysis = _analyze_sources(pbs_raw, compiled_raw, messages_raw)
-    target_key = (section, "Description", 1)
+    if field not in ABILITY_TEXT_FIELDS:
+        raise AbilityIntegrityError("Le champ Ability demandé n'est pas traduisible.")
+    target_key = (section, field, 1)
     target = analysis.targets.get(target_key)
     if target is None or target.assignment.source != source:
-        raise AbilityIntegrityError("La description de capacité ne correspond plus à la source.")
-    expected = build_ability_description_proofs(pbs_raw, compiled_raw, messages_raw)[target_key]
+        raise AbilityIntegrityError(f"Ability.{field} ne correspond plus à la source.")
+    expected = build_ability_text_proofs(pbs_raw, compiled_raw, messages_raw)[target_key]
     if (
         expected.pbs_structure != pbs_structure
         or expected.compiled_path != compiled_path
@@ -511,15 +607,21 @@ def rebuild_ability_description_payloads(
         raise AbilityIntegrityError("La preuve de capacité ne correspond plus aux trois sources.")
     if target.source_usage_count != 1:
         raise AbilityIntegrityError(
-            "Cette description est partagée par plusieurs capacités et reste bloquée."
+            f"La valeur Ability.{field} est partagée par plusieurs capacités et reste bloquée."
         )
-    if target.runtime_key_reference_count != 1 or target.runtime_value_reference_count != 1:
-        raise AbilityIntegrityError("Cette description partage un objet Marshal et reste bloquée.")
+    if (
+        target.compiled_reference_count != 1
+        or target.runtime_key_reference_count != 1
+        or target.runtime_value_reference_count != 1
+    ):
+        raise AbilityIntegrityError(
+            f"La valeur Ability.{field} partage un objet Marshal et reste bloquée."
+        )
     if json.loads(runtime_structure).get("target_value_equals_source") is not True:
         raise AbilityIntegrityError("La banque possède déjà une traduction différente.")
     if translation in {
         item.text()
-        for item in analysis.messages_root[ABILITY_DESCRIPTION_MESSAGES_INDEX]
+        for item in analysis.messages_root[ABILITY_TEXT_FIELDS[field][1]]
         if item is not target.message_key
     }:
         raise AbilityIntegrityError("La traduction entrerait en collision avec une autre clé.")
@@ -535,10 +637,11 @@ def rebuild_ability_description_payloads(
         analysis.compiled_root, masked=(target.compiled_value,)
     )
     compiled_object = list(analysis.compiled_root.values())[assignment.section_index]
-    compiled_object.ivars["@real_description"] = RubyString(
+    compiled_ivar = ABILITY_TEXT_FIELDS[field][0]
+    compiled_object.ivars[compiled_ivar] = RubyString(
         translated, dict(target.compiled_value.ivars)
     )
-    rebuilt_compiled_target = compiled_object.ivars["@real_description"]
+    rebuilt_compiled_target = compiled_object.ivars[compiled_ivar]
     if graph_sha256(
         analysis.compiled_root, masked=(rebuilt_compiled_target,)
     ) != compiled_before:
@@ -549,7 +652,8 @@ def rebuild_ability_description_payloads(
         analysis.messages_root, masked=(target.message_key, target.message_value)
     )
     replacement_hash: dict = {}
-    old_hash = analysis.messages_root[ABILITY_DESCRIPTION_MESSAGES_INDEX]
+    bank_index = ABILITY_TEXT_FIELDS[field][1]
+    old_hash = analysis.messages_root[bank_index]
     for old_key, old_value in old_hash.items():
         if old_key is target.message_key:
             replacement_hash[RubyString(translated, dict(old_key.ivars))] = RubyString(
@@ -557,7 +661,7 @@ def rebuild_ability_description_payloads(
             )
         else:
             replacement_hash[old_key] = old_value
-    analysis.messages_root[ABILITY_DESCRIPTION_MESSAGES_INDEX] = replacement_hash
+    analysis.messages_root[bank_index] = replacement_hash
     rebuilt_key, rebuilt_value = list(replacement_hash.items())[target.message_path[-1]]
     if graph_sha256(
         analysis.messages_root, masked=(rebuilt_key, rebuilt_value)
@@ -576,12 +680,54 @@ def rebuild_ability_description_payloads(
         or rebuilt_target.compiled_path != target.compiled_path
         or rebuilt_target.message_path != target.message_path
     ):
-        raise AbilityIntegrityError("La relecture ne retrouve pas la description exacte.")
+        raise AbilityIntegrityError(f"La relecture ne retrouve pas Ability.{field} exactement.")
     return {
         ABILITY_PBS_FILE: rebuilt_pbs,
         COMPILED_ABILITY_FILE: rebuilt_compiled,
         ABILITY_MESSAGES_FILE: rebuilt_messages,
     }
+
+
+def rebuild_ability_description_payloads(
+    pbs_raw: bytes,
+    compiled_raw: bytes,
+    messages_raw: bytes,
+    **kwargs,
+) -> dict[str, bytes]:
+    return _rebuild_ability_text_payloads(
+        pbs_raw, compiled_raw, messages_raw, field="Description", **kwargs
+    )
+
+
+def rebuild_ability_name_payloads(
+    pbs_raw: bytes,
+    compiled_raw: bytes,
+    messages_raw: bytes,
+    **kwargs,
+) -> dict[str, bytes]:
+    return _rebuild_ability_text_payloads(
+        pbs_raw, compiled_raw, messages_raw, field="Name", **kwargs
+    )
+
+
+def _extract_ability_texts(
+    pbs_raw: bytes,
+    compiled_raw: bytes,
+    messages_raw: bytes,
+    *,
+    section: str,
+    field: str,
+) -> tuple[str, str, str]:
+    target = _analyze_sources(pbs_raw, compiled_raw, messages_raw).targets.get(
+        (section, field, 1)
+    )
+    if target is None:
+        raise AbilityIntegrityError(f"Ability.{field} est introuvable.")
+    return (
+        target.assignment.source,
+        target.compiled_value.text(),
+        target.message_value.text(),
+    )
 
 
 def extract_ability_description_texts(
@@ -591,13 +737,18 @@ def extract_ability_description_texts(
     *,
     section: str,
 ) -> tuple[str, str, str]:
-    target = _analyze_sources(pbs_raw, compiled_raw, messages_raw).targets.get(
-        (section, "Description", 1)
+    return _extract_ability_texts(
+        pbs_raw, compiled_raw, messages_raw, section=section, field="Description"
     )
-    if target is None:
-        raise AbilityIntegrityError("La description de capacité est introuvable.")
-    return (
-        target.assignment.source,
-        target.compiled_value.text(),
-        target.message_value.text(),
+
+
+def extract_ability_name_texts(
+    pbs_raw: bytes,
+    compiled_raw: bytes,
+    messages_raw: bytes,
+    *,
+    section: str,
+) -> tuple[str, str, str]:
+    return _extract_ability_texts(
+        pbs_raw, compiled_raw, messages_raw, section=section, field="Name"
     )

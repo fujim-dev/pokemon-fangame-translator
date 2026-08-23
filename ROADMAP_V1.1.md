@@ -375,6 +375,24 @@ Le chemin Essentials de la v1.0.2 fonctionne à travers l'adaptateur et les form
   et ne couvre aucun autre `FormName`, champ hérité, champ Species ou champ de
   `pokemon_forms.txt`. `RECONSTRUCT` v21.1 public reste désactivé.
 
+- le lot Ability.Name distingue explicitement la banque `ABILITY_NAMES` à
+  l'index 10 de la banque `ABILITY_DESCRIPTIONS` à l'index 11. Les 267 noms
+  réels représentent 266 valeurs uniques ; une valeur partagée par deux
+  capacités et dix alias Marshal de banque bloquent douze occurrences, tandis
+  que 255 cibles satisfont les critères unitaires stricts. Les flags,
+  identifiants et suffixes PBS restent techniques et non traduisibles ;
+- une porte privée strictement unitaire a synchronisé `OVERGROW / Name` dans
+  `PBS/abilities.txt`, `Data/abilities.dat` et `Data/messages_core.dat`, avec
+  provenance, simulation, publication transactionnelle et rollback. Le
+  round-trip réel a réextrait le marqueur complet sous la même identité, laissé
+  la description et tous les fichiers hors plan inchangés, et le candidat a
+  démarré sans mutation. La validation humaine a confirmé le préfixe visible
+  `[PFT v21.1 NAME...`, la description exacte inchangée, Bulbasaur inchangé et
+  le retour normal au jeu. La fin du marqueur hors capture n'est pas revendiquée
+  et la preuve reste limitée à cette occurrence, sans extension aux autres
+  Abilities ni à `Ability.Description`. `RECONSTRUCT` v21.1 public reste
+  désactivé.
+
 ## Phase 2 — Interface pilotée par capacités
 
 ### Objectifs

@@ -35,7 +35,7 @@ from essentials_ability import (
     ABILITY_PBS_FILE,
     COMPILED_ABILITY_FILE,
     AbilityIntegrityError,
-    build_ability_description_proofs,
+    build_ability_text_proofs,
 )
 from essentials_species import (
     COMPILED_SPECIES_FILE,
@@ -1364,13 +1364,13 @@ def _bind_compiled_ability_proofs(
     inventory: ExtractionInventory,
     rows: list[dict],
 ) -> None:
-    """Lie les descriptions de capacités aux deux représentations v21.1."""
+    """Lie Name/Description aux objets Ability et à leurs banques v21.1."""
     ability_rows = [
         row
         for row in rows
         if str(row.get("fichier") or "").replace("\\", "/").casefold()
         == ABILITY_PBS_FILE.casefold()
-        and row.get("type") == "PBS — Description"
+        and row.get("commande") in {"Name", "Description"}
     ]
     if not ability_rows:
         return
@@ -1383,7 +1383,7 @@ def _bind_compiled_ability_proofs(
     runtime_source = by_relative.get(ABILITY_MESSAGES_FILE.casefold())
     if pbs_source is None or compiled_source is None or runtime_source is None:
         raise ExtractionIntegrityError(
-            "Les descriptions de capacités ne peuvent pas être reliées à "
+            "Les textes de capacités ne peuvent pas être reliés à "
             "abilities.dat et à leur banque core v21.1."
         )
 
@@ -1391,7 +1391,7 @@ def _bind_compiled_ability_proofs(
         return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
 
     try:
-        proofs = build_ability_description_proofs(
+        proofs = build_ability_text_proofs(
             snapshot_bytes(pbs_source),
             snapshot_bytes(compiled_source),
             snapshot_bytes(runtime_source),
@@ -1418,11 +1418,12 @@ def _bind_compiled_ability_proofs(
             row["pbs_runtime_structure"] = proof.runtime_structure
         if any(looks_visible(proof.source) for proof in proofs.values()):
             raise AbilityIntegrityError(
-                "Certaines descriptions de capacités visibles ne sont pas extraites."
+                "Certains textes de capacités visibles ne sont pas extraits."
             )
     except (KeyError, TypeError, ValueError, OSError, AbilityIntegrityError) as exc:
         raise ExtractionIntegrityError(
-            "La correspondance PBS/abilities.dat/ABILITY_DESCRIPTIONS est "
+            "La correspondance PBS/abilities.dat/ABILITY_NAMES/"
+            "ABILITY_DESCRIPTIONS est "
             "ambiguë ou incohérente."
         ) from exc
 
