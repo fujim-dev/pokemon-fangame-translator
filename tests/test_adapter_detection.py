@@ -224,6 +224,35 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertIn("maps", {item.evidence_id for item in result.evidence})
             self.assertEqual(before, after)
 
+    def test_psdk_studio_marker_blocks_essentials_even_with_essentials_like_layout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioProject"
+            self._write(root / "Game.exe")
+            self._write(root / "Game.ini", b"[Game]\\nLibrary=RGSS104E.dll")
+            self._write(root / "Data" / "System.rxdata")
+            self._write(root / "Data" / "Map001.rxdata")
+            self._write(root / "Data" / "messages_game.dat")
+            self._write(root / "PBS" / "pokemon.txt")
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            before = {
+                path.relative_to(root): path.read_bytes()
+                for path in root.rglob("*") if path.is_file()
+            }
+
+            direct = PokemonEssentialsAdapter().probe(root)
+            registry_result = inline_default_registry().detect(root)
+
+            self.assertFalse(direct.adapter_recognized)
+            self.assertFalse(direct.write_actions_allowed)
+            self.assertEqual(direct.structural_profile, "psdk_candidate")
+            self.assertEqual(registry_result.adapter_id, "unknown")
+            self.assertFalse(registry_result.can(GameCapability.EXTRACT))
+            after = {
+                path.relative_to(root): path.read_bytes()
+                for path in root.rglob("*") if path.is_file()
+            }
+            self.assertEqual(before, after)
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
