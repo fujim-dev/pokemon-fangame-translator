@@ -14,11 +14,28 @@ class PokemonStudioAdapter:
     display_name = "Pokémon Studio / PSDK (analyse uniquement)"
 
     def probe(self, root: Path) -> DetectionResult:
+        # Refuser toute redirection de la racine ou des dossiers de données.
+        # Une jonction Windows n'est pas toujours signalée par is_symlink().
+        def redirected(path: Path) -> bool:
+            try:
+                if path.is_symlink():
+                    return True
+                is_junction = getattr(path, "is_junction", None)
+                if is_junction and is_junction():
+                    return True
+                return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x0400)
+            except FileNotFoundError:
+                return False
+            except OSError:
+                return True
+
+        if redirected(root) or redirected(root / "Data"):
+            return self._unrecognized("Chemin de projet ou de données redirigé.")
         marker = root / "project.studio"
         studio_data = root / "Data" / "Studio"
         tiled_data = root / "Data" / "Tiled"
         try:
-            if not marker.is_file() or marker.is_symlink():
+            if not marker.is_file() or redirected(marker):
                 return self._unrecognized()
             if marker.stat().st_size > 1024 * 1024:
                 return self._unrecognized("Fichier project.studio trop volumineux.")
@@ -31,7 +48,7 @@ class PokemonStudioAdapter:
             data_dirs = [
                 (name, path)
                 for name, path in (("Data/Studio", studio_data), ("Data/Tiled", tiled_data))
-                if path.is_dir() and not path.is_symlink()
+                if path.is_dir() and not redirected(path)
             ]
             if not data_dirs:
                 return self._unrecognized("Données Studio/Tiled absentes.")
