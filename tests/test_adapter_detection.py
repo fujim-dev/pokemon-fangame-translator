@@ -366,7 +366,7 @@ class AdapterDetectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "MixedEngine"
             self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
-            self._write(root / "Game.ini", b"[Game]\\nLibrary=RGSS104E.dll")
+            self._write(root / "Game.ini", b"[Game]\nLibrary=RGSS104E.dll")
             self._write(root / "Data" / "Scripts.rxdata", b"synthetic")
             self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
             essentials = PokemonEssentialsAdapter().probe(root)
