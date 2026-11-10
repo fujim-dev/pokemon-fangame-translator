@@ -41,7 +41,7 @@ A plain RMXP project can share some container formats with Essentials while havi
 ### 4. Pokémon Flux and custom game formats
 PFT project notes describe Flux as requiring a separate workflow around a custom FPK archive. This demonstrates why custom projects need isolated adapters and exact version gates.
 
-**PFT priority:** P1/P2 — keep the existing Flux adapter optional and experimental until supported versions, archive parsing, and rebuild invariants are fully tested. Flux must never be a required dependency of the core application or default registry.
+**PFT priority:** P1/P2 — keep the existing Flux adapter optional and experimental until supported versions, archive parsing, and rebuild invariants are fully tested. Flux must remain a separate adapter with no shared Essentials extraction or reconstruction path. The current default registry does instantiate the Flux adapter, so it is not yet an optional installable module; making adapter registration configurable is a separate future architecture task.
 
 ### 5. RPG Maker MV / MZ
 MV and MZ are distinct generations with different project structures and data formats from RMXP. A similarly named experimental Pokémon Essentials project for MV is not evidence that the established Essentials project migrated to MV; each candidate must be checked independently.
