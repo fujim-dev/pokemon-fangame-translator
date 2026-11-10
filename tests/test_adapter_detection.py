@@ -376,6 +376,18 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertFalse(studio.can(GameCapability.EXTRACT))
             self.assertFalse(studio.can(GameCapability.RECONSTRUCT))
 
+    def test_studio_extraction_is_blocked_even_when_called_directly(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioDirectCall"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            (root / "Data" / "Studio").mkdir(parents=True)
+            adapter = PokemonStudioAdapter()
+            with self.assertRaises(AdapterOperationBlocked):
+                adapter.extract(root)
+            self.assertFalse(adapter.probe(root).write_actions_allowed)
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
