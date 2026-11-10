@@ -344,6 +344,22 @@ class AdapterDetectionTests(unittest.TestCase):
                     self.assertFalse(result.write_actions_allowed)
                     self.assertFalse(result.can(GameCapability.EXTRACT))
 
+    def test_studio_analysis_keeps_studio_identity(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioAnalysis"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            (root / "Data" / "Studio").mkdir(parents=True)
+            adapter = PokemonStudioAdapter()
+            detection = adapter.probe(root)
+            self.assertTrue(detection.adapter_recognized)
+            with patch("adapters.pokemon_studio.analyze_game", return_value={"safe": True}) as analyzer:
+                report = adapter.analyze(root, detection)
+            self.assertEqual(report, {"safe": True})
+            self.assertEqual(analyzer.call_args.kwargs["adapter_id"], "pokemon_studio")
+            self.assertEqual(analyzer.call_args.kwargs["adapter_confidence"], detection.confidence)
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
