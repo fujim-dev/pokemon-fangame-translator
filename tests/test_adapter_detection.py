@@ -313,6 +313,18 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertFalse(result.adapter_recognized)
             self.assertFalse(result.write_actions_allowed)
 
+    def test_studio_reparse_markers_are_rejected(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioRedirected"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
+            with patch("pathlib.Path.is_symlink", return_value=True):
+                result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
