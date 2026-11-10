@@ -443,6 +443,18 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertFalse(result.can(GameCapability.EXTRACT))
             self.assertFalse(result.write_actions_allowed)
 
+    def test_studio_metadata_array_is_not_a_valid_project(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioArrayMetadata"
+            self._write(root / "project.studio", b'[{"studioVersion":"2.10.0"}]')
+            (root / "Data" / "Studio").mkdir(parents=True)
+            result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
