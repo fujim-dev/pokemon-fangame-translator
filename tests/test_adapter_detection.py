@@ -276,6 +276,43 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertFalse(result.can(GameCapability.TRANSLATE))
             self.assertFalse(result.can(GameCapability.RECONSTRUCT))
 
+    def test_valid_studio_project_is_recognized_read_only(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "Studio"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
+            before = {
+                p.relative_to(root): p.read_bytes()
+                for p in root.rglob("*") if p.is_file()
+            }
+            result = AdapterRegistry(
+                (PokemonEssentialsAdapter(), PokemonFluxAdapter(), PokemonStudioAdapter()),
+                probe_runner=InlineProbeRunner(),
+            ).detect(root)
+            self.assertEqual(result.adapter_id, "pokemon_studio")
+            self.assertEqual(result.declared_version, "2.10.0")
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.can(GameCapability.TRANSLATE))
+            self.assertFalse(result.can(GameCapability.RECONSTRUCT))
+            self.assertFalse(result.write_actions_allowed)
+            self.assertEqual(before, {
+                p.relative_to(root): p.read_bytes()
+                for p in root.rglob("*") if p.is_file()
+            })
+
+    def test_invalid_studio_metadata_cannot_unlock_adapter(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "BrokenStudio"
+            self._write(root / "project.studio", b"{invalid-json")
+            self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
+            result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
