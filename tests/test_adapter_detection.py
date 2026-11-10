@@ -253,6 +253,29 @@ class AdapterDetectionTests(unittest.TestCase):
             }
             self.assertEqual(before, after)
 
+    def test_studio_marker_alone_does_not_enable_translation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "PSDKOnly"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Game.ini", b"[Game]\nLibrary=RGSS104E.dll")
+            result = inline_default_registry().detect(root)
+            self.assertEqual(result.adapter_id, "unknown")
+            self.assertFalse(result.write_actions_allowed)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.can(GameCapability.RECONSTRUCT))
+
+    def test_packed_rgss_game_without_readable_data_remains_unknown(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "PackedRGSS"
+            self._write(root / "Game.exe")
+            self._write(root / "Game.ini", b"[Game]\nLibrary=RGSS104E.dll")
+            self._write(root / "Game.rgssad")
+            result = inline_default_registry().detect(root)
+            self.assertEqual(result.adapter_id, "unknown")
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.can(GameCapability.TRANSLATE))
+            self.assertFalse(result.can(GameCapability.RECONSTRUCT))
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
