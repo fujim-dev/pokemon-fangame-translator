@@ -12,7 +12,7 @@ Pokémon Fangame Translator (PFT) est une bêta publique. La compatibilité dép
 | Pokémon Flux Episode 2 v2.1.0 — signature exacte connue | Adaptateur expérimental | Analyse statique | Extraction des occurrences vérifiables vers le CSV commun | **Désactivée** |
 | Pokémon Flux — autre version ou signature inconnue | Partielle / non reconnue | Inventaire prudent si possible | Bloquée | Bloquée |
 | RPG Maker XP générique sans Essentials | Pas de profil dédié garanti | Pas de prise en charge dédiée | Bloquée | Bloquée |
-| Pokémon SDK (PSDK) | Non pris en charge | Non pris en charge | Bloquée | Bloquée |
+| Pokémon Studio / PSDK (projet `project.studio` et données Studio/Tiled) | Reconnaissance prudente en lecture seule | Inventaire statique générique | Bloquée | Bloquée |
 | RPG Maker MV / MZ | Non pris en charge | Non pris en charge | Bloquée | Bloquée |
 | Pokéngine | Non pris en charge | Non pris en charge | Bloquée | Bloquée |
 | Unity / Godot / moteurs personnalisés | Non pris en charge | Non pris en charge | Bloquée | Bloquée |
@@ -39,7 +39,7 @@ Ne renommez pas un dossier pour tenter de forcer la détection : le nom du dossi
 
 ### Pokémon SDK (PSDK)
 
-PSDK doit être traité comme un profil distinct d'Essentials. Le fait que certaines versions de PSDK utilisent RPG Maker XP pour les événements ne rend pas leurs données, cartes ou méthodes de traduction interchangeables avec celles d'Essentials. Aucune prise en charge PSDK n'est actuellement revendiquée.
+PSDK doit être traité comme un profil distinct d'Essentials. Le fait que certaines versions de PSDK utilisent RPG Maker XP pour les événements ne rend pas leurs données, cartes ou méthodes de traduction interchangeables avec celles d'Essentials. Un détecteur de projets Pokémon Studio reconnaît désormais une signature de projet (`project.studio` valide avec version et dossier `Data/Studio` ou `Data/Tiled`). Cette reconnaissance n'autorise **ni extraction, ni traduction, ni reconstruction** : elle sert seulement à identifier le projet et à réaliser un inventaire statique prudent. Les jeux PSDK empaquetés ou sans ces marqueurs restent non reconnus.
 
 ## Priorités de recherche et de développement
 
