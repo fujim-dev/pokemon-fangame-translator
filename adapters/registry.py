@@ -6,6 +6,7 @@ from pathlib import Path
 from .base import AdapterOperationBlocked, DetectionResult, GameAdapter, GameCapability
 from .pokemon_essentials import PokemonEssentialsAdapter
 from .pokemon_flux import PokemonFluxAdapter
+from .pokemon_studio import PokemonStudioAdapter
 from .probe_isolation import IsolatedProbeRunner
 from .unknown import UnknownAdapter
 
