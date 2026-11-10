@@ -419,6 +419,18 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertFalse(result.can(GameCapability.EXTRACT))
             self.assertFalse(result.write_actions_allowed)
 
+    def test_studio_oversized_project_marker_is_rejected(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioOversized"
+            self._write(root / "project.studio", b"x" * (1024 * 1024 + 1))
+            (root / "Data" / "Studio").mkdir(parents=True)
+            result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
