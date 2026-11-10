@@ -388,6 +388,25 @@ class AdapterDetectionTests(unittest.TestCase):
                 adapter.extract(root)
             self.assertFalse(adapter.probe(root).write_actions_allowed)
 
+    def test_studio_probe_does_not_follow_redirected_data_directory(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioRedirectedData"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            (root / "Data" / "Studio").mkdir(parents=True)
+            real_is_symlink = Path.is_symlink
+
+            def synthetic_redirect(path):
+                if path == root / "Data" / "Studio":
+                    return True
+                return real_is_symlink(path)
+
+            with patch("pathlib.Path.is_symlink", autospec=True, side_effect=synthetic_redirect):
+                result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
