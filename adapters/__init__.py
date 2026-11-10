@@ -6,6 +6,7 @@ from .essentials_profiles import (
     ESSENTIALS_V21_1_READONLY_PROFILE,
 )
 from .pokemon_flux import PokemonFluxAdapter
+from .pokemon_studio import PokemonStudioAdapter
 from .registry import AdapterRegistry, authorize_adapter_operation, create_default_registry
 from .unknown import UnknownAdapter
 
