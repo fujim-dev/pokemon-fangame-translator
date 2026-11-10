@@ -228,7 +228,7 @@ class AdapterDetectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "StudioProject"
             self._write(root / "Game.exe")
-            self._write(root / "Game.ini", b"[Game]\\nLibrary=RGSS104E.dll")
+            self._write(root / "Game.ini", b"[Game]\nLibrary=RGSS104E.dll")
             self._write(root / "Data" / "System.rxdata")
             self._write(root / "Data" / "Map001.rxdata")
             self._write(root / "Data" / "messages_game.dat")
