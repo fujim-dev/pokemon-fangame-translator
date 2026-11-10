@@ -407,6 +407,18 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertFalse(result.adapter_recognized)
             self.assertFalse(result.write_actions_allowed)
 
+    def test_studio_only_tiled_data_is_read_only(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioTiledOnly"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Data" / "Tiled" / "synthetic.json", b"{}")
+            result = PokemonStudioAdapter().probe(root)
+            self.assertTrue(result.adapter_recognized)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.write_actions_allowed)
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
