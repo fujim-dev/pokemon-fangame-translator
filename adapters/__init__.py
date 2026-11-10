@@ -22,6 +22,7 @@ __all__ = [
     "ESSENTIALS_V21_1_READONLY_PROFILE",
     "PokemonEssentialsAdapter",
     "PokemonFluxAdapter",
+    "PokemonStudioAdapter",
     "UnknownAdapter",
     "authorize_adapter_operation",
     "create_default_registry",
