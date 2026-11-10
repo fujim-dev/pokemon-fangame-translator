@@ -360,6 +360,22 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertEqual(analyzer.call_args.kwargs["adapter_id"], "pokemon_studio")
             self.assertEqual(analyzer.call_args.kwargs["adapter_confidence"], detection.confidence)
 
+    def test_studio_and_essentials_markers_never_enable_essentials_extraction(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "MixedEngine"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Game.ini", b"[Game]\\nLibrary=RGSS104E.dll")
+            self._write(root / "Data" / "Scripts.rxdata", b"synthetic")
+            self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
+            essentials = PokemonEssentialsAdapter().probe(root)
+            studio = PokemonStudioAdapter().probe(root)
+            self.assertFalse(essentials.adapter_recognized)
+            self.assertTrue(studio.adapter_recognized)
+            self.assertFalse(studio.can(GameCapability.EXTRACT))
+            self.assertFalse(studio.can(GameCapability.RECONSTRUCT))
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
