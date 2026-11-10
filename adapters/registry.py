@@ -182,7 +182,7 @@ class AdapterRegistry:
 
 
 def create_default_registry(*, replacement: GameAdapter | None = None) -> AdapterRegistry:
-    adapters: list[GameAdapter] = [PokemonEssentialsAdapter(), PokemonFluxAdapter()]
+    adapters: list[GameAdapter] = [PokemonEssentialsAdapter(), PokemonFluxAdapter(), PokemonStudioAdapter()]
     if replacement is not None:
         adapters = [
             replacement if adapter.adapter_id == replacement.adapter_id else adapter
