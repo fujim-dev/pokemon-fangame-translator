@@ -93,6 +93,24 @@ ROM hacks modify or patch an existing Pokémon ROM and use a different toolchain
 6. Nuzlocke France — Interview with the creator of Pokémon Sacred Phoenix: https://nuzlocke-france.fr/interview-damras-anarion-createur-de-pokemon-sacred-phoenix/
 7. Pokéngine — Pokémon Essentials vs Pokéngine discussion: https://pokengine.org/forums?thread=113
 
+
+
+## Independence, copyright, and clean-room implementation
+
+PFT is distributed under GPL-3.0-or-later (see the repository LICENSE). This license governs PFT's own code; it does not grant permission to copy Pokémon Flux's game code, assets, dialogue, executable, or other copyrighted game content.
+
+The Flux adapter is an independently authored parser/detector in PFT. Its current use of a specific release's file hashes and expected archive-member names is a compatibility fingerprint, not a redistribution of the game. Keep it as an optional research/compatibility case, not as the architectural model for every engine.
+
+For future adapters:
+- Implement readers from documented/public formats or independently observed file structures; do not copy another project's source code unless its license explicitly permits the intended use and all license obligations can be met.
+- Do not include game executables, archives, artwork, music, maps, dialogue, or extracted user data in source control, releases, test fixtures, or CI artifacts.
+- Use synthetic fixtures created by PFT contributors, or samples that are explicitly licensed for redistribution.
+- Record provenance for format documentation and test samples.
+- Keep each game-specific adapter small and replaceable; shared application services must not depend on a particular fangame's internal design.
+- When a format cannot be understood without unauthorized code or assets, stop and mark it unsupported rather than reverse-engineering protected content or bypassing access controls.
+
+This is an engineering hygiene policy, not legal advice. Check individual third-party licenses and obtain qualified advice for distribution questions.
+
 ## Open research questions
 - Which Essentials versions and community forks are present in the user's real-world test library?
 - Which PSDK project versions can be obtained as redistributable test fixtures?
