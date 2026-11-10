@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from .base import AdapterOperationBlocked, DetectionEvidence, DetectionResult, GameCapability
-from .unknown import UnknownAdapter
+from analysis.deep_analyzer import analyze_game
 
 
 class PokemonStudioAdapter:
@@ -92,7 +92,14 @@ class PokemonStudioAdapter:
         )
 
     def analyze(self, root: Path, detection: DetectionResult, mode="complete", progress=None):
-        return UnknownAdapter().analyze(root, detection, mode=mode, progress=progress)
+        return analyze_game(
+            root,
+            adapter_id=self.adapter_id,
+            adapter_display_name=self.display_name,
+            adapter_confidence=detection.confidence,
+            mode=mode,
+            progress=progress,
+        )
 
     def extract(self, root: Path, progress=None, logger=None):
         raise AdapterOperationBlocked("Extraction Pokémon Studio non prise en charge.")
