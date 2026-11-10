@@ -133,6 +133,24 @@ class PokemonEssentialsAdapter:
                 adapter_recognized=False,
                 write_actions_allowed=False,
             )
+        # Pokémon Studio/PSDK peut également contenir Game.ini et des fichiers RGSS.
+        # Ne jamais le traiter comme Essentials : les formats de données divergent.
+        studio_marker = root_input / "project.studio"
+        if studio_marker.exists() or _is_link_or_junction(studio_marker):
+            return DetectionResult(
+                adapter_id=self.adapter_id,
+                display_name=self.display_name,
+                confidence=0,
+                capabilities=frozenset({GameCapability.ANALYZE, GameCapability.DEEP_ANALYZE}),
+                warnings=(
+                    "Marqueur Pokémon Studio/PSDK détecté : adaptateur Essentials exclu.",
+                ),
+                adapter_recognized=False,
+                write_actions_allowed=False,
+                engine_family="rpg_maker_xp",
+                structural_profile="psdk_candidate",
+                analysis_compatible=True,
+            )
         root = root_input.resolve()
         data = root / "Data"
         evidence: list[DetectionEvidence] = []
