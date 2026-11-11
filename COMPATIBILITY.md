@@ -20,7 +20,7 @@ Pokémon Fangame Translator (PFT) est une bêta publique. La compatibilité dép
 
 ## Profil actuellement le mieux validé
 
-- **Pokémon Myth 2** : analyse, extraction, traduction, reconstruction et lancement d'une copie française ont été testés. L'intégralité de l'aventure n'est pas garantie.
+- **Pokémon Myth 2 (validation ciblée antérieure)** : une copie française avait été lancée lors de tests précédents. **Sur la copie isolée v1.1 testée en novembre 2026 avec la branche actuelle**, l'analyse statique fonctionne, mais l'extraction certifiée est bloquée : 55 noms et 56 descriptions de capacités distincts manquent dans les banques runtime par rapport aux PBS. La reconstruction de cette version n'est **pas validée** ; ne pas annoncer « compatible confirmé » avant un nouveau parcours complet sur copie.
 - **Pokémon Essentials v21.1** : le dépôt contient des tests automatisés et des validations ciblées pour plusieurs structures Essentials. Cela ne vaut pas validation de tous les fangames basés sur cette version.
 
 ## Détails importants
