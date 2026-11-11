@@ -953,7 +953,10 @@ class FangameTranslatorApp(tk.Tk):
             self._adapter_can(GameCapability.EXTRACT)
             and not self._certified_extraction_blocker()
         )
-        translate_allowed = self._adapter_can(GameCapability.TRANSLATE)
+        translate_allowed = (
+            self._adapter_can(GameCapability.TRANSLATE)
+            and not self._certified_extraction_blocker()
+        )
         reconstruct_allowed = self._adapter_can(GameCapability.RECONSTRUCT)
         deep_analysis_allowed = self._adapter_can(GameCapability.DEEP_ANALYZE)
 
@@ -983,6 +986,14 @@ class FangameTranslatorApp(tk.Tk):
         )
 
     def open_translation_studio(self):
+        blocker = self._certified_extraction_blocker()
+        if blocker:
+            messagebox.showerror(
+                "Projet de traduction non validé",
+                blocker + "\n\nLe studio de ce jeu est désactivé tant que la cohérence "
+                "des fichiers n'est pas démontrée. L'analyse statique reste disponible.",
+            )
+            return
         if not self._adapter_can(GameCapability.TRANSLATE):
             messagebox.showerror(
                 "Analyse compatible requise",
