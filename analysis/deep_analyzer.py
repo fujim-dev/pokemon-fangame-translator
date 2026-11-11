@@ -644,7 +644,22 @@ def analyze_game(
                 "La cohérence PBS/compilé/banques des capacités n'a pas pu être démontrée."
             )
         else:
-            if ability_diagnostic is not None and not ability_diagnostic["complete"]:
+            if ability_diagnostic is not None and ability_diagnostic.get("split_complete"):
+                _add_issue(
+                    report,
+                    "ability_runtime_split_unverified",
+                    "warning",
+                    "integrity",
+                    "Les textes Ability sont présents dans les banques core et jeu, "
+                    "mais l'extracteur actuel attend une correspondance dans core seul. "
+                    "Extraction certifiée et reconstruction non validées.",
+                    "Data/messages_game.dat",
+                    blocking=True,
+                )
+                report.unverified.append(
+                    "Répartition core/jeu reconnue ; preuves d'extraction à adapter."
+                )
+            elif ability_diagnostic is not None and not ability_diagnostic["complete"]:
                 names = ability_diagnostic["fields"]["Name"]
                 descriptions = ability_diagnostic["fields"]["Description"]
                 _add_issue(
