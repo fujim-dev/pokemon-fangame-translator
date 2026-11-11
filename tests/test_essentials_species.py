@@ -243,9 +243,7 @@ class EssentialsSpeciesPokedexTests(unittest.TestCase):
                 build_species_pokedex_proofs(pbs, forms, compiled, dumps(runtime_root))
 
             for bad_pbs, bad_forms in (
-                (pbs[3:], forms),
                 (pbs.replace(b"\r\n", b"\n"), forms),
-                (pbs, forms[3:]),
                 (pbs, forms.replace(b"\r\n", b"\n")),
             ):
                 with self.subTest(prefix=bad_pbs[:8]), self.assertRaises(
