@@ -89,6 +89,55 @@ class AbilityReadOnlyDiagnosticTests(unittest.TestCase):
             self.assertEqual("not_exact_prefix", probe["reason"])
             self.assertEqual(before, path.read_bytes())
 
+    def test_split_core_game_banks_are_recognized_but_still_blocked(self):
+        with tempfile.TemporaryDirectory(prefix="pft_ability_split_diag_") as tmp:
+            root = Path(tmp) / "game"
+            prepare_v21_game(root, ability_validation=True)
+            core_file = root / ABILITY_MESSAGES_FILE
+            game_file = root / "Data/messages_game.dat"
+            core = load(core_file)
+            game = [{} for _ in range(len(core))]
+            for index in (10, 11):
+                key, value = core[index].popitem()
+                game[index][key] = value
+            core_file.write_bytes(dumps(core))
+            game_file.write_bytes(dumps(game))
+            baseline = [p.read_bytes() for p in (core_file, game_file)]
+            report = inspect_ability_runtime_banks(root)
+            self.assertTrue(report["complete"])
+            self.assertTrue(report["split_complete"])
+            for field in ("Name", "Description"):
+                self.assertTrue(report["fields"][field]["split_complete"])
+                self.assertEqual(0, report["fields"][field]["missing_unique"])
+            analysis = analyze_game(
+                root, adapter_id="pokemon_essentials",
+                adapter_display_name="Pokémon Essentials", adapter_confidence=100,
+            )
+            codes = [issue.code for issue in analysis.issues]
+            self.assertIn("ability_runtime_split_unverified", codes)
+            self.assertNotIn("ability_runtime_incomplete", codes)
+            self.assertTrue(analysis.coverage.incomplete_sources)
+            self.assertFalse(analysis.coverage.can_claim_complete_coverage)
+            self.assertEqual(baseline, [p.read_bytes() for p in (core_file, game_file)])
+
+    def test_nonmatching_game_suffix_does_not_count_as_complete(self):
+        with tempfile.TemporaryDirectory(prefix="pft_ability_split_bad_") as tmp:
+            root = Path(tmp) / "game"
+            prepare_v21_game(root, ability_validation=True)
+            core_file = root / ABILITY_MESSAGES_FILE
+            game_file = root / "Data/messages_game.dat"
+            core = load(core_file)
+            key, value = core[10].popitem()
+            core_file.write_bytes(dumps(core))
+            game = [{} for _ in range(len(core))]
+            game[10][key] = value
+            # The missing ability descriptions are not repaired by this entry.
+            game_file.write_bytes(dumps(game))
+            report = inspect_ability_runtime_banks(root)
+            self.assertFalse(report["complete"])
+            self.assertFalse(report["split_complete"])
+            self.assertFalse(report["fields"]["Description"]["split_complete"])
+
     def test_missing_files_do_not_trigger_ability_diagnosis(self):
         with tempfile.TemporaryDirectory(prefix="pft_ability_missing_diag_") as tmp:
             root = Path(tmp) / "game"
