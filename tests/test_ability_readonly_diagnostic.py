@@ -106,6 +106,11 @@ class AbilityReadOnlyDiagnosticTests(unittest.TestCase):
             report = inspect_ability_runtime_banks(root)
             self.assertTrue(report["complete"])
             self.assertTrue(report["split_complete"])
+            from analysis.ability_runtime_recovery_probe import probe_ability_completion_in_memory
+            probe = probe_ability_completion_in_memory(root)
+            self.assertFalse(probe["possible"])
+            self.assertEqual("already_in_game_bank", probe["reason"])
+            self.assertEqual({}, probe["additions"])
             for field in ("Name", "Description"):
                 self.assertTrue(report["fields"][field]["split_complete"])
                 self.assertEqual(0, report["fields"][field]["missing_unique"])
