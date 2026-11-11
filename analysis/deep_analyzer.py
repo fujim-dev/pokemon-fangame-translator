@@ -15,6 +15,7 @@ from structured_extractor import (
     text_value,
 )
 
+from .ability_runtime_diagnostic import inspect_ability_runtime_banks
 from .language_coverage import calculate_coverage
 from .models import AnalysisIssue, DeepAnalysisReport
 
@@ -633,6 +634,41 @@ def analyze_game(
         or report.unsupported
         or any(issue.code == "filesystem_link" for issue in report.issues)
     )
+    if structured_reading_allowed and mode in {"complete", "deep"}:
+        try:
+            ability_diagnostic = inspect_ability_runtime_banks(root)
+        except (OSError, ValueError, UnicodeError, TypeError, KeyError):
+            _add_issue(
+                report,
+                "ability_runtime_unverified",
+                "warning",
+                "integrity",
+                "Correspondance des banques Ability non vérifiable ; aucune preuve de reconstruction.",
+                "Data/messages_core.dat",
+            )
+            report.unverified.append(
+                "La cohérence PBS/compilé/banques des capacités n'a pas pu être démontrée."
+            )
+        else:
+            if ability_diagnostic is not None and not ability_diagnostic["complete"]:
+                names = ability_diagnostic["fields"]["Name"]
+                descriptions = ability_diagnostic["fields"]["Description"]
+                _add_issue(
+                    report,
+                    "ability_runtime_incomplete",
+                    "error",
+                    "integrity",
+                    "Banques Ability incomplètes ou décalées : "
+                    f"noms {names['runtime_entries']}/{names['expected_unique']}, "
+                    f"descriptions {descriptions['runtime_entries']}/{descriptions['expected_unique']}. "
+                    "Extraction certifiée et reconstruction non validées.",
+                    "Data/messages_core.dat",
+                    blocking=True,
+                )
+                report.unverified.append(
+                    "Le décompte statique des textes ne démontre pas leur reconstructibilité."
+                )
+
     report.extractable_text_occurrences = len(texts)
     report.extractable_unique_texts = len(set(texts))
     report.extractable_by_source = dict(sorted(extractable_by_source.items()))
