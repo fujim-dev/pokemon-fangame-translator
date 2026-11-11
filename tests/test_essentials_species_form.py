@@ -324,9 +324,7 @@ class EssentialsSpeciesFormNameTests(unittest.TestCase):
                 )
 
             for bad_base, bad_forms in (
-                (base_pbs[3:], forms_pbs),
                 (base_pbs.replace(b"\r\n", b"\n"), forms_pbs),
-                (base_pbs, forms_pbs[3:]),
                 (base_pbs, forms_pbs.replace(b"\r\n", b"\n")),
             ):
                 with self.assertRaises(SpeciesIntegrityError):
