@@ -1027,7 +1027,7 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
             key == "Pokedex"
             and relative.replace("\\", "/").casefold() == "pbs/pokemon.txt"
         ):
-            comment_match = re.fullmatch(r"(.*?)([ \\t]+\\#[1-3]\\.)", value)
+            comment_match = re.fullmatch(r"(.*?)([ \t]+\#[1-3]\.)", value)
             if comment_match:
                 value = comment_match.group(1)
         if key == "Point" and Path(relative).name.casefold() == "town_map.txt":
