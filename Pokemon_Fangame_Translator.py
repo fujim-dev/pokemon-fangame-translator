@@ -934,12 +934,25 @@ class FangameTranslatorApp(tk.Tk):
     def _adapter_can(self, capability: GameCapability) -> bool:
         return bool(self.detection_result and self.detection_result.can(capability))
 
+    def _certified_extraction_blocker(self) -> str:
+        """Ne confond pas reconnaissance du moteur et extraction validée du jeu."""
+        report = getattr(self, "last_deep_analysis", None)
+        if report is None:
+            return ""
+        for issue in report.issues:
+            if issue.code == "ability_runtime_incomplete" and issue.blocking:
+                return issue.message
+        return ""
+
     def _refresh_action_buttons(self) -> None:
         has_project_csv = bool(
             self.translation_csv_path and Path(self.translation_csv_path).is_file()
         )
         pending_detection = self.detection_result is None
-        extract_allowed = self._adapter_can(GameCapability.EXTRACT)
+        extract_allowed = (
+            self._adapter_can(GameCapability.EXTRACT)
+            and not self._certified_extraction_blocker()
+        )
         translate_allowed = self._adapter_can(GameCapability.TRANSLATE)
         reconstruct_allowed = self._adapter_can(GameCapability.RECONSTRUCT)
         deep_analysis_allowed = self._adapter_can(GameCapability.DEEP_ANALYZE)
@@ -1508,6 +1521,11 @@ class FangameTranslatorApp(tk.Tk):
             return
 
         self.last_deep_analysis = report
+        if self._certified_extraction_blocker():
+            self._log(
+                "Extraction certifiée indisponible pour ce jeu : "
+                + self._certified_extraction_blocker()
+            )
         self.progress["value"] = 100
         self.progress_percent.set("100%")
         self.status_var.set(
@@ -1632,6 +1650,13 @@ class FangameTranslatorApp(tk.Tk):
 
     def extract_texts(self):
         """Extraction structurée en lecture seule des cartes, banques et PBS."""
+        blocker = self._certified_extraction_blocker()
+        if blocker:
+            messagebox.showerror(
+                "Extraction certifiée bloquée",
+                blocker + "\n\nL'analyse statique reste disponible en lecture seule.",
+            )
+            return
         if not self.last_diagnostic or not self.game_dir:
             messagebox.showerror("Diagnostic requis", "Lance d'abord l'analyse du fangame.")
             return
