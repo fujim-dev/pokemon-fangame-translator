@@ -104,6 +104,36 @@ class UiRuntimeBlockerTests(unittest.TestCase):
         error.assert_called_once()
         self.assertIn("Ability", error.call_args.args[1])
 
+    def test_incomplete_bank_disables_reconstruction_button(self):
+        app = make_app(True)
+        app.detection_result = DetectionResult(
+            adapter_id="pokemon_essentials",
+            display_name="Synthétique",
+            confidence=100,
+            capabilities=frozenset(GameCapability),
+            adapter_recognized=True,
+            write_actions_allowed=True,
+        )
+        with patch("pathlib.Path.is_file", return_value=True):
+            app.translation_csv_path = Path("synthetic-project.csv")
+            app._refresh_action_buttons()
+        self.assertFalse(app.reconstruction_btn.enabled)
+
+    def test_incomplete_bank_blocks_direct_reconstruction(self):
+        app = make_app(True)
+        app.detection_result = DetectionResult(
+            adapter_id="pokemon_essentials",
+            display_name="Synthétique",
+            confidence=100,
+            capabilities=frozenset(GameCapability),
+            adapter_recognized=True,
+            write_actions_allowed=True,
+        )
+        with patch("Pokemon_Fangame_Translator.messagebox.showerror") as error:
+            app.open_reconstruction_studio()
+        error.assert_called_once()
+        self.assertIn("Ability", error.call_args.args[1])
+
     def test_valid_profile_retains_studio_action(self):
         app = make_app(False)
         with unittest.mock.patch("pathlib.Path.is_file", return_value=True):
