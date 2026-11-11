@@ -310,6 +310,13 @@ def parse_species_base_pbs(raw: bytes) -> SpeciesPbsDocument:
                 raise SpeciesIntegrityError("Name d'espèce absent, dupliqué ou ambigu.")
             name = source
         elif key == "Pokedex":
+            # Essentials prepline retire les commentaires introduits par #.
+            # Conserver exactement le marqueur des fixtures Myth 2 dans le
+            # suffixe de ligne, hors du texte source réellement compilé.
+            inline_comment = re.fullmatch(r"(.*?)([ \\t]+\\#[1-3]\\.)", source)
+            if inline_comment:
+                source = inline_comment.group(1)
+                trailing = inline_comment.group(2) + trailing
             if pokedex is not None or not source or source != source.strip():
                 raise SpeciesIntegrityError("Pokedex d'espèce absent, dupliqué ou ambigu.")
             pokedex = SpeciesPbsAssignment(
