@@ -763,7 +763,7 @@ class FangameTranslatorApp(tk.Tk):
                  font=("Segoe UI Semibold", 11)).pack(anchor="w", pady=(0, 5))
         self._cyber_summary_row(sc, "▰", "Jeu", self.game_name_display, self.colors["accent"])
         self._cyber_summary_row(sc, "●", "Statut", self.project_status, self.colors["success"])
-        self._cyber_summary_row(sc, "◉", "Compatibilité", self.compatibility_display, self.colors["accent"])
+        self._cyber_summary_row(sc, "◉", "Confiance moteur", self.compatibility_display, self.colors["accent"])
         self._cyber_summary_row(sc, "⌘", "Moteur", self.engine_display, self.colors["accent"])
         self._cyber_summary_row(sc, "◇", "Essentials", self.essentials_display, self.colors["accent"])
         self._cyber_summary_row(sc, "▧", "Cartes", self.maps_display, self.colors["accent"])
@@ -1438,7 +1438,7 @@ class FangameTranslatorApp(tk.Tk):
 
         self.last_diagnostic = diagnostic
         self.progress["value"] = 100
-        self.status_var.set(f"Analyse terminée — compatibilité {level.lower()} ({score}/100).")
+        self.status_var.set(f"Détection terminée — {level.lower()} (confiance moteur {score}/100).")
         self.project_status.set("Analyse terminée")
         self.compatibility_display.set(f"{score} / 100")
         self.maps_display.set(str(len(map_files)))
@@ -1566,8 +1566,8 @@ class FangameTranslatorApp(tk.Tk):
             "=" * 72,
             f"Dossier : {d.root}",
             "",
-            f"Compatibilité estimée : {d.compatibility_level}",
-            f"Score : {d.compatibility_score}/100",
+            f"Profil détecté : {d.compatibility_level}",
+            f"Confiance de détection : {d.compatibility_score}/100",
             "",
             f"Adaptateur : {d.adapter_display_name} ({d.adapter_id})",
             f"Confiance de détection : {d.detection_confidence}/100",
@@ -1600,6 +1600,7 @@ class FangameTranslatorApp(tk.Tk):
             "NOTES",
             "-" * 72,
             *(d.notes or ["Aucune note supplémentaire."]),
+            "Une forte confiance de détection ne prouve ni l'extraction, ni la compatibilité complète du jeu.",
             "",
             "INDICES DE DÉTECTION",
             "-" * 72,
@@ -1612,7 +1613,7 @@ class FangameTranslatorApp(tk.Tk):
                 "la reconstruction du jeu reste bloquée."
                 if d.extraction_compatible and not d.game_write_compatible
                 else (
-                    "Le jeu semble compatible avec l'extracteur structuré de la v1.0.2."
+                    "Le profil est reconnu par l’extracteur ; l’extraction réelle et la reconstruction restent à valider sur ce jeu."
                     if d.write_actions_allowed
                     else "La structure doit être étudiée manuellement ; les actions d'écriture restent bloquées."
                 )
@@ -2038,7 +2039,7 @@ class FangameTranslatorApp(tk.Tk):
             f"Dossier : {d.root}",
             "",
             f"Compatibilité : {d.compatibility_level}",
-            f"Score : {d.compatibility_score}/100",
+            f"Confiance de détection : {d.compatibility_score}/100",
             f"Adaptateur : {d.adapter_display_name} ({d.adapter_id})",
             f"Confiance de détection : {d.detection_confidence}/100",
             f"Actions d'écriture : {'AUTORISÉES' if d.write_actions_allowed else 'BLOQUÉES'}",
