@@ -85,6 +85,36 @@ class UiRuntimeBlockerTests(unittest.TestCase):
         error.assert_called_once()
         self.assertIn("Ability", error.call_args.args[1])
 
+    def test_incomplete_bank_disables_translation_button_and_menu(self):
+        app = make_app(True)
+        with unittest.mock.patch("pathlib.Path.is_file", return_value=True):
+            app.translation_csv_path = Path("synthetic-project.csv")
+            app._refresh_action_buttons()
+        self.assertFalse(app.translate_btn.enabled)
+        self.assertEqual(
+            "disabled",
+            app.file_menu.states["Ouvrir le studio de traduction"],
+        )
+        self.assertTrue(app.deep_analyze_btn.enabled)
+
+    def test_incomplete_bank_blocks_opening_translation_studio(self):
+        app = make_app(True)
+        with patch("Pokemon_Fangame_Translator.messagebox.showerror") as error:
+            app.open_translation_studio()
+        error.assert_called_once()
+        self.assertIn("Ability", error.call_args.args[1])
+
+    def test_valid_profile_retains_studio_action(self):
+        app = make_app(False)
+        with unittest.mock.patch("pathlib.Path.is_file", return_value=True):
+            app.translation_csv_path = Path("synthetic-project.csv")
+            app._refresh_action_buttons()
+        self.assertTrue(app.translate_btn.enabled)
+        self.assertEqual(
+            "normal",
+            app.file_menu.states["Ouvrir le studio de traduction"],
+        )
+
     def test_without_incomplete_bank_extraction_remains_capability_controlled(self):
         app = make_app(False)
         app._refresh_action_buttons()
