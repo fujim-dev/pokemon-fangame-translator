@@ -313,7 +313,7 @@ def parse_species_base_pbs(raw: bytes) -> SpeciesPbsDocument:
             # Essentials prepline retire les commentaires introduits par #.
             # Conserver exactement le marqueur des fixtures Myth 2 dans le
             # suffixe de ligne, hors du texte source réellement compilé.
-            inline_comment = re.fullmatch(r"(.*?)([ \\t]+\\#[1-3]\\.)", source)
+            inline_comment = re.fullmatch(r"(.*?)([ \t]+\#[1-3]\.)", source)
             if inline_comment:
                 source = inline_comment.group(1)
                 trailing = inline_comment.group(2) + trailing
