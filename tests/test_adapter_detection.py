@@ -827,6 +827,30 @@ class AdapterDetectionTests(unittest.TestCase):
         self.assertNotEqual("adapter_valide", result.adapter_id)
         self.assertEqual(0, runner.active_count)
 
+    def test_cancellation_during_startup_overrides_probe_startup_failure(self):
+        from adapters.probe_isolation import _ActiveProbeBatch
+
+        runner = IsolatedProbeRunner()
+        original = _ActiveProbeBatch.run
+
+        def fail_while_cancelling(batch):
+            batch.cancelled.set()
+            return ProbeBatchResult(
+                failures=(
+                    ProbeFailure(
+                        adapter_id="probe_worker",
+                        display_name="Service isolé de détection",
+                        error_type="ProbeStartupTimeout",
+                    ),
+                ),
+            )
+
+        with patch.object(_ActiveProbeBatch, "run", fail_while_cancelling):
+            result = runner.run((NeverReturningAdapter(),), Path("."))
+        self.assertTrue(result.cancelled)
+        self.assertTrue(any(f.cancelled for f in result.failures))
+        self.assertEqual(0, runner.active_count)
+
     def test_application_cancellation_stops_active_probe_and_coordinator(self):
         runner = IsolatedProbeRunner(
             timeout_seconds=10.0,
