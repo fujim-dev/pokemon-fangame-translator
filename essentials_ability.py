@@ -369,6 +369,20 @@ def _analyze_sources(
         ordered_unique = list(dict.fromkeys(sources))
         message_items = list(messages_root[bank_index].items())
         if len(message_items) != len(ordered_unique):
+            # Une banque qui correspond exactement au début des sources, mais
+            # s'arrête prématurément, indique une compilation partielle ou ancienne.
+            # Ne jamais inventer les références runtime manquantes.
+            is_prefix = len(message_items) < len(ordered_unique) and all(
+                isinstance(key, RubyString) and key.text() == source
+                for source, (key, _value) in zip(ordered_unique, message_items)
+            )
+            if is_prefix:
+                raise AbilityIntegrityError(
+                    f"La banque Ability.{field} ne couvre pas exactement abilities.dat : "
+                    f"{len(message_items)} textes présents sur {len(ordered_unique)} "
+                    "textes distincts (préfixe exact, banque runtime incomplète). "
+                    "Extraction et reconstruction bloquées."
+                )
             raise AbilityIntegrityError(
                 f"La banque Ability.{field} ne couvre pas exactement abilities.dat."
             )
