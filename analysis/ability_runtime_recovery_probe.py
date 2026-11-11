@@ -29,6 +29,18 @@ def probe_ability_completion_in_memory(root: Path) -> dict[str, object] | None:
             raise ValueError("Chemin redirigé : diagnostic refusé.")
     if not all(p.is_file() for p in paths):
         return None
+    # Ne jamais proposer de remplir core quand les textes existent déjà
+    # dans messages_game.dat (répartition normale du moteur).
+    from analysis.ability_runtime_diagnostic import inspect_ability_runtime_banks
+    observed = inspect_ability_runtime_banks(root)
+    if observed is not None and observed.get("split_complete"):
+        return {
+            "hypothetical_only": True,
+            "possible": False,
+            "reason": "already_in_game_bank",
+            "additions": {},
+            "proof_count": 0,
+        }
     pbs_raw, compiled_raw, runtime_raw = (p.read_bytes() for p in paths)
     pbs = parse_ability_pbs(pbs_raw)
     compiled = _load_marshal(compiled_raw, COMPILED_ABILITY_FILE)
