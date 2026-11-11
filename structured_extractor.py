@@ -1286,8 +1286,8 @@ def _bind_compiled_phone_proofs(
             row["pbs_compiled_sha256"] = compiled_source.sha256
             row["pbs_compiled_path"] = proof.compiled_path
             row["pbs_compiled_structure"] = proof.compiled_structure
-            row["pbs_runtime_file"] = actual_runtime_source.relative_path
-            row["pbs_runtime_sha256"] = actual_runtime_source.sha256
+            row["pbs_runtime_file"] = runtime_source.relative_path
+            row["pbs_runtime_sha256"] = runtime_source.sha256
             row["pbs_runtime_path"] = proof.runtime_path
             row["pbs_runtime_structure"] = proof.runtime_structure
         if proofs:
