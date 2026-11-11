@@ -157,6 +157,23 @@ class UiRuntimeBlockerTests(unittest.TestCase):
         error.assert_called_once()
         self.assertIn("Ability", error.call_args.args[1])
 
+    def test_split_runtime_bank_blocks_unsupported_operations(self):
+        app = make_app(True)
+        app.last_deep_analysis.issues[0].code = "ability_runtime_split_unverified"
+        app.last_deep_analysis.issues[0].message = "Banques Ability réparties (test synthétique)"
+        with patch("pathlib.Path.is_file", return_value=True):
+            app.translation_csv_path = Path("synthetic-project.csv")
+            app._refresh_action_buttons()
+        self.assertFalse(app.extract_btn.enabled)
+        self.assertFalse(app.translate_btn.enabled)
+        self.assertFalse(app.reconstruction_btn.enabled)
+        self.assertTrue(app.deep_analyze_btn.enabled)
+        with patch("Pokemon_Fangame_Translator.messagebox.showerror") as error:
+            app.extract_texts()
+            app.open_translation_studio()
+            app.open_reconstruction_studio()
+        self.assertEqual(3, error.call_count)
+
     def test_without_incomplete_bank_extraction_remains_capability_controlled(self):
         app = make_app(False)
         app._refresh_action_buttons()
