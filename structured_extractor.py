@@ -1022,6 +1022,14 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
             continue
         _prefix, key, exact_value, _trailing = assignment
         value = exact_value.strip()
+        original_value = value
+        if (
+            key == "Pokedex"
+            and relative.replace("\\", "/").casefold() == "pbs/pokemon.txt"
+        ):
+            comment_match = re.fullmatch(r"(.*?)([ \\t]+\\#[1-3]\\.)", value)
+            if comment_match:
+                value = comment_match.group(1)
         if key == "Point" and Path(relative).name.casefold() == "town_map.txt":
             occurrence[(section, key)] += 1
             sub_index = occurrence[(section, key)]
@@ -1096,7 +1104,7 @@ def extract_pbs(path: Path, relative: str) -> list[dict]:
             "pbs_bom": bom,
             "pbs_newline": newline,
             "pbs_field_index": "",
-            "pbs_value_sha256": _pbs_value_sha256(value, encoding),
+            "pbs_value_sha256": _pbs_value_sha256(original_value, encoding),
             "pbs_line_number": line_number,
             "pbs_field_count": "",
             "pbs_point_structure": "",
