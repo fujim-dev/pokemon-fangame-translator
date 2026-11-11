@@ -48,6 +48,8 @@ class AbilityReadOnlyDiagnosticTests(unittest.TestCase):
             self.assertEqual(1, len(flagged))
             self.assertTrue(flagged[0].blocking)
             self.assertEqual("rouge", analysis.status)
+            self.assertTrue(analysis.coverage.incomplete_sources)
+            self.assertFalse(analysis.coverage.can_claim_complete_coverage)
             self.assertNotIn("Synthetic", flagged[0].message)
 
     def test_missing_files_do_not_trigger_ability_diagnosis(self):
