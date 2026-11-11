@@ -72,3 +72,17 @@ Exécution sur Windows / Python 3.13, avec `test_essentials_v21.EssentialsV21Pro
 **Note d'exécution :** un premier lanceur sélectif écrit ad hoc sans garde `if __name__ == "__main__"` a échoué sur Windows pendant l'initialisation du détecteur en processus isolé (`ProbeIsolationError`). Le lanceur a été corrigé avec cette garde, puis les sept tests ont réussi (3/3 et 4/4). Le lanceur initial ne prouve aucun bug du moteur.
 
 La suite complète `unittest discover` avait également réussi sur ce PC : **370 tests, aucun échec, un ignoré**. Aucun nouveau pourcentage de compatibilité ne doit être inféré de ces vérifications. La copie réelle de Pokémon Myth 2 v1.1 reste bloquée par des banques Ability incomplètes ; aucune reconstruction réelle du jeu n'a été entreprise.
+
+## Correction du diagnostic Myth 2 — 11 novembre 2026 (après examen des scripts Ruby)
+
+**Important : les mentions antérieures de 111 textes de capacités « manquants » doivent être corrigées.** L'analyse de `Data/Scripts.rxdata` a établi que `GameData::Ability#name` et `#description` appellent `pbGetMessageFromHash`. Le moteur recherche les messages dans la banque du jeu avant celle du système et retourne le texte source lorsque la clé est absente. Les index `ABILITY_NAMES = 10` et `ABILITY_DESCRIPTIONS = 11` sont confirmés.
+
+Sur la copie isolée Myth 2 v1.1 :
+- `messages_core.dat` : 266 noms et 252 descriptions distinctes.
+- `messages_game.dat` : 55 noms et 56 descriptions supplémentaires.
+- Total combiné : **321 noms et 308 descriptions distinctes**, soit exactement les sources PBS/compilées. Il ne manque **aucun** de ces 111 textes.
+- Les fichiers compilés `abilities.dat` et PBS possèdent 325 capacités cohérentes. Les fichiers du jeu restent inchangés.
+
+Le diagnostic `analysis/ability_runtime_diagnostic.py` reconnaît désormais la répartition *core + game* uniquement si elle est structurellement exacte. Il expose `split_complete=true` et `missing_unique=0`. L'analyse approfondie émet `ability_runtime_split_unverified` **bloquante**, non `ability_runtime_incomplete`, parce que **l'extracteur et le reconstructeur restent limités à la banque core** et n'ont pas encore de preuve supportant les deux couches. Les entrées de l'UI sont également bloquées jusqu'à validation. Le module expérimental de réparation en mémoire détecte ce cas et retourne `reason=already_in_game_bank` : ne plus proposer de rajouter ces entrées dans `messages_core.dat`.
+
+Tests synthétiques : 8/8 diagnostics et 11/11 protections UI réussis localement. Cette correction ne vaut pas compatibilité totale de Myth 2 ; l'extraction complète et la reconstruction restent à valider après adaptation sûre des chemins de preuve *core + game*. Aucun jeu, sauvegarde ni script Ruby exécuté ou modifié.
