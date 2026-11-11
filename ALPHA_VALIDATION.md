@@ -40,3 +40,16 @@ Demander : nom et version du jeu, version de PFT, moteur si connu, fonction essa
 ## Sécurité et livraison
 
 Ne jamais toucher aux originaux, au Bureau Windows, ni aux sauvegardes. Utiliser des copies de travail dans un emplacement dédié, des données synthétiques pour les tests automatisés, et garder la branche `main` intacte jusqu'à revue et validation.
+
+## Rapport de progression : Pokémon Myth 2 v1.1 — 11 novembre 2026
+
+**Statut : en cours de test ; extraction non encore validée.** Vérifications sur copie isolée uniquement, sous `Documents/PFT_ALPHA_TESTS`, sans publication d'assets de fangame.
+
+- ZIP : 26 878 entrées, contrôle CRC intégral réussi. Détection PFT : Essentials 21.1, confiance 100/100, reconstruction bloquée.
+- Première erreur d'extraction : un `Point` PBS de `town_map.txt` a un neuvième champ final vide ; correctif strict dans `essentials_town_map.py` (commit `d466774f`) et quatre tests (commit `5889c6ac`).
+- Deuxième erreur : `trainers.txt` se termine sans CRLF, et 19 des 127 dresseurs ont un `LoseText` vide. Le compilé contient aussi 19 textes vides ; la banque runtime contient une clé vide. Correctifs dans `essentials_trainer.py` (commits `59e2b100`, `53d971bc`), tests ciblés (commits `a2e7685e`, `cfcaaca0`). La preuve croisée a réussi pour 127 dresseurs avec ces correctifs.
+- Troisième tentative d'extraction : blocage désormais sur `PBS/abilities.dat/ABILITY_NAMES/ABILITY_DESCRIPTIONS`. **À diagnostiquer avant toute autre correction.**
+- Contrôles SHA-256 avant/après des fichiers de référence `Game.ini` et `Data/Scripts.rxdata` : identiques. Les trois sources de dresseurs sont restées inchangées lors du diagnostic. Aucune reconstruction ou exécution du jeu.
+- Tests ciblés sur PC : 6/6 réussis pour la fin de ligne et les valeurs `LoseText` vides. Le résultat de la CI complète doit être vérifié séparément.
+
+Une détection réussie et des sous-étapes de preuve corrigées ne constituent **pas** une compatibilité confirmée.
