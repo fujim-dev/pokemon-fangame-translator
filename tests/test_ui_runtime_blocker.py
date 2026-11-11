@@ -145,6 +145,18 @@ class UiRuntimeBlockerTests(unittest.TestCase):
             app.file_menu.states["Ouvrir le studio de traduction"],
         )
 
+    def test_reconstruction_button_disabled_when_runtime_incomplete(self):
+        app = make_app(True)
+        app._refresh_action_buttons()
+        self.assertFalse(app.reconstruction_btn.enabled)
+
+    def test_direct_reconstruction_studio_blocked_before_opening(self):
+        app = make_app(True)
+        with patch("Pokemon_Fangame_Translator.messagebox.showerror") as error:
+            app.open_reconstruction_studio()
+        error.assert_called_once()
+        self.assertIn("Ability", error.call_args.args[1])
+
     def test_without_incomplete_bank_extraction_remains_capability_controlled(self):
         app = make_app(False)
         app._refresh_action_buttons()
