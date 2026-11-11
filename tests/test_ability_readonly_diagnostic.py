@@ -52,6 +52,43 @@ class AbilityReadOnlyDiagnosticTests(unittest.TestCase):
             self.assertFalse(analysis.coverage.can_claim_complete_coverage)
             self.assertNotIn("Synthetic", flagged[0].message)
 
+    def test_in_memory_probe_accepts_missing_prefix_without_writing(self):
+        from analysis.ability_runtime_recovery_probe import probe_ability_completion_in_memory
+        with tempfile.TemporaryDirectory(prefix="pft_ability_probe_") as tmp:
+            root = Path(tmp) / "game"
+            prepare_v21_game(root, ability_validation=True)
+            path = root / ABILITY_MESSAGES_FILE
+            runtime = load(path)
+            runtime[10].pop(next(reversed(runtime[10])))
+            path.write_bytes(dumps(runtime))
+            tracked = [root / "PBS/abilities.txt", root / "Data/abilities.dat", path]
+            before = [p.read_bytes() for p in tracked]
+            probe = probe_ability_completion_in_memory(root)
+            self.assertTrue(probe["hypothetical_only"])
+            self.assertTrue(probe["possible"])
+            self.assertEqual(1, probe["additions"]["Name"])
+            self.assertEqual(6, probe["proof_count"])
+            self.assertEqual(before, [p.read_bytes() for p in tracked])
+            # La vraie extraction reste bloquée avec les fichiers non réparés.
+            from essentials_ability import AbilityIntegrityError, build_ability_text_proofs
+            with self.assertRaises(AbilityIntegrityError):
+                build_ability_text_proofs(*(p.read_bytes() for p in tracked))
+
+    def test_in_memory_probe_rejects_nonprefix_without_writing(self):
+        from analysis.ability_runtime_recovery_probe import probe_ability_completion_in_memory
+        with tempfile.TemporaryDirectory(prefix="pft_ability_probe_bad_") as tmp:
+            root = Path(tmp) / "game"
+            prepare_v21_game(root, ability_validation=True)
+            path = root / ABILITY_MESSAGES_FILE
+            runtime = load(path)
+            runtime[10].pop(next(iter(runtime[10])))
+            path.write_bytes(dumps(runtime))
+            before = path.read_bytes()
+            probe = probe_ability_completion_in_memory(root)
+            self.assertFalse(probe["possible"])
+            self.assertEqual("not_exact_prefix", probe["reason"])
+            self.assertEqual(before, path.read_bytes())
+
     def test_missing_files_do_not_trigger_ability_diagnosis(self):
         with tempfile.TemporaryDirectory(prefix="pft_ability_missing_diag_") as tmp:
             root = Path(tmp) / "game"
