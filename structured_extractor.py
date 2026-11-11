@@ -30,6 +30,7 @@ from essentials_trainer import (
     TrainerIntegrityError,
     build_trainer_entry_proofs,
 )
+from analysis.ability_split_extraction import build_split_ability_readonly_proofs
 from essentials_ability import (
     ABILITY_MESSAGES_FILE,
     ABILITY_PBS_FILE,
@@ -1268,6 +1269,10 @@ def _bind_compiled_phone_proofs(
                 int(row.get("sous_index") or 0),
             )
             proof = proofs.pop(lookup)
+            actual_runtime_source = runtime_source
+            if split_proofs is not None:
+                origin = split_proofs[lookup]
+                actual_runtime_source = by_relative[origin.runtime_file.casefold()]
             if proof.source != str(row.get("texte_source") or ""):
                 raise PhoneIntegrityError(
                     "Le texte PBS ne correspond pas à la preuve téléphone."
@@ -1277,8 +1282,8 @@ def _bind_compiled_phone_proofs(
             row["pbs_compiled_sha256"] = compiled_source.sha256
             row["pbs_compiled_path"] = proof.compiled_path
             row["pbs_compiled_structure"] = proof.compiled_structure
-            row["pbs_runtime_file"] = runtime_source.relative_path
-            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_file"] = actual_runtime_source.relative_path
+            row["pbs_runtime_sha256"] = actual_runtime_source.sha256
             row["pbs_runtime_path"] = proof.runtime_path
             row["pbs_runtime_structure"] = proof.runtime_structure
         if proofs:
@@ -1391,11 +1396,24 @@ def _bind_compiled_ability_proofs(
         return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
 
     try:
-        proofs = build_ability_text_proofs(
-            snapshot_bytes(pbs_source),
-            snapshot_bytes(compiled_source),
-            snapshot_bytes(runtime_source),
-        )
+        split_proofs = None
+        try:
+            proofs = build_ability_text_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+            )
+        except AbilityIntegrityError:
+            game_source = by_relative.get("data/messages_game.dat")
+            if game_source is None:
+                raise
+            split_proofs = build_split_ability_readonly_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+                snapshot_bytes(game_source),
+            )
+            proofs = {key: item.proof for key, item in split_proofs.items()}
         for row in ability_rows:
             lookup = (
                 str(row.get("evenement_id") or ""),
