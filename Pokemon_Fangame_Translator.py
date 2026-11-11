@@ -936,7 +936,7 @@ class FangameTranslatorApp(tk.Tk):
 
     def _certified_extraction_blocker(self) -> str:
         """Ne confond pas reconnaissance du moteur et extraction validée du jeu."""
-        report = getattr(self, "last_deep_analysis", None)
+        report = self.__dict__.get("last_deep_analysis")
         if report is None:
             return ""
         for issue in report.issues:
