@@ -159,8 +159,12 @@ class UiRuntimeBlockerTests(unittest.TestCase):
 
     def test_split_runtime_bank_blocks_unsupported_operations(self):
         app = make_app(True)
-        app.last_deep_analysis.issues[0].code = "ability_runtime_split_unverified"
-        app.last_deep_analysis.issues[0].message = "Banques Ability réparties (test synthétique)"
+        from dataclasses import replace
+        app.last_deep_analysis.issues[0] = replace(
+            app.last_deep_analysis.issues[0],
+            code="ability_runtime_split_unverified",
+            message="Banques Ability réparties (test synthétique)",
+        )
         with patch("pathlib.Path.is_file", return_value=True):
             app.translation_csv_path = Path("synthetic-project.csv")
             app._refresh_action_buttons()
