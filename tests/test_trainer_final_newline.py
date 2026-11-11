@@ -23,6 +23,17 @@ class TrainerFinalNewlineTests(unittest.TestCase):
         with self.assertRaises(TrainerIntegrityError):
             parse_trainer_pbs(data)
 
+    def test_accepts_empty_lose_text_without_making_it_a_translation(self):
+        data = BOM + b"[YOUNGSTER,Synthetic]\r\nLoseText = \r\nPokemon = SYNTHETIC,5"
+        result = parse_trainer_pbs(data)
+        self.assertEqual("", result.sections[0].lose_text.source)
+        self.assertEqual(1, len(result.sections))
+
+    def test_refuses_duplicate_empty_lose_text(self):
+        data = BOM + b"[YOUNGSTER,Synthetic]\r\nLoseText = \r\nLoseText = Synthetic defeat"
+        with self.assertRaises(TrainerIntegrityError):
+            parse_trainer_pbs(data)
+
     def test_preserves_existing_final_crlf(self):
         result = parse_trainer_pbs(BOM + PREFIX)
         self.assertEqual("\r\n", result.sections[0].lose_text.newline)
