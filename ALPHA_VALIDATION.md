@@ -53,3 +53,22 @@ Ne jamais toucher aux originaux, au Bureau Windows, ni aux sauvegardes. Utiliser
 - Tests ciblés sur PC : 6/6 réussis pour la fin de ligne et les valeurs `LoseText` vides. Le résultat de la CI complète doit être vérifié séparément.
 
 Une détection réussie et des sous-étapes de preuve corrigées ne constituent **pas** une compatibilité confirmée.
+
+## Revalidation ciblée du parcours v21.1 — 11 novembre 2026
+
+Exécution sur Windows / Python 3.13, avec `test_essentials_v21.EssentialsV21ProfileTests`, dans un projet de jeu synthétique placé en dossier temporaire. L'extraction et la reconstruction sont exécutées via les composants existants de PFT, sans autoriser le mode général de reconstruction pour les jeux v21.1 en lecture seule.
+
+**Tests positifs (3/3 réussis) :**
+- `test_v21_map_dialogue_choice_roundtrip_updates_matching_402_only` : dialogue et choix, correspondance des branches 102/402, reconstruction en copie, relecture des traductions et préservation des commandes non ciblées.
+- `test_v21_private_validation_roundtrip_is_limited_to_one_message_bank_row` : modification unique de banque runtime, manifeste de provenance, réextraction et intégrité des autres entrées.
+- `test_v21_private_point_roundtrip_changes_only_the_target_subfield` : modification corrélée du PBS et de `town_map.dat`, preuve compilée, comparaison des fichiers non ciblés.
+
+**Tests négatifs (4/4 réussis) :**
+- Refus d'une branche de choix 402 ambiguë.
+- Refus d'une preuve de segmentation absente ou altérée.
+- Refus si la provenance ou la source change après préparation du plan.
+- Refus de types et de multiples lignes hors du périmètre validé.
+
+**Note d'exécution :** un premier lanceur sélectif écrit ad hoc sans garde `if __name__ == "__main__"` a échoué sur Windows pendant l'initialisation du détecteur en processus isolé (`ProbeIsolationError`). Le lanceur a été corrigé avec cette garde, puis les sept tests ont réussi (3/3 et 4/4). Le lanceur initial ne prouve aucun bug du moteur.
+
+La suite complète `unittest discover` avait également réussi sur ce PC : **370 tests, aucun échec, un ignoré**. Aucun nouveau pourcentage de compatibilité ne doit être inféré de ces vérifications. La copie réelle de Pokémon Myth 2 v1.1 reste bloquée par des banques Ability incomplètes ; aucune reconstruction réelle du jeu n'a été entreprise.
