@@ -81,6 +81,9 @@ SPECIES_IVARS = (
 )
 
 
+SPECIES_RAID_EXTENSION_IVARS = ("@raid_ranks", "@raid_style")
+
+
 class SpeciesIntegrityError(ValueError):
     """La quadruple correspondance d'une entrée Pokédex n'est pas démontrable."""
 
@@ -418,7 +421,16 @@ def _validate_compiled_entry(
         raise SpeciesIntegrityError("La clé compilée d'espèce a changé.")
     if not isinstance(value, RubyObject) or value.class_name != SPECIES_CLASS:
         raise SpeciesIntegrityError("Une entrée compilée n'est pas GameData::Species.")
-    if tuple(value.ivars) != SPECIES_IVARS:
+    actual_ivars = tuple(value.ivars)
+    if actual_ivars == SPECIES_IVARS:
+        pass
+    elif actual_ivars == SPECIES_IVARS + SPECIES_RAID_EXTENSION_IVARS:
+        if not all(
+            isinstance(value.ivars[key], list)
+            for key in SPECIES_RAID_EXTENSION_IVARS
+        ):
+            raise SpeciesIntegrityError("Les données de raid doivent rester des listes.")
+    else:
         raise SpeciesIntegrityError("La structure compilée d'une espèce a changé.")
     if (
         value.ivars["@id"] != expected_key
@@ -644,7 +656,9 @@ def _compiled_proof(
         "section_index": target.assignment.section_index,
         "section_sha256": _sha256(target.assignment.section.encode("utf-8")),
         "section_class": SPECIES_CLASS,
-        "section_ivars": list(SPECIES_IVARS),
+        "section_ivars": list(
+            list(analysis.compiled_root.values())[target.assignment.section_index].ivars
+        ),
         "species": target.assignment.section,
         "form": 0,
         "target_type": "RubyString",
