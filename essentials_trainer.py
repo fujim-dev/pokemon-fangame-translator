@@ -255,7 +255,8 @@ def parse_trainer_pbs(raw: bytes) -> TrainerPbsDocument:
         prefix, key, source, trailing = parsed
         if key != "LoseText":
             continue
-        if lose_assignment is not None or not source or source != source.strip():
+        # Un LoseText vide est une donnée valide : il reste prouvé mais non traduit.
+        if lose_assignment is not None or source != source.strip():
             raise TrainerIntegrityError("LoseText absent, dupliqué ou ambigu.")
         lose_assignment = TrainerPbsAssignment(
             section=section_name,
