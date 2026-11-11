@@ -957,7 +957,10 @@ class FangameTranslatorApp(tk.Tk):
             self._adapter_can(GameCapability.TRANSLATE)
             and not self._certified_extraction_blocker()
         )
-        reconstruct_allowed = self._adapter_can(GameCapability.RECONSTRUCT)
+        reconstruct_allowed = (
+            self._adapter_can(GameCapability.RECONSTRUCT)
+            and not self._certified_extraction_blocker()
+        )
         deep_analysis_allowed = self._adapter_can(GameCapability.DEEP_ANALYZE)
 
         layouts = (
@@ -1044,6 +1047,14 @@ class FangameTranslatorApp(tk.Tk):
         self.open_translation_studio()
 
     def open_reconstruction_studio(self):
+        blocker = self._certified_extraction_blocker()
+        if blocker:
+            messagebox.showerror(
+                "Reconstruction non validée",
+                blocker + "\n\nLes données du jeu ne sont pas suffisamment cohérentes "
+                "pour ouvrir le studio de reconstruction.",
+            )
+            return
         if not self._adapter_can(GameCapability.RECONSTRUCT):
             messagebox.showerror(
                 "Reconstruction bloquée",
