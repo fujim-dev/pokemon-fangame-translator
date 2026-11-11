@@ -30,7 +30,7 @@ from essentials_trainer import (
     TrainerIntegrityError,
     build_trainer_entry_proofs,
 )
-from analysis.ability_split_extraction import build_split_ability_readonly_proofs
+from essentials_ability_split import build_split_ability_readonly_proofs
 from essentials_ability import (
     ABILITY_MESSAGES_FILE,
     ABILITY_PBS_FILE,
