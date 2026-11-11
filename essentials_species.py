@@ -121,6 +121,7 @@ class SpeciesPbsDocument:
     base_sections: tuple[SpeciesBaseSection, ...]
     form_sections: tuple[SpeciesFormSection, ...]
     file_sha256: str
+    has_bom: bool
 
 
 @dataclass(frozen=True)
@@ -244,9 +245,8 @@ def _parse_assignment(body: str) -> tuple[str, str, str, str] | None:
 
 
 def _decode_pbs(raw: bytes, relative_file: str) -> tuple[str, ...]:
-    if not raw.startswith(b"\xef\xbb\xbf"):
-        raise SpeciesIntegrityError(f"{relative_file} doit conserver son BOM UTF-8.")
-    payload = raw[3:]
+    has_bom = raw.startswith(b"\xef\xbb\xbf")
+    payload = raw[3:] if has_bom else raw
     if b"\n" in payload.replace(b"\r\n", b"") or b"\r" in payload.replace(
         b"\r\n", b""
     ):
@@ -329,6 +329,7 @@ def parse_species_base_pbs(raw: bytes) -> SpeciesPbsDocument:
         tuple(sections),
         (),
         _sha256(raw),
+        raw.startswith(b"\xef\xbb\xbf"),
     )
 
 
@@ -399,6 +400,7 @@ def parse_species_forms_pbs(raw: bytes) -> SpeciesPbsDocument:
         (),
         tuple(sections),
         _sha256(raw),
+        raw.startswith(b"\xef\xbb\xbf"),
     )
 
 
@@ -597,8 +599,9 @@ def _pbs_proof(analysis: _SpeciesAnalysis, target: SpeciesTarget) -> str:
         "forms_pbs_file": SPECIES_FORMS_PBS_FILE,
         "file_sha256": analysis.base_pbs.file_sha256,
         "forms_file_sha256": analysis.forms_pbs.file_sha256,
-        "encoding": "utf-8-sig",
-        "bom": "utf-8",
+        "encoding": "utf-8-sig" if analysis.base_pbs.has_bom else "utf-8",
+        "bom": "utf-8" if analysis.base_pbs.has_bom else "none",
+        "forms_bom": "utf-8" if analysis.forms_pbs.has_bom else "none",
         "newline": "CRLF",
         "line_number": assignment.line_number,
         "section_index": assignment.section_index,
@@ -763,7 +766,7 @@ def rebuild_species_pokedex_payloads(
     pbs_lines[assignment.line_index] = (
         assignment.prefix + translation + assignment.trailing + assignment.newline
     )
-    rebuilt_pbs = b"\xef\xbb\xbf" + "".join(pbs_lines).encode("utf-8")
+    rebuilt_pbs = (b"\xef\xbb\xbf" if analysis.base_pbs.has_bom else b"") + "".join(pbs_lines).encode("utf-8")
 
     compiled_before = graph_sha256(
         analysis.compiled_root, masked=(target.compiled_value,)
