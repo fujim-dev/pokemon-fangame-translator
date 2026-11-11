@@ -130,13 +130,13 @@ class AbilityReadOnlyDiagnosticTests(unittest.TestCase):
             key, value = core[10].popitem()
             core_file.write_bytes(dumps(core))
             game = [{} for _ in range(len(core))]
-            game[10][key] = value
-            # The missing ability descriptions are not repaired by this entry.
+            from ruby_marshal_reader import RubyString
+            game[10][key] = RubyString(b"incorrect synthetic translation", {"E": True})
             game_file.write_bytes(dumps(game))
             report = inspect_ability_runtime_banks(root)
             self.assertFalse(report["complete"])
             self.assertFalse(report["split_complete"])
-            self.assertFalse(report["fields"]["Description"]["split_complete"])
+            self.assertFalse(report["fields"]["Name"]["split_complete"])
 
     def test_missing_files_do_not_trigger_ability_diagnosis(self):
         with tempfile.TemporaryDirectory(prefix="pft_ability_missing_diag_") as tmp:
