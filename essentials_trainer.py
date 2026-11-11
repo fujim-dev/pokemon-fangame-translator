@@ -214,8 +214,10 @@ def parse_trainer_pbs(raw: bytes) -> TrainerPbsDocument:
     except UnicodeDecodeError as exc:
         raise TrainerIntegrityError("PBS/trainers.txt n'est pas un UTF-8 valide.") from exc
     lines = tuple(content.splitlines(keepends=True))
-    if not lines or any(not line.endswith("\r\n") for line in lines):
-        raise TrainerIntegrityError("Chaque ligne de PBS/trainers.txt doit conserver son CRLF.")
+    if not lines or any(not line.endswith("\r\n") for line in lines[:-1]):
+        raise TrainerIntegrityError("Toutes les lignes internes de PBS/trainers.txt doivent conserver leur CRLF.")
+    if lines[-1].endswith("\n") and not lines[-1].endswith("\r\n"):
+        raise TrainerIntegrityError("La dernière ligne de PBS/trainers.txt utilise un retour LF inattendu.")
 
     pending: list[tuple[str, int, TrainerPbsAssignment | None]] = []
     section_name = ""
@@ -232,7 +234,8 @@ def parse_trainer_pbs(raw: bytes) -> TrainerPbsDocument:
         lose_assignment = None
 
     for line_index, raw_line in enumerate(lines):
-        body = raw_line[:-2]
+        line_ending = "\r\n" if raw_line.endswith("\r\n") else ""
+        body = raw_line[:-2] if line_ending else raw_line
         stripped = body.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -262,7 +265,7 @@ def parse_trainer_pbs(raw: bytes) -> TrainerPbsDocument:
             prefix=prefix,
             source=source,
             trailing=trailing,
-            newline="\r\n",
+            newline=line_ending,
         )
     finish_section()
     sections = tuple(
