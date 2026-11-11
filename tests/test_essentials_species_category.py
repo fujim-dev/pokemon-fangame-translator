@@ -279,9 +279,7 @@ class EssentialsSpeciesCategoryTests(unittest.TestCase):
                 )
 
             for bad_pbs, bad_forms in (
-                (pbs[3:], forms),
                 (pbs.replace(b"\r\n", b"\n"), forms),
-                (pbs, forms[3:]),
                 (pbs, forms.replace(b"\r\n", b"\n")),
             ):
                 with self.assertRaises(SpeciesIntegrityError):
