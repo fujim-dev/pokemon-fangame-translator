@@ -628,12 +628,6 @@ def analyze_game(
             f"{report.static_references_checked} référence(s) statique(s) contrôlée(s).",
         ]
     )
-    incomplete_sources = bool(
-        report.unreadable_files
-        or report.unverified
-        or report.unsupported
-        or any(issue.code == "filesystem_link" for issue in report.issues)
-    )
     if structured_reading_allowed and mode in {"complete", "deep"}:
         try:
             ability_diagnostic = inspect_ability_runtime_banks(root)
@@ -669,6 +663,12 @@ def analyze_game(
                     "Le décompte statique des textes ne démontre pas leur reconstructibilité."
                 )
 
+    incomplete_sources = bool(
+        report.unreadable_files
+        or report.unverified
+        or report.unsupported
+        or any(issue.blocking or issue.code == "filesystem_link" for issue in report.issues)
+    )
     report.extractable_text_occurrences = len(texts)
     report.extractable_unique_texts = len(set(texts))
     report.extractable_by_source = dict(sorted(extractable_by_source.items()))
