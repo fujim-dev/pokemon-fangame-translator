@@ -940,7 +940,7 @@ class FangameTranslatorApp(tk.Tk):
         if report is None:
             return ""
         for issue in report.issues:
-            if issue.code == "ability_runtime_incomplete" and issue.blocking:
+            if issue.code in {"ability_runtime_incomplete", "ability_runtime_split_unverified"} and issue.blocking:
                 return issue.message
         return ""
 
