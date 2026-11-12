@@ -46,6 +46,7 @@ from essentials_species import (
     SpeciesIntegrityError,
     build_species_pokedex_proofs,
 )
+from essentials_species_split import build_split_pokedex_readonly_proofs
 from essentials_species_category import build_species_category_proofs
 from essentials_species_form import build_species_form_name_proofs
 from essentials_map_metadata import (
@@ -1492,12 +1493,26 @@ def _bind_compiled_species_pokedex_proofs(
         return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
 
     try:
-        proofs = build_species_pokedex_proofs(
-            snapshot_bytes(pbs_source),
-            snapshot_bytes(forms_source),
-            snapshot_bytes(compiled_source),
-            snapshot_bytes(runtime_source),
-        )
+        split_proofs = None
+        try:
+            proofs = build_species_pokedex_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(forms_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+            )
+        except SpeciesIntegrityError:
+            game_source = by_relative.get("data/messages_game.dat")
+            if game_source is None:
+                raise
+            split_proofs = build_split_pokedex_readonly_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(forms_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+                snapshot_bytes(game_source),
+            )
+            proofs = {key: item.proof for key, item in split_proofs.items()}
         for row in species_rows:
             lookup = (
                 str(row.get("evenement_id") or ""),
@@ -1505,6 +1520,10 @@ def _bind_compiled_species_pokedex_proofs(
                 int(row.get("sous_index") or 0),
             )
             proof = proofs.pop(lookup)
+            actual_runtime_source = runtime_source
+            if split_proofs is not None:
+                origin = split_proofs[lookup]
+                actual_runtime_source = by_relative[origin.runtime_file.casefold()]
             if proof.source != str(row.get("texte_source") or ""):
                 raise SpeciesIntegrityError(
                     "Le texte PBS ne correspond pas à la preuve Pokédex."
@@ -1514,8 +1533,8 @@ def _bind_compiled_species_pokedex_proofs(
             row["pbs_compiled_sha256"] = compiled_source.sha256
             row["pbs_compiled_path"] = proof.compiled_path
             row["pbs_compiled_structure"] = proof.compiled_structure
-            row["pbs_runtime_file"] = runtime_source.relative_path
-            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_file"] = actual_runtime_source.relative_path
+            row["pbs_runtime_sha256"] = actual_runtime_source.sha256
             row["pbs_runtime_path"] = proof.runtime_path
             row["pbs_runtime_structure"] = proof.runtime_structure
         if any(looks_visible(proof.source) for proof in proofs.values()):
