@@ -12,6 +12,7 @@ from essentials_species import (
     SPECIES_MESSAGES_FILE,
     SPECIES_PBS_FILE,
     SpeciesIntegrityError,
+    parse_species_base_pbs,
 )
 from essentials_species_split import (
     GAME_MESSAGES_FILE,
@@ -29,7 +30,10 @@ class PokedexSplitReadonlyTests(unittest.TestCase):
         core_path = root / SPECIES_MESSAGES_FILE
         core = load(core_path)
         game = [{} for _ in range(len(core))]
-        key = next(iter(core[3]))
+        source = parse_species_base_pbs(
+            (root / SPECIES_PBS_FILE).read_bytes()
+        ).base_sections[0].pokedex.source
+        key = next(k for k in core[3] if k.text() == source)
         value = core[3].pop(key)
         game[3][key] = value
         core[3][RubyString(b"Synthetic obsolete extra entry", {"E": True})] = RubyString(
