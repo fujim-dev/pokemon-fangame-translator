@@ -57,7 +57,7 @@ class PokedexSplitReadonlyTests(unittest.TestCase):
                 meta = json.loads(found.proof.runtime_structure)
                 self.assertEqual(SPLIT_POKEDEX_READONLY_FORMAT, meta["format"])
                 self.assertFalse(meta["reconstruction_allowed"])
-                self.assertEqual(1, meta["historical_core_extra_count"])
+                self.assertEqual(1, meta["historical_core_extra_keys"])
             self.assertEqual(originals, [p.read_bytes() for p in paths])
 
     def test_missing_game_key_is_refused(self):
