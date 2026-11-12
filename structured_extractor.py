@@ -47,6 +47,10 @@ from essentials_species import (
     build_species_pokedex_proofs,
 )
 from essentials_species_split import build_split_pokedex_readonly_proofs
+from essentials_species_category_split import build_split_category_readonly_proofs
+from essentials_species_form_split import build_split_form_name_readonly_proofs
+from essentials_map_metadata_implicit import build_implicit_map_name_readonly_proofs
+from essentials_move_split import build_split_move_readonly_proofs
 from essentials_species_category import build_species_category_proofs
 from essentials_species_form import build_species_form_name_proofs
 from essentials_map_metadata import (
@@ -71,6 +75,7 @@ from essentials_item import (
     ItemIntegrityError,
     build_item_text_proofs,
 )
+from essentials_item_split_readonly import build_split_item_readonly_proofs
 from rpg_dialogue import validate_dialogue_command_stream
 from ruby_marshal_reader import RubyObject, RubyString, load
 from ruby_marshal_writer import dumps
@@ -1571,6 +1576,7 @@ def _bind_compiled_species_category_proofs(
     forms_source = by_relative.get(SPECIES_FORMS_PBS_FILE.casefold())
     compiled_source = by_relative.get(COMPILED_SPECIES_FILE.casefold())
     runtime_source = by_relative.get(SPECIES_MESSAGES_FILE.casefold())
+    game_runtime_source = by_relative.get("data/messages_game.dat")
     if (
         pbs_source is None
         or forms_source is None
@@ -1586,19 +1592,33 @@ def _bind_compiled_species_category_proofs(
         return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
 
     try:
-        proofs = build_species_category_proofs(
-            snapshot_bytes(pbs_source),
-            snapshot_bytes(forms_source),
-            snapshot_bytes(compiled_source),
-            snapshot_bytes(runtime_source),
-        )
+        split_mode = False
+        try:
+            proofs = build_species_category_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(forms_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+            )
+        except SpeciesIntegrityError:
+            if game_runtime_source is None:
+                raise
+            split_mode = True
+            proofs = build_split_category_readonly_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(forms_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+                snapshot_bytes(game_runtime_source),
+            )
         for row in category_rows:
             lookup = (
                 str(row.get("evenement_id") or ""),
                 str(row.get("commande") or ""),
                 int(row.get("sous_index") or 0),
             )
-            proof = proofs.pop(lookup)
+            bound = proofs.pop(lookup)
+            proof = bound.proof if split_mode else bound
             if proof.source != str(row.get("texte_source") or ""):
                 raise SpeciesIntegrityError(
                     "Le texte PBS ne correspond pas à la preuve Category Species."
@@ -1608,11 +1628,11 @@ def _bind_compiled_species_category_proofs(
             row["pbs_compiled_sha256"] = compiled_source.sha256
             row["pbs_compiled_path"] = proof.compiled_path
             row["pbs_compiled_structure"] = proof.compiled_structure
-            row["pbs_runtime_file"] = runtime_source.relative_path
-            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_file"] = bound.runtime_file if split_mode else runtime_source.relative_path
+            row["pbs_runtime_sha256"] = bound.runtime_sha256 if split_mode else runtime_source.sha256
             row["pbs_runtime_path"] = proof.runtime_path
             row["pbs_runtime_structure"] = proof.runtime_structure
-        if any(looks_visible(proof.source) for proof in proofs.values()):
+        if any(looks_visible(item.proof.source if split_mode else item.source) for item in proofs.values()):
             raise SpeciesIntegrityError(
                 "Certaines catégories Species de base visibles ne sont pas extraites."
             )
@@ -1646,6 +1666,7 @@ def _bind_compiled_species_form_name_proofs(
     forms_source = by_relative.get(SPECIES_FORMS_PBS_FILE.casefold())
     compiled_source = by_relative.get(COMPILED_SPECIES_FILE.casefold())
     runtime_source = by_relative.get(SPECIES_MESSAGES_FILE.casefold())
+    game_runtime_source = by_relative.get("data/messages_game.dat")
     if (
         pbs_source is None
         or forms_source is None
@@ -1661,19 +1682,33 @@ def _bind_compiled_species_form_name_proofs(
         return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
 
     try:
-        proofs = build_species_form_name_proofs(
-            snapshot_bytes(pbs_source),
-            snapshot_bytes(forms_source),
-            snapshot_bytes(compiled_source),
-            snapshot_bytes(runtime_source),
-        )
+        split_mode = False
+        try:
+            proofs = build_species_form_name_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(forms_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+            )
+        except SpeciesIntegrityError:
+            if game_runtime_source is None:
+                raise
+            split_mode = True
+            proofs = build_split_form_name_readonly_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(forms_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+                snapshot_bytes(game_runtime_source),
+            )
         for row in form_name_rows:
             lookup = (
                 str(row.get("evenement_id") or ""),
                 str(row.get("commande") or ""),
                 int(row.get("sous_index") or 0),
             )
-            proof = proofs.pop(lookup)
+            bound = proofs.pop(lookup)
+            proof = bound.proof if split_mode else bound
             if proof.source != str(row.get("texte_source") or ""):
                 raise SpeciesIntegrityError(
                     "Le texte PBS ne correspond pas à la preuve FormName."
@@ -1683,11 +1718,11 @@ def _bind_compiled_species_form_name_proofs(
             row["pbs_compiled_sha256"] = compiled_source.sha256
             row["pbs_compiled_path"] = proof.compiled_path
             row["pbs_compiled_structure"] = proof.compiled_structure
-            row["pbs_runtime_file"] = runtime_source.relative_path
-            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_file"] = bound.runtime_file if split_mode else runtime_source.relative_path
+            row["pbs_runtime_sha256"] = bound.runtime_sha256 if split_mode else runtime_source.sha256
             row["pbs_runtime_path"] = proof.runtime_path
             row["pbs_runtime_structure"] = proof.runtime_structure
-        if any(looks_visible(proof.source) for proof in proofs.values()):
+        if any(looks_visible(item.proof.source if split_mode else item.source) for item in proofs.values()):
             raise SpeciesIntegrityError(
                 "Certains FormName explicites et visibles ne sont pas extraits."
             )
@@ -1720,6 +1755,7 @@ def _bind_compiled_map_metadata_name_proofs(
     pbs_source = by_relative.get(MAP_METADATA_PBS_FILE.casefold())
     compiled_source = by_relative.get(COMPILED_MAP_METADATA_FILE.casefold())
     runtime_source = by_relative.get(MAP_METADATA_MESSAGES_FILE.casefold())
+    mapinfos_source = by_relative.get("data/mapinfos.rxdata")
     if pbs_source is None or compiled_source is None or runtime_source is None:
         raise ExtractionIntegrityError(
             "Les noms de cartes ne peuvent pas être reliés à map_metadata.dat "
@@ -1730,11 +1766,21 @@ def _bind_compiled_map_metadata_name_proofs(
         return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
 
     try:
-        proofs = build_map_metadata_name_proofs(
-            snapshot_bytes(pbs_source),
-            snapshot_bytes(compiled_source),
-            snapshot_bytes(runtime_source),
-        )
+        try:
+            proofs = build_map_metadata_name_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+            )
+        except MapMetadataIntegrityError:
+            if mapinfos_source is None:
+                raise
+            proofs = build_implicit_map_name_readonly_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+                snapshot_bytes(mapinfos_source),
+            )
         for row in metadata_rows:
             lookup = (
                 str(row.get("evenement_id") or ""),
@@ -1792,6 +1838,7 @@ def _bind_compiled_move_proofs(
     pbs_source = by_relative.get(MOVE_PBS_FILE.casefold())
     compiled_source = by_relative.get(COMPILED_MOVE_FILE.casefold())
     runtime_source = by_relative.get(MOVE_MESSAGES_FILE.casefold())
+    game_runtime_source = by_relative.get("data/messages_game.dat")
     if pbs_source is None or compiled_source is None or runtime_source is None:
         raise ExtractionIntegrityError(
             "Les textes de Moves ne peuvent pas \u00eatre reli\u00e9s \u00e0 moves.dat "
@@ -1802,18 +1849,31 @@ def _bind_compiled_move_proofs(
         return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
 
     try:
-        proofs = build_move_text_proofs(
-            snapshot_bytes(pbs_source),
-            snapshot_bytes(compiled_source),
-            snapshot_bytes(runtime_source),
-        )
+        split_mode = False
+        try:
+            proofs = build_move_text_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+            )
+        except MoveIntegrityError:
+            if game_runtime_source is None:
+                raise
+            split_mode = True
+            proofs = build_split_move_readonly_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+                snapshot_bytes(game_runtime_source),
+            )
         for row in move_rows:
             lookup = (
                 str(row.get("evenement_id") or ""),
                 str(row.get("commande") or ""),
                 int(row.get("sous_index") or 0),
             )
-            proof = proofs.pop(lookup)
+            bound = proofs.pop(lookup)
+            proof = bound.proof if split_mode else bound
             if proof.source != str(row.get("texte_source") or ""):
                 raise MoveIntegrityError(
                     "Le texte PBS ne correspond pas \u00e0 la preuve de Move."
@@ -1823,11 +1883,11 @@ def _bind_compiled_move_proofs(
             row["pbs_compiled_sha256"] = compiled_source.sha256
             row["pbs_compiled_path"] = proof.compiled_path
             row["pbs_compiled_structure"] = proof.compiled_structure
-            row["pbs_runtime_file"] = runtime_source.relative_path
-            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_file"] = bound.runtime_file if split_mode else runtime_source.relative_path
+            row["pbs_runtime_sha256"] = bound.runtime_sha256 if split_mode else runtime_source.sha256
             row["pbs_runtime_path"] = proof.runtime_path
             row["pbs_runtime_structure"] = proof.runtime_structure
-        if any(looks_visible(proof.source) for proof in proofs.values()):
+        if any(looks_visible(item.proof.source if split_mode else item.source) for item in proofs.values()):
             raise MoveIntegrityError(
                 "Certains textes de Moves visibles ne sont pas extraits."
             )
@@ -1852,7 +1912,7 @@ def _bind_compiled_item_proofs(
         row
         for row in rows
         if str(row.get("fichier") or "").replace("\\", "/").casefold()
-        == ITEM_PBS_FILE.casefold()
+        in {ITEM_PBS_FILE.casefold(), "pbs/items_raid_bait.txt"}
         and row.get("commande") in ITEM_TEXT_FIELDS
     ]
     if not item_rows:
@@ -1864,6 +1924,8 @@ def _bind_compiled_item_proofs(
     pbs_source = by_relative.get(ITEM_PBS_FILE.casefold())
     compiled_source = by_relative.get(COMPILED_ITEM_FILE.casefold())
     runtime_source = by_relative.get(ITEM_MESSAGES_FILE.casefold())
+    game_runtime_source = by_relative.get("data/messages_game.dat")
+    supplemental_pbs_source = by_relative.get("pbs/items_raid_bait.txt")
     if pbs_source is None or compiled_source is None or runtime_source is None:
         raise ExtractionIntegrityError(
             "Les textes d'Items ne peuvent pas être reliés à items.dat et aux "
@@ -1874,20 +1936,34 @@ def _bind_compiled_item_proofs(
         return snapshot_root.joinpath(*Path(source.relative_path).parts).read_bytes()
 
     try:
-        proofs = build_item_text_proofs(
-            snapshot_bytes(pbs_source),
-            snapshot_bytes(compiled_source),
-            snapshot_bytes(runtime_source),
-        )
+        split_mode = False
+        try:
+            proofs = build_item_text_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+            )
+        except ItemIntegrityError:
+            if game_runtime_source is None or supplemental_pbs_source is None:
+                raise
+            split_mode = True
+            proofs = build_split_item_readonly_proofs(
+                snapshot_bytes(pbs_source),
+                snapshot_bytes(supplemental_pbs_source),
+                snapshot_bytes(compiled_source),
+                snapshot_bytes(runtime_source),
+                snapshot_bytes(game_runtime_source),
+            )
         for row in item_rows:
             lookup = (
                 str(row.get("evenement_id") or ""),
                 str(row.get("commande") or ""),
                 int(row.get("sous_index") or 0),
             )
-            proof = proofs.pop(lookup, None)
-            if proof is None:
+            bound = proofs.pop(lookup, None)
+            if bound is None:
                 continue
+            proof = bound.proof if split_mode else bound
             if proof.source != str(row.get("texte_source") or ""):
                 raise ItemIntegrityError(
                     "Le texte PBS ne correspond pas à la preuve d'Item."
@@ -1897,11 +1973,17 @@ def _bind_compiled_item_proofs(
             row["pbs_compiled_sha256"] = compiled_source.sha256
             row["pbs_compiled_path"] = proof.compiled_path
             row["pbs_compiled_structure"] = proof.compiled_structure
-            row["pbs_runtime_file"] = runtime_source.relative_path
-            row["pbs_runtime_sha256"] = runtime_source.sha256
+            row["pbs_runtime_file"] = bound.runtime_file if split_mode else runtime_source.relative_path
+            row["pbs_runtime_sha256"] = bound.runtime_sha256 if split_mode else runtime_source.sha256
             row["pbs_runtime_path"] = proof.runtime_path
             row["pbs_runtime_structure"] = proof.runtime_structure
-        if any(looks_visible(proof.source) for proof in proofs.values()):
+        if any(
+            looks_visible(value.proof.source)
+            for value in proofs.values()
+            if split_mode
+        ) or (
+            not split_mode and any(looks_visible(value.source) for value in proofs.values())
+        ):
             raise ItemIntegrityError(
                 "Certains textes d'Items prouvés ne sont pas extraits."
             )
