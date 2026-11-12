@@ -83,7 +83,7 @@ class MapMetadataPbsAssignment:
 class MapMetadataPbsSection:
     identifier: str
     map_id: int
-    name: MapMetadataPbsAssignment
+    name: MapMetadataPbsAssignment | None
 
 
 @dataclass(frozen=True)
@@ -204,7 +204,7 @@ def _parse_assignment(body: str) -> tuple[str, str, str, str] | None:
     return prefix, key, source, trailing
 
 
-def parse_map_metadata_pbs(raw: bytes) -> MapMetadataPbsDocument:
+def parse_map_metadata_pbs(raw: bytes, *, allow_implicit_names: bool = False) -> MapMetadataPbsDocument:
     if not raw.startswith(b"\xef\xbb\xbf"):
         raise MapMetadataIntegrityError("PBS/map_metadata.txt doit conserver son BOM UTF-8.")
     payload = raw[3:]
@@ -219,9 +219,9 @@ def parse_map_metadata_pbs(raw: bytes) -> MapMetadataPbsDocument:
             "PBS/map_metadata.txt n'est pas un UTF-8 valide."
         ) from exc
     lines = tuple(content.splitlines(keepends=True))
-    if not lines or any(not line.endswith("\r\n") for line in lines):
+    if not lines or any(not line.endswith("\r\n") for line in lines[:-1]):
         raise MapMetadataIntegrityError(
-            "Chaque ligne de PBS/map_metadata.txt doit conserver son CRLF."
+            "Chaque ligne de PBS/map_metadata.txt sauf éventuellement la dernière doit conserver son CRLF."
         )
 
     sections: list[MapMetadataPbsSection] = []
@@ -234,13 +234,13 @@ def parse_map_metadata_pbs(raw: bytes) -> MapMetadataPbsDocument:
         nonlocal name
         if section_index < 0:
             return
-        if name is None:
+        if name is None and not allow_implicit_names:
             raise MapMetadataIntegrityError("Une carte ne possède pas exactement un champ Name.")
         sections.append(MapMetadataPbsSection(identifier, map_id, name))
         name = None
 
     for line_index, raw_line in enumerate(lines):
-        body = raw_line[:-2]
+        body = raw_line[:-2] if raw_line.endswith("\r\n") else raw_line
         stripped = body.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -271,7 +271,7 @@ def parse_map_metadata_pbs(raw: bytes) -> MapMetadataPbsDocument:
                 prefix=prefix,
                 source=source,
                 trailing=trailing,
-                newline="\r\n",
+                newline="\r\n" if raw_line.endswith("\r\n") else "",
             )
     finish_section()
     identifiers = [section.identifier for section in sections]
