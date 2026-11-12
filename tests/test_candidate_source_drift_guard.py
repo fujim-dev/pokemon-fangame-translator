@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from adapters import PokemonEssentialsAdapter
+from analysis.integrity import compare_snapshots, snapshot_tree
 from project_test_support import finalize_verified_essentials_project
 from reconstruction_engine import (
     ReconstructionError,
@@ -83,6 +84,28 @@ class CandidateSourceDriftGuardTests(unittest.TestCase):
 
     def test_message_bank_source_change_after_plan_refused(self):
         self._test_drift("bank")
+
+    def _test_csv_drift(self, kind: str):
+        with tempfile.TemporaryDirectory(prefix="pft_candidate_csv_drift_") as tmp:
+            base = Path(tmp)
+            game, plan = self._make_plan(base, kind)
+            before = snapshot_tree(game)
+            csv_path = Path(plan.csv_path)
+            original = csv_path.read_bytes()
+            # Simulate an external edit of the validated translation project.
+            csv_path.write_bytes(original + b"\n")
+            candidate = base / "candidate"
+            with self.assertRaisesRegex(ReconstructionError, "CSV|simulation|provenance"):
+                reconstruct_copy(plan, candidate, base / "reports")
+            self.assertFalse(candidate.exists())
+            self.assertEqual(original + b"\n", csv_path.read_bytes())
+            self.assertTrue(compare_snapshots(before, snapshot_tree(game)).passed)
+
+    def test_map_csv_change_after_plan_refused(self):
+        self._test_csv_drift("map")
+
+    def test_message_bank_csv_change_after_plan_refused(self):
+        self._test_csv_drift("bank")
 
 
 if __name__ == "__main__":
