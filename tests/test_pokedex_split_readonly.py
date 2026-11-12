@@ -60,6 +60,29 @@ class PokedexSplitReadonlyTests(unittest.TestCase):
                 self.assertEqual(1, meta["historical_core_extra_keys"])
             self.assertEqual(originals, [p.read_bytes() for p in paths])
 
+    def test_real_pft_extraction_uses_physical_bank_and_refuses_write_proof(self):
+        from adapters.pokemon_essentials import PokemonEssentialsAdapter
+        with tempfile.TemporaryDirectory(prefix="pft_pokedex_split_pft_") as temp:
+            root = Path(temp) / "game"
+            tracked = self.make_fixture(root)
+            before = [p.read_bytes() for p in tracked]
+            extracted = PokemonEssentialsAdapter().extract_with_provenance(root)
+            rows = [
+                row for row in extracted.rows
+                if row.get("fichier") == SPECIES_PBS_FILE
+                and row.get("type") == "PBS — Pokedex"
+            ]
+            self.assertEqual(3, len(rows))
+            self.assertEqual(
+                {SPECIES_MESSAGES_FILE, GAME_MESSAGES_FILE},
+                {row["pbs_runtime_file"] for row in rows},
+            )
+            for row in rows:
+                metadata = json.loads(row["pbs_runtime_structure"])
+                self.assertEqual(SPLIT_POKEDEX_READONLY_FORMAT, metadata["format"])
+                self.assertFalse(metadata["reconstruction_allowed"])
+            self.assertEqual(before, [p.read_bytes() for p in tracked])
+
     def test_missing_game_key_is_refused(self):
         with tempfile.TemporaryDirectory(prefix="pft_pokedex_split_missing_") as temp:
             root = Path(temp) / "game"
