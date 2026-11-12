@@ -18,7 +18,6 @@ from essentials_species import (
     SpeciesIntegrityError,
     _load_marshal,
     _ruby_text,
-    build_species_category_proofs,
 )
 from ruby_marshal_reader import RubyString
 from ruby_marshal_writer import dumps
