@@ -29,7 +29,8 @@ class PokedexSplitReadonlyTests(unittest.TestCase):
         core_path = root / SPECIES_MESSAGES_FILE
         core = load(core_path)
         game = [{} for _ in range(len(core))]
-        key, value = core[3].popitem()
+        key = next(iter(core[3]))
+        value = core[3].pop(key)
         game[3][key] = value
         core[3][RubyString(b"Synthetic obsolete extra entry", {"E": True})] = RubyString(
             b"Synthetic obsolete extra entry", {"E": True}
