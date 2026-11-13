@@ -41,15 +41,13 @@ Les utilisateurs n'ont besoin ni de Python, ni de PyInstaller, ni d'Inno Setup. 
 
 ## Compatibilité
 
-Compatibilité actuellement validée principalement avec **Pokémon Myth 2**. Le projet vise certains fangames RPG Maker XP / Pokémon Essentials dont les dossiers `Data` et `PBS` sont accessibles. Les archives chiffrées, moteurs personnalisés et textes stockés dans les scripts peuvent ne pas être pris en charge.
+La compatibilité validée dépend du moteur, de la version exacte du fangame, de ses modifications et de l'emplacement réel des textes. Le profil le mieux validé actuellement est **Pokémon Essentials / RPG Maker XP**, avec **Pokémon Myth 2** comme jeu de référence pour les tests de bout en bout. Cela ne garantit pas la compatibilité de tous les jeux Essentials.
 
-Pokémon Flux Episode 2 v2.1.0 peut désormais être détecté et analysé
-statiquement par un adaptateur expérimental séparé. Pour cette signature exacte,
-l'extraction des occurrences vérifiables vers le CSV commun est autorisée en
-lecture seule ; les versions inconnues restent bloquées. Les chaînes ambiguës ou
-dynamiques sont conservées sans interprétation. L'import dans le FPK et la
-reconstruction Flux restent désactivés tant que le chemin d'écriture n'a pas été
-validé de bout en bout sur une copie de travail.
+PFT distingue la reconnaissance d'un moteur, l'analyse de ses fichiers, l'extraction des textes et la reconstruction d'une copie traduite. Une étape peut être disponible sans que les suivantes le soient. Les projets inconnus ou ambigus restent en lecture seule.
+
+Les moteurs et profils non encore validés (notamment RPG Maker XP générique, Pokémon SDK/PSDK, MV/MZ, Pokéngine et moteurs personnalisés) ne sont pas annoncés comme pris en charge. Un adaptateur expérimental distinct existe pour certains formats personnalisés, mais il ne définit pas l'architecture générale de PFT.
+
+Consultez [la matrice détaillée de compatibilité](COMPATIBILITY.md) et [la recherche sur les moteurs de fangames](docs/ENGINE_COMPATIBILITY_RESEARCH.md) pour connaître les capacités et limites exactes.
 
 ## Projet indépendant
 

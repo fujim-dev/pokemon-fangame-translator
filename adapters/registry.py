@@ -6,6 +6,7 @@ from pathlib import Path
 from .base import AdapterOperationBlocked, DetectionResult, GameAdapter, GameCapability
 from .pokemon_essentials import PokemonEssentialsAdapter
 from .pokemon_flux import PokemonFluxAdapter
+from .pokemon_studio import PokemonStudioAdapter
 from .probe_isolation import IsolatedProbeRunner
 from .unknown import UnknownAdapter
 
@@ -181,7 +182,7 @@ class AdapterRegistry:
 
 
 def create_default_registry(*, replacement: GameAdapter | None = None) -> AdapterRegistry:
-    adapters: list[GameAdapter] = [PokemonEssentialsAdapter(), PokemonFluxAdapter()]
+    adapters: list[GameAdapter] = [PokemonEssentialsAdapter(), PokemonFluxAdapter(), PokemonStudioAdapter()]
     if replacement is not None:
         adapters = [
             replacement if adapter.adapter_id == replacement.adapter_id else adapter

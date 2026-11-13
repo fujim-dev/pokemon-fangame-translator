@@ -549,7 +549,13 @@ class IsolatedProbeRunner:
         with self._lock:
             self._active.add(batch)
         try:
-            return batch.run()
+            result = batch.run()
+            # L'annulation peut arriver pendant le démarrage du processus
+            # isolé, avant même son premier message. Dans ce cas, une erreur
+            # de démarrage ne doit pas masquer la demande d'annulation.
+            if batch.cancelled.is_set():
+                return batch._cancelled_result()
+            return result
         finally:
             with self._lock:
                 self._active.discard(batch)

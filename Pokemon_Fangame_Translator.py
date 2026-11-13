@@ -763,7 +763,7 @@ class FangameTranslatorApp(tk.Tk):
                  font=("Segoe UI Semibold", 11)).pack(anchor="w", pady=(0, 5))
         self._cyber_summary_row(sc, "▰", "Jeu", self.game_name_display, self.colors["accent"])
         self._cyber_summary_row(sc, "●", "Statut", self.project_status, self.colors["success"])
-        self._cyber_summary_row(sc, "◉", "Compatibilité", self.compatibility_display, self.colors["accent"])
+        self._cyber_summary_row(sc, "◉", "Confiance moteur", self.compatibility_display, self.colors["accent"])
         self._cyber_summary_row(sc, "⌘", "Moteur", self.engine_display, self.colors["accent"])
         self._cyber_summary_row(sc, "◇", "Essentials", self.essentials_display, self.colors["accent"])
         self._cyber_summary_row(sc, "▧", "Cartes", self.maps_display, self.colors["accent"])
@@ -934,14 +934,33 @@ class FangameTranslatorApp(tk.Tk):
     def _adapter_can(self, capability: GameCapability) -> bool:
         return bool(self.detection_result and self.detection_result.can(capability))
 
+    def _certified_extraction_blocker(self) -> str:
+        """Ne confond pas reconnaissance du moteur et extraction validée du jeu."""
+        report = self.__dict__.get("last_deep_analysis")
+        if report is None:
+            return ""
+        for issue in report.issues:
+            if issue.code in {"ability_runtime_incomplete", "ability_runtime_split_unverified"} and issue.blocking:
+                return issue.message
+        return ""
+
     def _refresh_action_buttons(self) -> None:
         has_project_csv = bool(
             self.translation_csv_path and Path(self.translation_csv_path).is_file()
         )
         pending_detection = self.detection_result is None
-        extract_allowed = self._adapter_can(GameCapability.EXTRACT)
-        translate_allowed = self._adapter_can(GameCapability.TRANSLATE)
-        reconstruct_allowed = self._adapter_can(GameCapability.RECONSTRUCT)
+        extract_allowed = (
+            self._adapter_can(GameCapability.EXTRACT)
+            and not self._certified_extraction_blocker()
+        )
+        translate_allowed = (
+            self._adapter_can(GameCapability.TRANSLATE)
+            and not self._certified_extraction_blocker()
+        )
+        reconstruct_allowed = (
+            self._adapter_can(GameCapability.RECONSTRUCT)
+            and not self._certified_extraction_blocker()
+        )
         deep_analysis_allowed = self._adapter_can(GameCapability.DEEP_ANALYZE)
 
         layouts = (
@@ -970,6 +989,14 @@ class FangameTranslatorApp(tk.Tk):
         )
 
     def open_translation_studio(self):
+        blocker = self._certified_extraction_blocker()
+        if blocker:
+            messagebox.showerror(
+                "Projet de traduction non validé",
+                blocker + "\n\nLe studio de ce jeu est désactivé tant que la cohérence "
+                "des fichiers n'est pas démontrée. L'analyse statique reste disponible.",
+            )
+            return
         if not self._adapter_can(GameCapability.TRANSLATE):
             messagebox.showerror(
                 "Analyse compatible requise",
@@ -1020,6 +1047,14 @@ class FangameTranslatorApp(tk.Tk):
         self.open_translation_studio()
 
     def open_reconstruction_studio(self):
+        blocker = self._certified_extraction_blocker()
+        if blocker:
+            messagebox.showerror(
+                "Reconstruction non validée",
+                blocker + "\n\nLes données du jeu ne sont pas suffisamment cohérentes "
+                "pour ouvrir le studio de reconstruction.",
+            )
+            return
         if not self._adapter_can(GameCapability.RECONSTRUCT):
             messagebox.showerror(
                 "Reconstruction bloquée",
@@ -1438,7 +1473,7 @@ class FangameTranslatorApp(tk.Tk):
 
         self.last_diagnostic = diagnostic
         self.progress["value"] = 100
-        self.status_var.set(f"Analyse terminée — compatibilité {level.lower()} ({score}/100).")
+        self.status_var.set(f"Détection terminée — {level.lower()} (confiance moteur {score}/100).")
         self.project_status.set("Analyse terminée")
         self.compatibility_display.set(f"{score} / 100")
         self.maps_display.set(str(len(map_files)))
@@ -1508,6 +1543,11 @@ class FangameTranslatorApp(tk.Tk):
             return
 
         self.last_deep_analysis = report
+        if self._certified_extraction_blocker():
+            self._log(
+                "Extraction certifiée indisponible pour ce jeu : "
+                + self._certified_extraction_blocker()
+            )
         self.progress["value"] = 100
         self.progress_percent.set("100%")
         self.status_var.set(
@@ -1566,8 +1606,8 @@ class FangameTranslatorApp(tk.Tk):
             "=" * 72,
             f"Dossier : {d.root}",
             "",
-            f"Compatibilité estimée : {d.compatibility_level}",
-            f"Score : {d.compatibility_score}/100",
+            f"Profil détecté : {d.compatibility_level}",
+            f"Confiance de détection : {d.compatibility_score}/100",
             "",
             f"Adaptateur : {d.adapter_display_name} ({d.adapter_id})",
             f"Confiance de détection : {d.detection_confidence}/100",
@@ -1600,6 +1640,7 @@ class FangameTranslatorApp(tk.Tk):
             "NOTES",
             "-" * 72,
             *(d.notes or ["Aucune note supplémentaire."]),
+            "Une forte confiance de détection ne prouve ni l'extraction, ni la compatibilité complète du jeu.",
             "",
             "INDICES DE DÉTECTION",
             "-" * 72,
@@ -1612,7 +1653,7 @@ class FangameTranslatorApp(tk.Tk):
                 "la reconstruction du jeu reste bloquée."
                 if d.extraction_compatible and not d.game_write_compatible
                 else (
-                    "Le jeu semble compatible avec l'extracteur structuré de la v1.0.2."
+                    "Le profil est reconnu par l’extracteur ; l’extraction réelle et la reconstruction restent à valider sur ce jeu."
                     if d.write_actions_allowed
                     else "La structure doit être étudiée manuellement ; les actions d'écriture restent bloquées."
                 )
@@ -1631,6 +1672,13 @@ class FangameTranslatorApp(tk.Tk):
 
     def extract_texts(self):
         """Extraction structurée en lecture seule des cartes, banques et PBS."""
+        blocker = self._certified_extraction_blocker()
+        if blocker:
+            messagebox.showerror(
+                "Extraction certifiée bloquée",
+                blocker + "\n\nL'analyse statique reste disponible en lecture seule.",
+            )
+            return
         if not self.last_diagnostic or not self.game_dir:
             messagebox.showerror("Diagnostic requis", "Lance d'abord l'analyse du fangame.")
             return
@@ -2038,7 +2086,7 @@ class FangameTranslatorApp(tk.Tk):
             f"Dossier : {d.root}",
             "",
             f"Compatibilité : {d.compatibility_level}",
-            f"Score : {d.compatibility_score}/100",
+            f"Confiance de détection : {d.compatibility_score}/100",
             f"Adaptateur : {d.adapter_display_name} ({d.adapter_id})",
             f"Confiance de détection : {d.detection_confidence}/100",
             f"Actions d'écriture : {'AUTORISÉES' if d.write_actions_allowed else 'BLOQUÉES'}",

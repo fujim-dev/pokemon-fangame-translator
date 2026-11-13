@@ -15,6 +15,7 @@ from structured_extractor import (
     text_value,
 )
 
+from .ability_runtime_diagnostic import inspect_ability_runtime_banks
 from .language_coverage import calculate_coverage
 from .models import AnalysisIssue, DeepAnalysisReport
 
@@ -627,11 +628,61 @@ def analyze_game(
             f"{report.static_references_checked} référence(s) statique(s) contrôlée(s).",
         ]
     )
+    if structured_reading_allowed and mode in {"complete", "deep"}:
+        try:
+            ability_diagnostic = inspect_ability_runtime_banks(root)
+        except (OSError, ValueError, UnicodeError, TypeError, KeyError):
+            _add_issue(
+                report,
+                "ability_runtime_unverified",
+                "warning",
+                "integrity",
+                "Correspondance des banques Ability non vérifiable ; aucune preuve de reconstruction.",
+                "Data/messages_core.dat",
+            )
+            report.unverified.append(
+                "La cohérence PBS/compilé/banques des capacités n'a pas pu être démontrée."
+            )
+        else:
+            if ability_diagnostic is not None and ability_diagnostic.get("split_complete"):
+                _add_issue(
+                    report,
+                    "ability_runtime_split_unverified",
+                    "warning",
+                    "integrity",
+                    "Les textes Ability sont présents dans les banques core et jeu, "
+                    "mais l'extracteur actuel attend une correspondance dans core seul. "
+                    "Extraction certifiée et reconstruction non validées.",
+                    "Data/messages_game.dat",
+                    blocking=True,
+                )
+                report.unverified.append(
+                    "Répartition core/jeu reconnue ; preuves d'extraction à adapter."
+                )
+            elif ability_diagnostic is not None and not ability_diagnostic["complete"]:
+                names = ability_diagnostic["fields"]["Name"]
+                descriptions = ability_diagnostic["fields"]["Description"]
+                _add_issue(
+                    report,
+                    "ability_runtime_incomplete",
+                    "error",
+                    "integrity",
+                    "Banques Ability incomplètes ou décalées : "
+                    f"noms {names['runtime_entries']}/{names['expected_unique']}, "
+                    f"descriptions {descriptions['runtime_entries']}/{descriptions['expected_unique']}. "
+                    "Extraction certifiée et reconstruction non validées.",
+                    "Data/messages_core.dat",
+                    blocking=True,
+                )
+                report.unverified.append(
+                    "Le décompte statique des textes ne démontre pas leur reconstructibilité."
+                )
+
     incomplete_sources = bool(
         report.unreadable_files
         or report.unverified
         or report.unsupported
-        or any(issue.code == "filesystem_link" for issue in report.issues)
+        or any(issue.blocking or issue.code == "filesystem_link" for issue in report.issues)
     )
     report.extractable_text_occurrences = len(texts)
     report.extractable_unique_texts = len(set(texts))

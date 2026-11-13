@@ -283,8 +283,8 @@ def parse_move_pbs(raw: bytes) -> MovePbsDocument:
     except UnicodeDecodeError as exc:
         raise MoveIntegrityError("PBS/moves.txt n'est pas un UTF-8 valide.") from exc
     lines = tuple(content.splitlines(keepends=True))
-    if not lines or any(not line.endswith("\r\n") for line in lines):
-        raise MoveIntegrityError("Chaque ligne de PBS/moves.txt doit conserver son CRLF.")
+    if not lines or any(not line.endswith("\r\n") for line in lines[:-1]):
+        raise MoveIntegrityError("Chaque ligne de PBS/moves.txt sauf éventuellement la dernière doit conserver son CRLF.")
 
     sections: list[MovePbsSection] = []
     identifier = ""
@@ -348,7 +348,7 @@ def parse_move_pbs(raw: bytes) -> MovePbsDocument:
         assignments = {}
 
     for line_index, raw_line in enumerate(lines):
-        body = raw_line[:-2]
+        body = raw_line[:-2] if raw_line.endswith("\r\n") else raw_line
         stripped = body.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -381,7 +381,7 @@ def parse_move_pbs(raw: bytes) -> MovePbsDocument:
             prefix=prefix,
             source=source,
             trailing=trailing,
-            newline="\r\n",
+            newline="\r\n" if raw_line.endswith("\r\n") else "",
         )
     finish_section()
     identifiers = [section.identifier for section in sections]

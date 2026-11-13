@@ -23,6 +23,7 @@ from essentials_species import (
     SPECIES_CLASS,
     SPECIES_FORMS_PBS_FILE,
     SPECIES_IVARS,
+    SPECIES_RAID_EXTENSION_IVARS,
     SPECIES_MESSAGES_FILE,
     SPECIES_PBS_FILE,
     SpeciesEntryProof,
@@ -54,7 +55,7 @@ class SpeciesCategoryBaseSection:
     identifier: str
     section_index: int
     name: str
-    category: SpeciesPbsAssignment
+    category: SpeciesPbsAssignment | None
 
 
 @dataclass(frozen=True)
@@ -135,9 +136,9 @@ def parse_species_category_base_pbs(raw: bytes) -> SpeciesCategoryPbsDocument:
         nonlocal name, category
         if section_index < 0:
             return
-        if name is None or category is None:
+        if name is None:
             raise SpeciesIntegrityError(
-                "Une espèce de base ne possède pas exactement Name et Category."
+                "Une espèce de base ne possède pas exactement Name."
             )
         sections.append(
             SpeciesCategoryBaseSection(identifier, section_index, name, category)
@@ -284,7 +285,13 @@ def _compiled_entry(
         raise SpeciesIntegrityError("La clé compilée d'espèce a changé.")
     if not isinstance(value, RubyObject) or value.class_name != SPECIES_CLASS:
         raise SpeciesIntegrityError("Une entrée compilée n'est pas GameData::Species.")
-    if tuple(value.ivars) != SPECIES_IVARS:
+    actual_ivars = tuple(value.ivars)
+    if actual_ivars == SPECIES_IVARS:
+        pass
+    elif actual_ivars == SPECIES_IVARS + SPECIES_RAID_EXTENSION_IVARS:
+        if not all(isinstance(value.ivars[field], list) for field in SPECIES_RAID_EXTENSION_IVARS):
+            raise SpeciesIntegrityError("Les données de raid doivent rester des listes.")
+    else:
         raise SpeciesIntegrityError("La structure compilée d'une espèce a changé.")
     if (
         value.ivars["@id"] != expected_key
@@ -350,7 +357,7 @@ def _analyze_sources(
             species=section.identifier,
             form=0,
             expected_name=section.name,
-            expected_category=section.category.source,
+            expected_category=(section.category.source if section.category is not None else "???"),
         )
         value = compiled_object.ivars["@real_category"]
         base_values[section.identifier] = value
@@ -364,7 +371,7 @@ def _analyze_sources(
         expected_category = (
             section.category.source
             if section.category is not None
-            else base_section.category.source
+            else (base_section.category.source if base_section.category is not None else "???")
         )
         compiled_object = _compiled_entry(
             key,
@@ -430,6 +437,8 @@ def _analyze_sources(
         base_pbs.base_sections,
         compiled_items[: len(base_pbs.base_sections)],
     ):
+        if section.category is None:
+            continue  # Valeur implicite du compilateur, sans ligne PBS à traduire.
         compiled_value = compiled_object.ivars["@real_category"]
         message_key, message_value, message_index = runtime_by_source[
             section.category.source

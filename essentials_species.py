@@ -81,6 +81,9 @@ SPECIES_IVARS = (
 )
 
 
+SPECIES_RAID_EXTENSION_IVARS = ("@raid_ranks", "@raid_style")
+
+
 class SpeciesIntegrityError(ValueError):
     """La quadruple correspondance d'une entrée Pokédex n'est pas démontrable."""
 
@@ -121,6 +124,7 @@ class SpeciesPbsDocument:
     base_sections: tuple[SpeciesBaseSection, ...]
     form_sections: tuple[SpeciesFormSection, ...]
     file_sha256: str
+    has_bom: bool
 
 
 @dataclass(frozen=True)
@@ -244,9 +248,8 @@ def _parse_assignment(body: str) -> tuple[str, str, str, str] | None:
 
 
 def _decode_pbs(raw: bytes, relative_file: str) -> tuple[str, ...]:
-    if not raw.startswith(b"\xef\xbb\xbf"):
-        raise SpeciesIntegrityError(f"{relative_file} doit conserver son BOM UTF-8.")
-    payload = raw[3:]
+    has_bom = raw.startswith(b"\xef\xbb\xbf")
+    payload = raw[3:] if has_bom else raw
     if b"\n" in payload.replace(b"\r\n", b"") or b"\r" in payload.replace(
         b"\r\n", b""
     ):
@@ -307,6 +310,13 @@ def parse_species_base_pbs(raw: bytes) -> SpeciesPbsDocument:
                 raise SpeciesIntegrityError("Name d'espèce absent, dupliqué ou ambigu.")
             name = source
         elif key == "Pokedex":
+            # Essentials prepline retire les commentaires introduits par #.
+            # Conserver exactement le marqueur des fixtures Myth 2 dans le
+            # suffixe de ligne, hors du texte source réellement compilé.
+            inline_comment = re.fullmatch(r"(.*?)([ \t]+\#[1-3]\.)", source)
+            if inline_comment:
+                source = inline_comment.group(1)
+                trailing = inline_comment.group(2) + trailing
             if pokedex is not None or not source or source != source.strip():
                 raise SpeciesIntegrityError("Pokedex d'espèce absent, dupliqué ou ambigu.")
             pokedex = SpeciesPbsAssignment(
@@ -329,6 +339,7 @@ def parse_species_base_pbs(raw: bytes) -> SpeciesPbsDocument:
         tuple(sections),
         (),
         _sha256(raw),
+        raw.startswith(b"\xef\xbb\xbf"),
     )
 
 
@@ -399,6 +410,7 @@ def parse_species_forms_pbs(raw: bytes) -> SpeciesPbsDocument:
         (),
         tuple(sections),
         _sha256(raw),
+        raw.startswith(b"\xef\xbb\xbf"),
     )
 
 
@@ -416,7 +428,16 @@ def _validate_compiled_entry(
         raise SpeciesIntegrityError("La clé compilée d'espèce a changé.")
     if not isinstance(value, RubyObject) or value.class_name != SPECIES_CLASS:
         raise SpeciesIntegrityError("Une entrée compilée n'est pas GameData::Species.")
-    if tuple(value.ivars) != SPECIES_IVARS:
+    actual_ivars = tuple(value.ivars)
+    if actual_ivars == SPECIES_IVARS:
+        pass
+    elif actual_ivars == SPECIES_IVARS + SPECIES_RAID_EXTENSION_IVARS:
+        if not all(
+            isinstance(value.ivars[key], list)
+            for key in SPECIES_RAID_EXTENSION_IVARS
+        ):
+            raise SpeciesIntegrityError("Les données de raid doivent rester des listes.")
+    else:
         raise SpeciesIntegrityError("La structure compilée d'une espèce a changé.")
     if (
         value.ivars["@id"] != expected_key
@@ -597,8 +618,9 @@ def _pbs_proof(analysis: _SpeciesAnalysis, target: SpeciesTarget) -> str:
         "forms_pbs_file": SPECIES_FORMS_PBS_FILE,
         "file_sha256": analysis.base_pbs.file_sha256,
         "forms_file_sha256": analysis.forms_pbs.file_sha256,
-        "encoding": "utf-8-sig",
-        "bom": "utf-8",
+        "encoding": "utf-8-sig" if analysis.base_pbs.has_bom else "utf-8",
+        "bom": "utf-8" if analysis.base_pbs.has_bom else "none",
+        "forms_bom": "utf-8" if analysis.forms_pbs.has_bom else "none",
         "newline": "CRLF",
         "line_number": assignment.line_number,
         "section_index": assignment.section_index,
@@ -641,7 +663,9 @@ def _compiled_proof(
         "section_index": target.assignment.section_index,
         "section_sha256": _sha256(target.assignment.section.encode("utf-8")),
         "section_class": SPECIES_CLASS,
-        "section_ivars": list(SPECIES_IVARS),
+        "section_ivars": list(
+            list(analysis.compiled_root.values())[target.assignment.section_index].ivars
+        ),
         "species": target.assignment.section,
         "form": 0,
         "target_type": "RubyString",
@@ -763,7 +787,7 @@ def rebuild_species_pokedex_payloads(
     pbs_lines[assignment.line_index] = (
         assignment.prefix + translation + assignment.trailing + assignment.newline
     )
-    rebuilt_pbs = b"\xef\xbb\xbf" + "".join(pbs_lines).encode("utf-8")
+    rebuilt_pbs = (b"\xef\xbb\xbf" if analysis.base_pbs.has_bom else b"") + "".join(pbs_lines).encode("utf-8")
 
     compiled_before = graph_sha256(
         analysis.compiled_root, masked=(target.compiled_value,)

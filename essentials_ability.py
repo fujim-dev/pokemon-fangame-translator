@@ -209,7 +209,7 @@ def parse_ability_pbs(raw: bytes) -> AbilityPbsDocument:
     except UnicodeDecodeError as exc:
         raise AbilityIntegrityError("PBS/abilities.txt n'est pas un UTF-8 valide.") from exc
     lines = tuple(content.splitlines(keepends=True))
-    if not lines or any(not line.endswith("\r\n") for line in lines):
+    if not lines or any(not line.endswith("\r\n") for line in lines[:-1]):
         raise AbilityIntegrityError("Chaque ligne de PBS/abilities.txt doit conserver son CRLF.")
 
     sections: list[AbilityPbsSection] = []
@@ -231,7 +231,8 @@ def parse_ability_pbs(raw: bytes) -> AbilityPbsDocument:
         description = None
 
     for line_index, raw_line in enumerate(lines):
-        body = raw_line[:-2]
+        line_ending = "\r\n" if raw_line.endswith("\r\n") else ""
+        body = raw_line[:-2] if line_ending else raw_line
         stripped = body.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -260,7 +261,7 @@ def parse_ability_pbs(raw: bytes) -> AbilityPbsDocument:
                 prefix=prefix,
                 source=source,
                 trailing=trailing,
-                newline="\r\n",
+                newline=line_ending,
             )
         elif key == "Flags":
             if flags is not None or not source or source != source.strip():
@@ -284,7 +285,7 @@ def parse_ability_pbs(raw: bytes) -> AbilityPbsDocument:
                 prefix=prefix,
                 source=source,
                 trailing=trailing,
-                newline="\r\n",
+                newline=line_ending,
             )
     finish_section()
     identifiers = [section.identifier for section in sections]
@@ -368,6 +369,20 @@ def _analyze_sources(
         ordered_unique = list(dict.fromkeys(sources))
         message_items = list(messages_root[bank_index].items())
         if len(message_items) != len(ordered_unique):
+            # Une banque qui correspond exactement au début des sources, mais
+            # s'arrête prématurément, indique une compilation partielle ou ancienne.
+            # Ne jamais inventer les références runtime manquantes.
+            is_prefix = len(message_items) < len(ordered_unique) and all(
+                isinstance(key, RubyString) and key.text() == source
+                for source, (key, _value) in zip(ordered_unique, message_items)
+            )
+            if is_prefix:
+                raise AbilityIntegrityError(
+                    f"La banque Ability.{field} ne couvre pas exactement abilities.dat : "
+                    f"{len(message_items)} textes présents sur {len(ordered_unique)} "
+                    "textes distincts (préfixe exact, banque runtime incomplète). "
+                    "Extraction et reconstruction bloquées."
+                )
             raise AbilityIntegrityError(
                 f"La banque Ability.{field} ne couvre pas exactement abilities.dat."
             )

@@ -224,6 +224,250 @@ class AdapterDetectionTests(unittest.TestCase):
             self.assertIn("maps", {item.evidence_id for item in result.evidence})
             self.assertEqual(before, after)
 
+    def test_psdk_studio_marker_blocks_essentials_even_with_essentials_like_layout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioProject"
+            self._write(root / "Game.exe")
+            self._write(root / "Game.ini", b"[Game]\nLibrary=RGSS104E.dll")
+            self._write(root / "Data" / "System.rxdata")
+            self._write(root / "Data" / "Map001.rxdata")
+            self._write(root / "Data" / "messages_game.dat")
+            self._write(root / "PBS" / "pokemon.txt")
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            before = {
+                path.relative_to(root): path.read_bytes()
+                for path in root.rglob("*") if path.is_file()
+            }
+
+            direct = PokemonEssentialsAdapter().probe(root)
+            registry_result = inline_default_registry().detect(root)
+
+            self.assertFalse(direct.adapter_recognized)
+            self.assertFalse(direct.write_actions_allowed)
+            self.assertEqual(direct.structural_profile, "psdk_candidate")
+            self.assertEqual(registry_result.adapter_id, "unknown")
+            self.assertFalse(registry_result.can(GameCapability.EXTRACT))
+            after = {
+                path.relative_to(root): path.read_bytes()
+                for path in root.rglob("*") if path.is_file()
+            }
+            self.assertEqual(before, after)
+
+    def test_studio_marker_alone_does_not_enable_translation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "PSDKOnly"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Game.ini", b"[Game]\nLibrary=RGSS104E.dll")
+            result = inline_default_registry().detect(root)
+            self.assertEqual(result.adapter_id, "unknown")
+            self.assertFalse(result.write_actions_allowed)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.can(GameCapability.RECONSTRUCT))
+
+    def test_packed_rgss_game_without_readable_data_remains_unknown(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "PackedRGSS"
+            self._write(root / "Game.exe")
+            self._write(root / "Game.ini", b"[Game]\nLibrary=RGSS104E.dll")
+            self._write(root / "Game.rgssad")
+            result = inline_default_registry().detect(root)
+            self.assertEqual(result.adapter_id, "unknown")
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.can(GameCapability.TRANSLATE))
+            self.assertFalse(result.can(GameCapability.RECONSTRUCT))
+
+    def test_valid_studio_project_is_recognized_read_only(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "Studio"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
+            before = {
+                p.relative_to(root): p.read_bytes()
+                for p in root.rglob("*") if p.is_file()
+            }
+            result = AdapterRegistry(
+                (PokemonEssentialsAdapter(), PokemonFluxAdapter(), PokemonStudioAdapter()),
+                probe_runner=InlineProbeRunner(),
+            ).detect(root)
+            self.assertEqual(result.adapter_id, "pokemon_studio")
+            self.assertEqual(result.declared_version, "2.10.0")
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.can(GameCapability.TRANSLATE))
+            self.assertFalse(result.can(GameCapability.RECONSTRUCT))
+            self.assertFalse(result.write_actions_allowed)
+            self.assertEqual(before, {
+                p.relative_to(root): p.read_bytes()
+                for p in root.rglob("*") if p.is_file()
+            })
+
+    def test_invalid_studio_metadata_cannot_unlock_adapter(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "BrokenStudio"
+            self._write(root / "project.studio", b"{invalid-json")
+            self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
+            result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+
+    def test_studio_reparse_markers_are_rejected(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioRedirected"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
+            with patch("pathlib.Path.is_symlink", return_value=True):
+                result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+
+    def test_studio_without_version_or_data_is_not_recognized(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        for metadata, with_data in (
+            (b'{"title":"synthetic"}', True),
+            (b'{"studioVersion":"2.10.0"}', False),
+            (b'[]', True),
+        ):
+            with self.subTest(metadata=metadata, with_data=with_data):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir) / "StudioIncomplete"
+                    self._write(root / "project.studio", metadata)
+                    if with_data:
+                        (root / "Data" / "Studio").mkdir(parents=True)
+                    result = PokemonStudioAdapter().probe(root)
+                    self.assertFalse(result.adapter_recognized)
+                    self.assertFalse(result.write_actions_allowed)
+                    self.assertFalse(result.can(GameCapability.EXTRACT))
+
+    def test_studio_analysis_keeps_studio_identity(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioAnalysis"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            (root / "Data" / "Studio").mkdir(parents=True)
+            adapter = PokemonStudioAdapter()
+            detection = adapter.probe(root)
+            self.assertTrue(detection.adapter_recognized)
+            with patch("adapters.pokemon_studio.analyze_game", return_value={"safe": True}) as analyzer:
+                report = adapter.analyze(root, detection)
+            self.assertEqual(report, {"safe": True})
+            self.assertEqual(analyzer.call_args.kwargs["adapter_id"], "pokemon_studio")
+            self.assertEqual(analyzer.call_args.kwargs["adapter_confidence"], detection.confidence)
+
+    def test_studio_and_essentials_markers_never_enable_essentials_extraction(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "MixedEngine"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Game.ini", b"[Game]\nLibrary=RGSS104E.dll")
+            self._write(root / "Data" / "Scripts.rxdata", b"synthetic")
+            self._write(root / "Data" / "Studio" / "synthetic.json", b"{}")
+            essentials = PokemonEssentialsAdapter().probe(root)
+            studio = PokemonStudioAdapter().probe(root)
+            self.assertFalse(essentials.adapter_recognized)
+            self.assertTrue(studio.adapter_recognized)
+            self.assertFalse(studio.can(GameCapability.EXTRACT))
+            self.assertFalse(studio.can(GameCapability.RECONSTRUCT))
+
+    def test_studio_extraction_is_blocked_even_when_called_directly(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioDirectCall"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            (root / "Data" / "Studio").mkdir(parents=True)
+            adapter = PokemonStudioAdapter()
+            with self.assertRaises(AdapterOperationBlocked):
+                adapter.extract(root)
+            self.assertFalse(adapter.probe(root).write_actions_allowed)
+
+    def test_studio_probe_does_not_follow_redirected_data_directory(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioRedirectedData"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            (root / "Data" / "Studio").mkdir(parents=True)
+            real_is_symlink = Path.is_symlink
+
+            def synthetic_redirect(path):
+                if path == root / "Data" / "Studio":
+                    return True
+                return real_is_symlink(path)
+
+            with patch("pathlib.Path.is_symlink", autospec=True, side_effect=synthetic_redirect):
+                result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+
+    def test_studio_only_tiled_data_is_read_only(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioTiledOnly"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            self._write(root / "Data" / "Tiled" / "synthetic.json", b"{}")
+            result = PokemonStudioAdapter().probe(root)
+            self.assertTrue(result.adapter_recognized)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.write_actions_allowed)
+
+    def test_studio_oversized_project_marker_is_rejected(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioOversized"
+            self._write(root / "project.studio", b"x" * (1024 * 1024 + 1))
+            (root / "Data" / "Studio").mkdir(parents=True)
+            result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+
+    def test_studio_marker_without_any_data_is_not_recognized(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioEmptyData"
+            self._write(root / "project.studio", b'{"studioVersion":"2.10.0"}')
+            (root / "Data").mkdir()
+            result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+            self.assertFalse(result.write_actions_allowed)
+
+    def test_studio_metadata_array_is_not_a_valid_project(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "StudioArrayMetadata"
+            self._write(root / "project.studio", b'[{"studioVersion":"2.10.0"}]')
+            (root / "Data" / "Studio").mkdir(parents=True)
+            result = PokemonStudioAdapter().probe(root)
+            self.assertFalse(result.adapter_recognized)
+            self.assertFalse(result.write_actions_allowed)
+            self.assertFalse(result.can(GameCapability.EXTRACT))
+
+    def test_studio_version_must_be_nonempty_text(self):
+        from adapters.pokemon_studio import PokemonStudioAdapter
+
+        for version in ('123', 'null', '""', '"   "', 'false'):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir) / "StudioInvalidVersion"
+                self._write(root / "project.studio", ('{"studioVersion":' + version + '}').encode("utf-8"))
+                (root / "Data" / "Studio").mkdir(parents=True)
+                result = PokemonStudioAdapter().probe(root)
+                self.assertFalse(result.adapter_recognized)
+                self.assertFalse(result.write_actions_allowed)
+                self.assertFalse(result.can(GameCapability.EXTRACT))
+
     def test_folder_name_alone_never_selects_an_adapter(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Pokemon Flux Essentials"
@@ -581,6 +825,30 @@ class AdapterDetectionTests(unittest.TestCase):
         self.assertEqual("unknown", result.adapter_id)
         self.assertFalse(result.write_actions_allowed)
         self.assertNotEqual("adapter_valide", result.adapter_id)
+        self.assertEqual(0, runner.active_count)
+
+    def test_cancellation_during_startup_overrides_probe_startup_failure(self):
+        from adapters.probe_isolation import _ActiveProbeBatch
+
+        runner = IsolatedProbeRunner()
+        original = _ActiveProbeBatch.run
+
+        def fail_while_cancelling(batch):
+            batch.cancelled.set()
+            return ProbeBatchResult(
+                failures=(
+                    ProbeFailure(
+                        adapter_id="probe_worker",
+                        display_name="Service isolé de détection",
+                        error_type="ProbeStartupTimeout",
+                    ),
+                ),
+            )
+
+        with patch.object(_ActiveProbeBatch, "run", fail_while_cancelling):
+            result = runner.run((NeverReturningAdapter(),), Path("."))
+        self.assertTrue(result.cancelled)
+        self.assertTrue(any(f.cancelled for f in result.failures))
         self.assertEqual(0, runner.active_count)
 
     def test_application_cancellation_stops_active_probe_and_coordinator(self):

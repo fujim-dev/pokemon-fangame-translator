@@ -21,6 +21,7 @@ from essentials_species import (
     SPECIES_CLASS,
     SPECIES_FORMS_PBS_FILE,
     SPECIES_IVARS,
+    SPECIES_RAID_EXTENSION_IVARS,
     SPECIES_MESSAGES_FILE,
     SPECIES_PBS_FILE,
     SpeciesEntryProof,
@@ -280,7 +281,13 @@ def _validate_compiled_entry(
         raise SpeciesIntegrityError("La clé compilée d'espèce a changé.")
     if not isinstance(value, RubyObject) or value.class_name != SPECIES_CLASS:
         raise SpeciesIntegrityError("Une entrée compilée n'est pas GameData::Species.")
-    if tuple(value.ivars) != SPECIES_IVARS:
+    actual_ivars = tuple(value.ivars)
+    if actual_ivars == SPECIES_IVARS:
+        pass
+    elif actual_ivars == SPECIES_IVARS + SPECIES_RAID_EXTENSION_IVARS:
+        if not all(isinstance(value.ivars[field], list) for field in SPECIES_RAID_EXTENSION_IVARS):
+            raise SpeciesIntegrityError("Les données de raid doivent rester des listes.")
+    else:
         raise SpeciesIntegrityError("La structure compilée d'une espèce a changé.")
     compiled_form_name = value.ivars["@real_form_name"]
     if (

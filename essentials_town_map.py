@@ -64,6 +64,10 @@ def _canonical_integer(value: str, label: str) -> int:
 
 
 def _expected_point(fields: list[str]) -> list[object]:
+    # Certains PBS terminent un Point complet par une virgule supplémentaire.
+    # Ruby compile huit positions : tolérer uniquement le neuvième champ vide.
+    if len(fields) == 9 and fields[-1] == "":
+        fields = fields[:-1]
     if len(fields) not in {3, 4, 7, 8}:
         raise TownMapIntegrityError("Nombre de sous-champs Point non reconnu.")
     if not fields[2]:

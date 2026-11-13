@@ -341,7 +341,7 @@ def parse_item_pbs(raw: bytes) -> ItemPbsDocument:
         nonlocal assignments
         if section_index < 0:
             return
-        required = {"Name", "NamePlural", "Pocket", "Price", "Description"}
+        required = {"Name", "NamePlural", "Pocket", "Description"}
         if not required.issubset(assignments):
             raise ItemIntegrityError("Un Item ne possède pas son schéma PBS minimal exact.")
         has_portion_name = "PortionName" in assignments
@@ -353,7 +353,7 @@ def parse_item_pbs(raw: bytes) -> ItemPbsDocument:
         pocket = _unsigned(assignments["Pocket"].source, "Pocket d'Item")
         if pocket <= 0:
             raise ItemIntegrityError("Pocket d'Item doit rester strictement positif.")
-        price = _unsigned(assignments["Price"].source, "Price d'Item")
+        price = (_unsigned(assignments["Price"].source, "Price d'Item") if "Price" in assignments else 0)
         field_use = (
             _enum(assignments["FieldUse"].source, "FieldUse d'Item", ITEM_FIELD_USE_CODES)
             if "FieldUse" in assignments
